@@ -1,0 +1,12 @@
+[package]
+name = "capnp-rs-experiment"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+description = "A conformance-first, Rust-native Cap'n Proto experiment"
+
+[dependencies]
+
+[lints.rust]
+unsafe_code = "forbid"
