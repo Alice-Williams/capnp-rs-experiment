@@ -579,7 +579,10 @@ impl<'context, 'data, B: TraversalBudget> PointerListReader<'context, 'data, B> 
         }
     }
 
-    fn element_location(self, index: u32) -> Result<(WireLocation, NestingLimit), ListReadError> {
+    pub(crate) fn element_location(
+        self,
+        index: u32,
+    ) -> Result<(WireLocation, NestingLimit), ListReadError> {
         check_index(index, self.len())?;
         let reference = self.list.reference.ok_or(ListReadError::RangeOverflow)?;
         if reference.element_size == ElementSize::Pointer {
@@ -785,6 +788,14 @@ impl<'context, 'data, B: TraversalBudget> StructElementReader<'context, 'data, B
 
     pub const fn group(self) -> Self {
         self
+    }
+
+    pub(crate) const fn nesting(self) -> NestingLimit {
+        self.nesting
+    }
+
+    pub const fn nesting_limit(self) -> NestingLimit {
+        self.nesting
     }
 
     pub fn union_discriminant(self, offset: u32) -> Result<UnionDiscriminant, ListReadError> {

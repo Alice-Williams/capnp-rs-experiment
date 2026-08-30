@@ -1,4 +1,5 @@
 use std::fmt;
+use std::sync::Arc;
 
 use capnp_io::{FrameError, FrameLimits, FrameRead, parse_frame};
 use capnp_message::{
@@ -159,7 +160,21 @@ impl<'context, 'data> RawStruct<'context, 'data> {
         })
     }
 
-    fn opaque(&self, index: u16) -> Result<OpaquePointer, LoadError> {
+    fn pointer_location(&self, index: u16) -> Result<Option<WireLocation>, LoadError> {
+        Ok(match self {
+            Self::Struct(reader) => reader.pointer_location(index)?,
+            Self::Element(reader) => reader.pointer_location(index)?,
+        })
+    }
+
+    fn nesting(&self) -> NestingLimit {
+        match self {
+            Self::Struct(reader) => reader.nesting_limit(),
+            Self::Element(reader) => reader.nesting_limit(),
+        }
+    }
+
+    fn opaque(&self, index: u16, backing: Arc<[Arc<[u8]>]>) -> Result<OpaquePointer, LoadError> {
         let resolved = match self {
             Self::Struct(reader) => reader.resolve_pointer(index, None)?.value.pointer,
             Self::Element(reader) => reader.resolve_pointer(index, None)?.value.pointer,
@@ -170,12 +185,21 @@ impl<'context, 'data> RawStruct<'context, 'data> {
             ResolvedPointer::List(_) => OpaquePointerKind::List,
             ResolvedPointer::Capability(_) => OpaquePointerKind::Capability,
         };
-        Ok(OpaquePointer { kind })
+        Ok(OpaquePointer {
+            kind,
+            backing,
+            location: self.pointer_location(index)?.unwrap_or(WireLocation {
+                segment_id: 0,
+                word_offset: 0,
+            }),
+            nesting: self.nesting(),
+        })
     }
 }
 
 struct Loader {
     remaining_items: usize,
+    backing: Arc<[Arc<[u8]>]>,
 }
 
 impl Loader {
@@ -449,17 +473,17 @@ impl Loader {
             13 => Value::Data(raw.bytes(0)?),
             14 => Value::List(expect_pointer_kind(
                 "Value.list",
-                raw.opaque(0)?,
+                raw.opaque(0, Arc::clone(&self.backing))?,
                 OpaquePointerKind::List,
             )?),
             15 => Value::Enum(data.read_u16(1, 0)?),
             16 => Value::Struct(expect_pointer_kind(
                 "Value.struct",
-                raw.opaque(0)?,
+                raw.opaque(0, Arc::clone(&self.backing))?,
                 OpaquePointerKind::Struct,
             )?),
             17 => Value::Interface,
-            18 => Value::AnyPointer(raw.opaque(0)?),
+            18 => Value::AnyPointer(raw.opaque(0, Arc::clone(&self.backing))?),
             value => return Err(unknown("Value", value)),
         })
     }
@@ -538,11 +562,13 @@ pub(crate) fn load(bytes: &[u8], limits: LoadLimits) -> Result<CompiledSchema, L
             frame
         }
     };
-    let segment_bytes = frame
+    let backing: Arc<[Arc<[u8]>]> = frame
         .segments()
         .iter()
-        .map(|segment| segment.bytes())
-        .collect::<Vec<_>>();
+        .map(|segment| Arc::<[u8]>::from(segment.bytes()))
+        .collect::<Vec<_>>()
+        .into();
+    let segment_bytes = backing.iter().map(AsRef::as_ref).collect::<Vec<_>>();
     let message = MessageSegments::new(&segment_bytes)?;
     let budget = LocalTraversalBudget::new(limits.max_traversal_words);
     let root = message.read_struct(
@@ -556,6 +582,7 @@ pub(crate) fn load(bytes: &[u8], limits: LoadLimits) -> Result<CompiledSchema, L
     let root = RawStruct::Struct(root);
     let mut loader = Loader {
         remaining_items: limits.max_metadata_items,
+        backing: Arc::clone(&backing),
     };
     let version_data = root.child(2)?.data()?;
     let version = CapnpVersion {
@@ -618,6 +645,12 @@ mod tests {
     fn typed_opaque_values_reject_the_wrong_pointer_kind() {
         let pointer = OpaquePointer {
             kind: OpaquePointerKind::Struct,
+            backing: Arc::from([]),
+            location: WireLocation {
+                segment_id: 0,
+                word_offset: 0,
+            },
+            nesting: NestingLimit::new(0),
         };
         assert_eq!(
             expect_pointer_kind("Value.list", pointer, OpaquePointerKind::List),
@@ -632,11 +665,23 @@ mod tests {
                 "Value.struct",
                 OpaquePointer {
                     kind: OpaquePointerKind::Null,
+                    backing: Arc::from([]),
+                    location: WireLocation {
+                        segment_id: 0,
+                        word_offset: 0,
+                    },
+                    nesting: NestingLimit::new(0),
                 },
                 OpaquePointerKind::Struct,
             ),
             Ok(OpaquePointer {
                 kind: OpaquePointerKind::Null,
+                backing: Arc::from([]),
+                location: WireLocation {
+                    segment_id: 0,
+                    word_offset: 0,
+                },
+                nesting: NestingLimit::new(0),
             })
         );
     }

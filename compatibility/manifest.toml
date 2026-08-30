@@ -48,7 +48,7 @@ rules_shell = "0.8.0"
 
 [support]
 wire = "M10 borrowed and Arc-owned typed readers with stable coordinate references"
-generated_api = "M17 owned compiled-schema metadata and indexed introspection"
+generated_api = "M18 owned dynamic schema-driven readers, builders, downcasts, and formatting"
 native_compiler = "not-started"
 rpc_level = "none"
 parallel_read = "not-started"
@@ -78,6 +78,16 @@ M14 = "complete"
 M15 = "complete"
 M16 = "complete"
 M17 = "complete"
+M18 = "complete"
+
+[evidence.M18]
+crates = ["crates/capnp-schema", "crates/capnp-message"]
+ownership = ["Arc-owned compiled schema", "Arc-owned message segments", "checked retained pointer and struct-list coordinates", "no leaked schema lifetime or global registry"]
+read = ["scalar defaults", "Text and Data", "structs and groups", "all list encodings", "union activity", "known and unknown enums", "capabilities", "AnyPointer", "generic brand substitution", "aggregate schema constants"]
+write = ["scalars", "Text and Data", "structs and groups", "primitive and pointer lists", "inline-composite struct lists", "nested lists", "enums", "capabilities"]
+agreement = "dynamic and generated-style low-level views observe identical wire values"
+safety = ["dynamic views are Send and Sync", "typed downcasts validate schema IDs", "exclusive child builders fail to alias at compile time"]
+validation = "Rust 1.98 and 1.85 workspace tests; public API and compile-fail doc tests; Clippy -D warnings; Bazel complete test suite"
 
 [evidence.M17]
 crate = "crates/capnp-schema"

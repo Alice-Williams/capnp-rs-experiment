@@ -42,8 +42,8 @@ pub use list::{
 };
 #[cfg(target_has_atomic = "64")]
 pub use owned::{
-    BorrowedMessage, ListObject, ObjectKind, ObjectRef, OwnedMessage, OwnedReadError, ReaderLimits,
-    StructObject, TypedMessage,
+    BorrowedMessage, ListObject, ObjectKind, ObjectRef, OwnedMessage, OwnedPointerRef,
+    OwnedReadError, ReaderLimits, StructElementRef, StructObject, TypedMessage,
 };
 pub use primitive::{DataSection, EnumValue, PrimitiveError, PrimitiveType, PrimitiveValue};
 pub use structure::{

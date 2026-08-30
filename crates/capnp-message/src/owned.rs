@@ -41,6 +41,7 @@ pub enum OwnedReadError {
     Validation(ValidationError),
     Struct(StructReadError),
     List(ListReadError),
+    Blob(crate::BlobError),
     ExpectedStruct,
     ExpectedList,
 }
@@ -57,6 +58,7 @@ impl core::error::Error for OwnedReadError {
             Self::Validation(error) => Some(error),
             Self::Struct(error) => Some(error),
             Self::List(error) => Some(error),
+            Self::Blob(error) => Some(error),
             Self::ExpectedStruct | Self::ExpectedList => None,
         }
     }
@@ -77,6 +79,12 @@ impl From<StructReadError> for OwnedReadError {
 impl From<ListReadError> for OwnedReadError {
     fn from(value: ListReadError) -> Self {
         Self::List(value)
+    }
+}
+
+impl From<crate::BlobError> for OwnedReadError {
+    fn from(value: crate::BlobError) -> Self {
+        Self::Blob(value)
     }
 }
 
@@ -200,6 +208,15 @@ impl OwnedMessage {
         })
     }
 
+    /// Retains any validated pointer at an already-derived wire coordinate.
+    pub fn pointer_at(
+        self: &Arc<Self>,
+        location: WireLocation,
+        nesting: NestingLimit,
+    ) -> Result<OwnedPointerRef, OwnedReadError> {
+        retained_pointer(self, location, nesting)
+    }
+
     fn borrowed_segments(&self) -> Result<MessageSegments<'_>, ValidationError> {
         let segments = self.segments.iter().map(AsRef::as_ref).collect::<Vec<_>>();
         MessageSegments::new(&segments)
@@ -244,6 +261,15 @@ impl ObjectKind for ListObject {
             }
         }
     }
+}
+
+/// A retained pointer whose concrete wire kind is known without schema input.
+#[derive(Clone, Debug)]
+pub enum OwnedPointerRef {
+    Null,
+    Struct(ObjectRef<StructObject>),
+    List(ObjectRef<ListObject>),
+    Capability(u32),
 }
 
 /// An owning, stable reference to a previously kind-checked wire location.
@@ -341,9 +367,23 @@ impl ObjectRef<StructObject> {
         let (location, nesting) = self.with_reader(|reader| {
             Ok::<_, StructReadError>((reader.pointer_location(index)?, reader.nesting()))
         })??;
-        location
-            .map(|location| Self::checked(Arc::clone(&self.message), location, nesting))
-            .transpose()
+        let Some(location) = location else {
+            return Ok(None);
+        };
+        let segments = self.message.borrowed_segments()?;
+        let pointer = segments.validate_pointer(location)?;
+        drop(segments);
+        match pointer {
+            ResolvedPointer::Null => Ok(None),
+            ResolvedPointer::Struct(_) => Ok(Some(Self::checked(
+                Arc::clone(&self.message),
+                location,
+                nesting,
+            )?)),
+            ResolvedPointer::List(_) | ResolvedPointer::Capability(_) => {
+                Err(OwnedReadError::ExpectedStruct)
+            }
+        }
     }
 
     /// Retains a list-valued pointer field without copying its target bytes.
@@ -351,9 +391,33 @@ impl ObjectRef<StructObject> {
         let (location, nesting) = self.with_reader(|reader| {
             Ok::<_, StructReadError>((reader.pointer_location(index)?, reader.nesting()))
         })??;
-        location
-            .map(|location| ObjectRef::checked(Arc::clone(&self.message), location, nesting))
-            .transpose()
+        let Some(location) = location else {
+            return Ok(None);
+        };
+        let segments = self.message.borrowed_segments()?;
+        let pointer = segments.validate_pointer(location)?;
+        drop(segments);
+        match pointer {
+            ResolvedPointer::Null => Ok(None),
+            ResolvedPointer::List(_) => Ok(Some(ObjectRef::checked(
+                Arc::clone(&self.message),
+                location,
+                nesting,
+            )?)),
+            ResolvedPointer::Struct(_) | ResolvedPointer::Capability(_) => {
+                Err(OwnedReadError::ExpectedList)
+            }
+        }
+    }
+
+    pub fn child_pointer(&self, index: u16) -> Result<OwnedPointerRef, OwnedReadError> {
+        let (location, nesting) = self.with_reader(|reader| {
+            Ok::<_, StructReadError>((reader.pointer_location(index)?, reader.nesting()))
+        })??;
+        let Some(location) = location else {
+            return Ok(OwnedPointerRef::Null);
+        };
+        retained_pointer(&self.message, location, nesting)
     }
 }
 
@@ -367,6 +431,196 @@ impl ObjectRef<ListObject> {
         let reader = segments.read_list(self.location, &self.message.budget, self.nesting)?;
         Ok(use_reader(reader))
     }
+
+    pub fn with_text<R>(
+        &self,
+        use_reader: impl for<'reader> FnOnce(crate::TextReader<'reader>) -> R,
+    ) -> Result<R, OwnedReadError> {
+        let segments = self.message.borrowed_segments()?;
+        let reader = segments.read_text(self.location, &self.message.budget, self.nesting)?;
+        Ok(use_reader(reader))
+    }
+
+    pub fn with_data<R>(
+        &self,
+        use_reader: impl for<'reader> FnOnce(crate::DataReader<'reader>) -> R,
+    ) -> Result<R, OwnedReadError> {
+        let segments = self.message.borrowed_segments()?;
+        let reader = segments.read_data(self.location, &self.message.budget, self.nesting)?;
+        Ok(use_reader(reader))
+    }
+
+    /// Retains an inline-composite (or legally upgraded) struct-list element.
+    pub fn struct_element(&self, index: u32) -> Result<StructElementRef, OwnedReadError> {
+        self.with_reader(|reader| reader.as_structs()?.get(index).map(|_| ()))??;
+        Ok(StructElementRef {
+            list: self.clone(),
+            index,
+        })
+    }
+
+    /// Retains a struct-valued pointer-list element.
+    pub fn pointer_struct(
+        &self,
+        index: u32,
+    ) -> Result<Option<ObjectRef<StructObject>>, OwnedReadError> {
+        let (location, nesting) =
+            self.with_reader(|reader| reader.as_pointers()?.element_location(index))??;
+        let segments = self.message.borrowed_segments()?;
+        let pointer = segments.validate_pointer(location)?;
+        drop(segments);
+        match pointer {
+            ResolvedPointer::Null => Ok(None),
+            ResolvedPointer::Struct(_) => Ok(Some(ObjectRef::checked(
+                Arc::clone(&self.message),
+                location,
+                nesting,
+            )?)),
+            ResolvedPointer::List(_) | ResolvedPointer::Capability(_) => {
+                Err(OwnedReadError::ExpectedStruct)
+            }
+        }
+    }
+
+    /// Retains a list-valued pointer-list element.
+    pub fn pointer_list(
+        &self,
+        index: u32,
+    ) -> Result<Option<ObjectRef<ListObject>>, OwnedReadError> {
+        let (location, nesting) =
+            self.with_reader(|reader| reader.as_pointers()?.element_location(index))??;
+        let segments = self.message.borrowed_segments()?;
+        let pointer = segments.validate_pointer(location)?;
+        drop(segments);
+        match pointer {
+            ResolvedPointer::Null => Ok(None),
+            ResolvedPointer::List(_) => Ok(Some(ObjectRef::checked(
+                Arc::clone(&self.message),
+                location,
+                nesting,
+            )?)),
+            ResolvedPointer::Struct(_) | ResolvedPointer::Capability(_) => {
+                Err(OwnedReadError::ExpectedList)
+            }
+        }
+    }
+
+    pub fn pointer_element(&self, index: u32) -> Result<OwnedPointerRef, OwnedReadError> {
+        let (location, nesting) =
+            self.with_reader(|reader| reader.as_pointers()?.element_location(index))??;
+        retained_pointer(&self.message, location, nesting)
+    }
+}
+
+/// An owning coordinate for one struct-list element.
+#[derive(Clone, Debug)]
+pub struct StructElementRef {
+    list: ObjectRef<ListObject>,
+    index: u32,
+}
+
+impl StructElementRef {
+    pub const fn index(&self) -> u32 {
+        self.index
+    }
+
+    pub fn list(&self) -> &ObjectRef<ListObject> {
+        &self.list
+    }
+
+    pub fn with_reader<R>(
+        &self,
+        use_reader: impl for<'reader> FnOnce(
+            crate::StructElementReader<'reader, 'reader, SharedTraversalBudget>,
+        ) -> R,
+    ) -> Result<R, OwnedReadError> {
+        Ok(self.list.with_reader(|reader| {
+            let structs = reader.as_structs()?;
+            Ok::<_, ListReadError>(use_reader(structs.get(self.index)?))
+        })??)
+    }
+
+    pub fn child_struct(
+        &self,
+        pointer_index: u16,
+    ) -> Result<Option<ObjectRef<StructObject>>, OwnedReadError> {
+        let (location, nesting) = self.with_reader(|reader| {
+            Ok::<_, ListReadError>((reader.pointer_location(pointer_index)?, reader.nesting()))
+        })??;
+        let Some(location) = location else {
+            return Ok(None);
+        };
+        let segments = self.list.message.borrowed_segments()?;
+        let pointer = segments.validate_pointer(location)?;
+        drop(segments);
+        match pointer {
+            ResolvedPointer::Null => Ok(None),
+            ResolvedPointer::Struct(_) => Ok(Some(ObjectRef::checked(
+                Arc::clone(&self.list.message),
+                location,
+                nesting,
+            )?)),
+            ResolvedPointer::List(_) | ResolvedPointer::Capability(_) => {
+                Err(OwnedReadError::ExpectedStruct)
+            }
+        }
+    }
+
+    pub fn child_list(
+        &self,
+        pointer_index: u16,
+    ) -> Result<Option<ObjectRef<ListObject>>, OwnedReadError> {
+        let (location, nesting) = self.with_reader(|reader| {
+            Ok::<_, ListReadError>((reader.pointer_location(pointer_index)?, reader.nesting()))
+        })??;
+        let Some(location) = location else {
+            return Ok(None);
+        };
+        let segments = self.list.message.borrowed_segments()?;
+        let pointer = segments.validate_pointer(location)?;
+        drop(segments);
+        match pointer {
+            ResolvedPointer::Null => Ok(None),
+            ResolvedPointer::List(_) => Ok(Some(ObjectRef::checked(
+                Arc::clone(&self.list.message),
+                location,
+                nesting,
+            )?)),
+            ResolvedPointer::Struct(_) | ResolvedPointer::Capability(_) => {
+                Err(OwnedReadError::ExpectedList)
+            }
+        }
+    }
+
+    pub fn child_pointer(&self, pointer_index: u16) -> Result<OwnedPointerRef, OwnedReadError> {
+        let (location, nesting) = self.with_reader(|reader| {
+            Ok::<_, ListReadError>((reader.pointer_location(pointer_index)?, reader.nesting()))
+        })??;
+        let Some(location) = location else {
+            return Ok(OwnedPointerRef::Null);
+        };
+        retained_pointer(&self.list.message, location, nesting)
+    }
+}
+
+fn retained_pointer(
+    message: &Arc<OwnedMessage>,
+    location: WireLocation,
+    nesting: NestingLimit,
+) -> Result<OwnedPointerRef, OwnedReadError> {
+    let segments = message.borrowed_segments()?;
+    let pointer = segments.validate_pointer(location)?;
+    drop(segments);
+    Ok(match pointer {
+        ResolvedPointer::Null => OwnedPointerRef::Null,
+        ResolvedPointer::Struct(_) => {
+            OwnedPointerRef::Struct(ObjectRef::checked(Arc::clone(message), location, nesting)?)
+        }
+        ResolvedPointer::List(_) => {
+            OwnedPointerRef::List(ObjectRef::checked(Arc::clone(message), location, nesting)?)
+        }
+        ResolvedPointer::Capability(value) => OwnedPointerRef::Capability(value.index),
+    })
 }
 
 /// A message whose root wire kind is fixed in its Rust type.

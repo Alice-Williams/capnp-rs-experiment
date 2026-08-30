@@ -1586,6 +1586,14 @@ impl StructBuilder<'_> {
         self.reference
     }
 
+    /// Reborrows the same storage for a schema group view.
+    pub fn group(&mut self) -> StructBuilder<'_> {
+        StructBuilder {
+            arena: self.arena,
+            reference: self.reference,
+        }
+    }
+
     pub fn set_bool(
         &mut self,
         bit_offset: u32,
@@ -2058,6 +2066,40 @@ impl PointerListBuilder<'_> {
         })
     }
 
+    pub fn init_pointer_list(
+        &mut self,
+        index: u32,
+        element_count: u32,
+    ) -> Result<PointerListBuilder<'_>, ArenaError> {
+        let slot = self.slot(index)?;
+        let reference = self
+            .arena
+            .allocate_data_list(ElementSize::Pointer, element_count)?;
+        self.arena.emit_list(slot, reference)?;
+        Ok(PointerListBuilder {
+            arena: self.arena,
+            reference,
+        })
+    }
+
+    pub fn init_struct_list(
+        &mut self,
+        index: u32,
+        element_count: u32,
+        data_words: u16,
+        pointer_count: u16,
+    ) -> Result<StructListBuilder<'_>, ArenaError> {
+        let slot = self.slot(index)?;
+        let reference =
+            self.arena
+                .allocate_struct_list(element_count, data_words, pointer_count)?;
+        self.arena.emit_list(slot, reference)?;
+        Ok(StructListBuilder {
+            arena: self.arena,
+            reference,
+        })
+    }
+
     pub fn set_text(&mut self, index: u32, value: &str) -> Result<(), ArenaError> {
         let slot = self.slot(index)?;
         let count = value
@@ -2087,6 +2129,12 @@ impl PointerListBuilder<'_> {
             .ok_or(ArenaError::AllocationOverflow)?;
         self.arena.segment_mut(reference.content.segment_id)?[start..end].copy_from_slice(value);
         Ok(())
+    }
+
+    pub fn set_capability(&mut self, index: u32, capability: u32) -> Result<(), ArenaError> {
+        let slot = self.slot(index)?;
+        self.arena
+            .write_pointer(slot, WirePointer::new_capability(capability))
     }
 
     pub fn copy_pointer<B: TraversalBudget>(

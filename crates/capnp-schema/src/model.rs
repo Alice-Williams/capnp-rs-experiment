@@ -1,4 +1,9 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
+
+use capnp_message::{
+    NestingLimit, OwnedMessage, OwnedPointerRef, OwnedReadError, ReaderLimits, WireLocation,
+};
 
 use crate::{LoadError, LoadLimits};
 
@@ -425,9 +430,22 @@ pub enum Value {
     AnyPointer(OpaquePointer),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OpaquePointer {
     pub kind: OpaquePointerKind,
+    pub(crate) backing: Arc<[Arc<[u8]>]>,
+    pub(crate) location: WireLocation,
+    pub(crate) nesting: NestingLimit,
+}
+
+impl OpaquePointer {
+    pub fn open(&self, limits: ReaderLimits) -> Result<OwnedPointerRef, OwnedReadError> {
+        if self.kind == OpaquePointerKind::Null {
+            return Ok(OwnedPointerRef::Null);
+        }
+        let message = OwnedMessage::new(self.backing.iter().cloned(), limits)?;
+        message.pointer_at(self.location, self.nesting)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

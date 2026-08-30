@@ -174,6 +174,10 @@ impl<'context, 'data, B: TraversalBudget> StructReader<'context, 'data, B> {
         self.nesting
     }
 
+    pub const fn nesting_limit(self) -> NestingLimit {
+        self.nesting
+    }
+
     pub const fn reference(self) -> Option<StructRef> {
         self.reference
     }
