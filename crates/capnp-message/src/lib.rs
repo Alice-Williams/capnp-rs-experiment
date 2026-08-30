@@ -3,6 +3,8 @@
 mod blob;
 mod budget;
 mod list;
+#[cfg(target_has_atomic = "64")]
+mod owned;
 mod primitive;
 mod structure;
 mod validation;
@@ -24,6 +26,11 @@ pub use list::{
     EnumListIter, EnumListReader, ListReadError, ListReader, PointerListIter, PointerListReader,
     PrimitiveListElement, PrimitiveListIter, PrimitiveListReader, StructElementReader,
     StructListIter, StructListReader,
+};
+#[cfg(target_has_atomic = "64")]
+pub use owned::{
+    BorrowedMessage, ListObject, ObjectKind, ObjectRef, OwnedMessage, OwnedReadError, ReaderLimits,
+    StructObject, TypedMessage,
 };
 pub use primitive::{DataSection, EnumValue, PrimitiveError, PrimitiveType, PrimitiveValue};
 pub use structure::{

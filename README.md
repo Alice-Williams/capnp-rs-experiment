@@ -34,7 +34,9 @@ enum reads plus charged, zero-copy Text and Data views. M08 adds coordinate-
 based struct/group readers, union-tag preservation, short-section evolution,
 and limited pointer defaults. M09 adds typed primitive, enum, pointer, nested,
 and struct-list readers with the reference implementation's legal list-upgrade
-semantics. The remaining crates are explicit ownership
+semantics. M10 adds borrowed and `Arc`-owned message contexts, typed roots, and
+stable struct/list references with exact shared traversal accounting. The
+remaining crates are explicit ownership
 boundaries rather than claimed protocol features.
 
 ## Development

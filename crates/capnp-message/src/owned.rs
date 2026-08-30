@@ -1,0 +1,579 @@
+//! Owned messages and stable, typed references to wire objects.
+//!
+//! This module implements ADR-0001. Owned segment buffers are immutable and
+//! shared through `Arc`; retained references store only an owning message,
+//! checked wire coordinates, a copied nesting limit, and a sealed type marker.
+//! Dereferencing reconstructs a short-lived `MessageSegments` and reader, so a
+//! native pointer or a borrow into the backing storage can never be retained.
+//! All clones share one exact atomic traversal budget.
+//!
+//! These types deliberately do not provide mutation, schema-generated types,
+//! capabilities, or per-object copies. Those belong to later milestones.
+
+use core::fmt;
+use core::marker::PhantomData;
+use std::sync::Arc;
+
+use crate::{
+    ListReadError, ListReader, MessageSegments, NestingLimit, ResolvedPointer,
+    SharedTraversalBudget, StructReadError, StructReader, TraversalBudget, ValidationError,
+    WireLocation,
+};
+
+/// Limits shared by every view and retained reference into an owned message.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReaderLimits {
+    pub traversal_words: u64,
+    pub nesting_levels: u32,
+}
+
+impl Default for ReaderLimits {
+    fn default() -> Self {
+        Self {
+            traversal_words: 8 * 1024 * 1024,
+            nesting_levels: 64,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum OwnedReadError {
+    Validation(ValidationError),
+    Struct(StructReadError),
+    List(ListReadError),
+    ExpectedStruct,
+    ExpectedList,
+}
+
+impl fmt::Display for OwnedReadError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{self:?}")
+    }
+}
+
+impl std::error::Error for OwnedReadError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Validation(error) => Some(error),
+            Self::Struct(error) => Some(error),
+            Self::List(error) => Some(error),
+            Self::ExpectedStruct | Self::ExpectedList => None,
+        }
+    }
+}
+
+impl From<ValidationError> for OwnedReadError {
+    fn from(value: ValidationError) -> Self {
+        Self::Validation(value)
+    }
+}
+
+impl From<StructReadError> for OwnedReadError {
+    fn from(value: StructReadError) -> Self {
+        Self::Struct(value)
+    }
+}
+
+impl From<ListReadError> for OwnedReadError {
+    fn from(value: ListReadError) -> Self {
+        Self::List(value)
+    }
+}
+
+/// A non-owning message context whose readers cannot outlive caller storage.
+///
+/// ```compile_fail
+/// use capnp_message::{BorrowedMessage, DataSection, ReaderLimits, WireLocation};
+/// fn dangling() -> DataSection<'static> {
+///     let bytes = [0u8; 8];
+///     let message = BorrowedMessage::new(&[&bytes], ReaderLimits::default()).unwrap();
+///     message.read_struct(WireLocation { segment_id: 0, word_offset: 0 })
+///         .unwrap().data_section().unwrap()
+/// }
+/// ```
+#[derive(Debug)]
+pub struct BorrowedMessage<'data> {
+    segments: MessageSegments<'data>,
+    budget: crate::LocalTraversalBudget,
+    nesting: NestingLimit,
+}
+
+impl<'data> BorrowedMessage<'data> {
+    pub fn new(segments: &[&'data [u8]], limits: ReaderLimits) -> Result<Self, ValidationError> {
+        Ok(Self {
+            segments: MessageSegments::new(segments)?,
+            budget: crate::LocalTraversalBudget::new(limits.traversal_words),
+            nesting: NestingLimit::new(limits.nesting_levels),
+        })
+    }
+
+    pub fn read_struct(
+        &self,
+        location: WireLocation,
+    ) -> Result<StructReader<'_, 'data, crate::LocalTraversalBudget>, StructReadError> {
+        self.segments
+            .read_struct(location, &self.budget, self.nesting)
+    }
+
+    pub fn read_list(
+        &self,
+        location: WireLocation,
+    ) -> Result<ListReader<'_, 'data, crate::LocalTraversalBudget>, ListReadError> {
+        self.segments
+            .read_list(location, &self.budget, self.nesting)
+    }
+
+    pub fn remaining_traversal_words(&self) -> u64 {
+        self.budget.remaining_words()
+    }
+}
+
+/// Immutable owned segment backing and the exact traversal budget shared by it.
+#[derive(Debug)]
+pub struct OwnedMessage {
+    segments: Arc<[Arc<[u8]>]>,
+    budget: SharedTraversalBudget,
+    nesting: NestingLimit,
+}
+
+impl OwnedMessage {
+    /// Takes ownership of immutable segment buffers without copying existing
+    /// `Arc<[u8]>` inputs. Each segment is checked before the message is exposed.
+    pub fn new<I, S>(segments: I, limits: ReaderLimits) -> Result<Arc<Self>, ValidationError>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<Arc<[u8]>>,
+    {
+        let segments: Arc<[Arc<[u8]>]> = segments
+            .into_iter()
+            .map(Into::into)
+            .collect::<Vec<_>>()
+            .into();
+        let borrowed = segments.iter().map(AsRef::as_ref).collect::<Vec<_>>();
+        MessageSegments::new(&borrowed)?;
+        Ok(Arc::new(Self {
+            segments,
+            budget: SharedTraversalBudget::new(limits.traversal_words),
+            nesting: NestingLimit::new(limits.nesting_levels),
+        }))
+    }
+
+    pub fn segment_count(&self) -> usize {
+        self.segments.len()
+    }
+
+    pub fn segment(&self, id: u32) -> Option<&[u8]> {
+        usize::try_from(id)
+            .ok()
+            .and_then(|index| self.segments.get(index).map(AsRef::as_ref))
+    }
+
+    pub fn remaining_traversal_words(&self) -> u64 {
+        self.budget.remaining_words()
+    }
+
+    /// Creates a typed root reference after checking the root pointer's kind.
+    pub fn root_struct(self: &Arc<Self>) -> Result<TypedMessage<StructObject>, OwnedReadError> {
+        Ok(TypedMessage {
+            root: ObjectRef::checked(
+                Arc::clone(self),
+                WireLocation {
+                    segment_id: 0,
+                    word_offset: 0,
+                },
+                self.nesting,
+            )?,
+        })
+    }
+
+    /// Creates a typed root reference after checking the root pointer's kind.
+    pub fn root_list(self: &Arc<Self>) -> Result<TypedMessage<ListObject>, OwnedReadError> {
+        Ok(TypedMessage {
+            root: ObjectRef::checked(
+                Arc::clone(self),
+                WireLocation {
+                    segment_id: 0,
+                    word_offset: 0,
+                },
+                self.nesting,
+            )?,
+        })
+    }
+
+    fn borrowed_segments(&self) -> Result<MessageSegments<'_>, ValidationError> {
+        let segments = self.segments.iter().map(AsRef::as_ref).collect::<Vec<_>>();
+        MessageSegments::new(&segments)
+    }
+}
+
+mod sealed {
+    pub trait Sealed {}
+}
+
+/// A sealed marker for the wire kind an `ObjectRef` is allowed to open.
+pub trait ObjectKind: sealed::Sealed {
+    #[doc(hidden)]
+    fn validate(pointer: ResolvedPointer) -> Result<(), OwnedReadError>;
+}
+
+#[derive(Debug)]
+pub struct StructObject;
+
+impl sealed::Sealed for StructObject {}
+impl ObjectKind for StructObject {
+    fn validate(pointer: ResolvedPointer) -> Result<(), OwnedReadError> {
+        match pointer {
+            ResolvedPointer::Null | ResolvedPointer::Struct(_) => Ok(()),
+            ResolvedPointer::List(_) | ResolvedPointer::Capability(_) => {
+                Err(OwnedReadError::ExpectedStruct)
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ListObject;
+
+impl sealed::Sealed for ListObject {}
+impl ObjectKind for ListObject {
+    fn validate(pointer: ResolvedPointer) -> Result<(), OwnedReadError> {
+        match pointer {
+            ResolvedPointer::Null | ResolvedPointer::List(_) => Ok(()),
+            ResolvedPointer::Struct(_) | ResolvedPointer::Capability(_) => {
+                Err(OwnedReadError::ExpectedList)
+            }
+        }
+    }
+}
+
+/// An owning, stable reference to a previously kind-checked wire location.
+///
+/// Its private fields prevent unchecked coordinates or arbitrary marker types
+/// from being forged outside this crate.
+///
+/// ```compile_fail
+/// use capnp_message::{ObjectRef, StructObject, WireLocation};
+/// let forged = ObjectRef::<StructObject> {
+///     message: todo!(),
+///     location: WireLocation { segment_id: 0, word_offset: 99 },
+///     nesting: todo!(),
+///     marker: core::marker::PhantomData,
+/// };
+/// ```
+pub struct ObjectRef<T: ObjectKind> {
+    message: Arc<OwnedMessage>,
+    location: WireLocation,
+    nesting: NestingLimit,
+    marker: PhantomData<fn() -> T>,
+}
+
+impl<T: ObjectKind> Clone for ObjectRef<T> {
+    fn clone(&self) -> Self {
+        Self {
+            message: Arc::clone(&self.message),
+            location: self.location,
+            nesting: self.nesting,
+            marker: PhantomData,
+        }
+    }
+}
+
+impl<T: ObjectKind> fmt::Debug for ObjectRef<T> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ObjectRef")
+            .field("location", &self.location)
+            .field("nesting", &self.nesting)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<T: ObjectKind> ObjectRef<T> {
+    fn checked(
+        message: Arc<OwnedMessage>,
+        location: WireLocation,
+        nesting: NestingLimit,
+    ) -> Result<Self, OwnedReadError> {
+        let segments = message.borrowed_segments()?;
+        T::validate(segments.validate_pointer(location)?)?;
+        drop(segments);
+        Ok(Self {
+            message,
+            location,
+            nesting,
+            marker: PhantomData,
+        })
+    }
+
+    pub const fn location(&self) -> WireLocation {
+        self.location
+    }
+
+    pub fn message(&self) -> &Arc<OwnedMessage> {
+        &self.message
+    }
+
+    pub fn same_object(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.message, &other.message) && self.location == other.location
+    }
+}
+
+impl ObjectRef<StructObject> {
+    /// Opens a reader only for the duration of `use_reader`.
+    ///
+    /// ```compile_fail
+    /// use capnp_message::{OwnedMessage, ReaderLimits};
+    /// let message = OwnedMessage::new(vec![vec![0u8; 8]], ReaderLimits::default()).unwrap();
+    /// let root = message.root_struct().unwrap();
+    /// let escaped = root.root().with_reader(|reader| reader).unwrap();
+    /// ```
+    pub fn with_reader<R>(
+        &self,
+        use_reader: impl for<'reader> FnOnce(StructReader<'reader, 'reader, SharedTraversalBudget>) -> R,
+    ) -> Result<R, OwnedReadError> {
+        let segments = self.message.borrowed_segments()?;
+        let reader = segments.read_struct(self.location, &self.message.budget, self.nesting)?;
+        Ok(use_reader(reader))
+    }
+
+    /// Retains a struct-valued pointer field without copying its target bytes.
+    pub fn child_struct(&self, index: u16) -> Result<Option<Self>, OwnedReadError> {
+        let (location, nesting) = self.with_reader(|reader| {
+            Ok::<_, StructReadError>((reader.pointer_location(index)?, reader.nesting()))
+        })??;
+        location
+            .map(|location| Self::checked(Arc::clone(&self.message), location, nesting))
+            .transpose()
+    }
+
+    /// Retains a list-valued pointer field without copying its target bytes.
+    pub fn child_list(&self, index: u16) -> Result<Option<ObjectRef<ListObject>>, OwnedReadError> {
+        let (location, nesting) = self.with_reader(|reader| {
+            Ok::<_, StructReadError>((reader.pointer_location(index)?, reader.nesting()))
+        })??;
+        location
+            .map(|location| ObjectRef::checked(Arc::clone(&self.message), location, nesting))
+            .transpose()
+    }
+}
+
+impl ObjectRef<ListObject> {
+    /// Opens a reader only for the duration of `use_reader`.
+    pub fn with_reader<R>(
+        &self,
+        use_reader: impl for<'reader> FnOnce(ListReader<'reader, 'reader, SharedTraversalBudget>) -> R,
+    ) -> Result<R, OwnedReadError> {
+        let segments = self.message.borrowed_segments()?;
+        let reader = segments.read_list(self.location, &self.message.budget, self.nesting)?;
+        Ok(use_reader(reader))
+    }
+}
+
+/// A message whose root wire kind is fixed in its Rust type.
+pub struct TypedMessage<T: ObjectKind> {
+    root: ObjectRef<T>,
+}
+
+impl<T: ObjectKind> Clone for TypedMessage<T> {
+    fn clone(&self) -> Self {
+        Self {
+            root: self.root.clone(),
+        }
+    }
+}
+
+impl<T: ObjectKind> fmt::Debug for TypedMessage<T> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TypedMessage")
+            .field("root", &self.root)
+            .finish()
+    }
+}
+
+impl<T: ObjectKind> TypedMessage<T> {
+    pub const fn root(&self) -> &ObjectRef<T> {
+        &self.root
+    }
+
+    pub fn into_root(self) -> ObjectRef<T> {
+        self.root
+    }
+
+    pub fn message(&self) -> &Arc<OwnedMessage> {
+        self.root.message()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use capnp_wire::WirePointer;
+
+    fn nested_struct_message(limits: ReaderLimits) -> Arc<OwnedMessage> {
+        let mut bytes = vec![0u8; 32];
+        WirePointer::new_struct(0, 1, 1)
+            .expect("root pointer fits")
+            .write_to(&mut bytes, 0)
+            .expect("root pointer writes");
+        bytes[8..16].copy_from_slice(&42u64.to_le_bytes());
+        WirePointer::new_struct(0, 1, 0)
+            .expect("child pointer fits")
+            .write_to(&mut bytes, 16)
+            .expect("child pointer writes");
+        bytes[24..32].copy_from_slice(&99u64.to_le_bytes());
+        OwnedMessage::new(vec![bytes], limits).expect("owned message is valid")
+    }
+
+    fn assert_send_sync<T: Send + Sync>() {}
+
+    #[test]
+    fn public_owned_shapes_are_send_sync_by_representation() {
+        assert_send_sync::<OwnedMessage>();
+        assert_send_sync::<ObjectRef<StructObject>>();
+        assert_send_sync::<ObjectRef<ListObject>>();
+        assert_send_sync::<TypedMessage<StructObject>>();
+    }
+
+    #[test]
+    fn a_retained_child_owns_the_original_backing_without_copying() {
+        let message = nested_struct_message(ReaderLimits {
+            traversal_words: 8,
+            nesting_levels: 4,
+        });
+        let backing = message.segment(0).expect("segment exists").as_ptr();
+        let typed = message.root_struct().expect("root is a struct");
+        assert_eq!(
+            typed
+                .root()
+                .with_reader(|reader| {
+                    reader
+                        .data_section()?
+                        .read_u64(0, 0)
+                        .map_err(StructReadError::from)
+                })
+                .expect("reader opens")
+                .expect("root value reads"),
+            42
+        );
+        let child = typed
+            .root()
+            .child_struct(0)
+            .expect("child validates")
+            .expect("pointer field exists");
+        drop(typed);
+        drop(message);
+
+        assert_eq!(
+            child
+                .message()
+                .segment(0)
+                .expect("segment remains")
+                .as_ptr(),
+            backing
+        );
+        assert_eq!(
+            child
+                .with_reader(|reader| {
+                    reader
+                        .data_section()?
+                        .read_u64(0, 0)
+                        .map_err(StructReadError::from)
+                })
+                .expect("retained reader opens")
+                .expect("retained value reads"),
+            99
+        );
+    }
+
+    #[test]
+    fn wrong_root_and_child_kinds_are_rejected_before_exposure() {
+        let message = nested_struct_message(ReaderLimits::default());
+        assert!(matches!(
+            message.root_list(),
+            Err(OwnedReadError::ExpectedList)
+        ));
+        let root = message.root_struct().expect("root is a struct");
+        assert!(matches!(
+            root.root().child_list(0),
+            Err(OwnedReadError::ExpectedList)
+        ));
+    }
+
+    #[test]
+    fn concurrent_clones_share_one_exact_budget() {
+        let message = nested_struct_message(ReaderLimits {
+            traversal_words: 2,
+            nesting_levels: 4,
+        });
+        let root = message.root_struct().expect("root validates").into_root();
+        let first = {
+            let root = root.clone();
+            std::thread::spawn(move || root.with_reader(|_| ()).is_ok())
+        };
+        let second = std::thread::spawn(move || root.with_reader(|_| ()).is_ok());
+        let successes = usize::from(first.join().expect("first joins"))
+            + usize::from(second.join().expect("second joins"));
+        assert_eq!(successes, 1);
+        assert_eq!(message.remaining_traversal_words(), 0);
+    }
+
+    #[test]
+    fn borrowed_messages_use_local_exact_budgeting() {
+        let bytes = [0u8; 8];
+        let message = BorrowedMessage::new(
+            &[&bytes],
+            ReaderLimits {
+                traversal_words: 0,
+                nesting_levels: 0,
+            },
+        )
+        .expect("borrowed message validates");
+        assert!(
+            message
+                .read_struct(WireLocation {
+                    segment_id: 0,
+                    word_offset: 0,
+                })
+                .is_ok()
+        );
+        assert_eq!(message.remaining_traversal_words(), 0);
+    }
+
+    #[test]
+    fn owned_list_roots_keep_arc_segments_and_open_typed_views() {
+        let mut bytes = vec![0u8; 16];
+        WirePointer::new_list(0, capnp_wire::ElementSize::FourBytes, 2)
+            .expect("list pointer fits")
+            .write_to(&mut bytes, 0)
+            .expect("list pointer writes");
+        bytes[8..12].copy_from_slice(&11u32.to_le_bytes());
+        bytes[12..16].copy_from_slice(&22u32.to_le_bytes());
+        let segment: Arc<[u8]> = bytes.into();
+        let original_backing = segment.as_ptr();
+        let message = OwnedMessage::new(
+            [Arc::clone(&segment)],
+            ReaderLimits {
+                traversal_words: 1,
+                nesting_levels: 1,
+            },
+        )
+        .expect("owned list message validates");
+        assert_eq!(
+            message.segment(0).expect("segment exists").as_ptr(),
+            original_backing
+        );
+        let typed = message.root_list().expect("root is a list");
+        assert_eq!(
+            typed
+                .root()
+                .with_reader(|reader| {
+                    let values = reader.as_primitive::<u32>()?;
+                    Ok::<_, ListReadError>((values.get(0)?, values.get(1)?))
+                })
+                .expect("list reader opens")
+                .expect("list values read"),
+            (11, 22)
+        );
+    }
+}

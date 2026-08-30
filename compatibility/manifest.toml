@@ -47,7 +47,7 @@ rules_rust = "0.74.0"
 rules_shell = "0.8.0"
 
 [support]
-wire = "M09 typed list readers and legal upgrade semantics over exact traversal limits"
+wire = "M10 borrowed and Arc-owned typed readers with stable coordinate references"
 generated_api = "not-started"
 native_compiler = "not-started"
 rpc_level = "none"
@@ -68,6 +68,15 @@ M06 = "complete"
 M07 = "complete"
 M08 = "complete"
 M09 = "complete"
+M10 = "complete"
+
+[evidence.M10]
+crate = "crates/capnp-message"
+ownership = ["borrowed caller-backed messages", "Arc-owned immutable segments", "typed struct and list roots", "retained struct and list references by checked coordinates", "short-lived callback readers"]
+safety = ["Send and Sync derived from representation", "sealed wire-kind markers", "unchecked ObjectRef construction rejected at compile time", "borrowed data and callback readers cannot escape", "wrong wire kinds rejected before exposure"]
+concurrency = "cloned object references share one exact atomic traversal budget; competing reads cannot overspend"
+copying = "Arc segment inputs and retained subobjects preserve the original backing allocation"
+validation = "Rust 1.98 and 1.85 tests; public API and compile-fail doc tests; Loom shared-budget model; Clippy -D warnings; Bazel 18/18"
 
 [evidence.M09]
 crate = "crates/capnp-message"
