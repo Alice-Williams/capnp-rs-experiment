@@ -27,9 +27,10 @@ The repository is an eleven-crate workspace matching the intended architecture.
 `capnp-wire` implements M03's no_std words, little-endian scalar access, checked
 ranges, and raw pointer bitfields. `capnp-io` implements M04's bounded standard
 unpacked framing over immutable segment descriptors. `capnp-message` implements
-M05's coordinate-only, bounds-checked pointer validation, including single- and
-double-far landing pads. The remaining crates are explicit ownership boundaries
-rather than claimed protocol features.
+M05's coordinate-only, bounds-checked pointer validation and M06's exact local
+and concurrent traversal limits, copied nesting limits, amplification defense,
+and iterative hostile-depth traversal. The remaining crates are explicit
+ownership boundaries rather than claimed protocol features.
 
 ## Development
 

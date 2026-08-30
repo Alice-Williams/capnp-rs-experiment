@@ -47,7 +47,7 @@ rules_rust = "0.74.0"
 rules_shell = "0.8.0"
 
 [support]
-wire = "M05 bounded pointer validation over standard unpacked framing"
+wire = "M06 exact traversal and nesting limits over bounded pointer validation"
 generated_api = "not-started"
 native_compiler = "not-started"
 rpc_level = "none"
@@ -64,6 +64,14 @@ M02 = "complete"
 M03 = "complete"
 M04 = "complete"
 M05 = "complete"
+M06 = "complete"
+
+[evidence.M06]
+crate = "crates/capnp-message"
+coverage = ["complete-or-unchanged local charges", "exact atomic shared charges", "zero-sized-list amplification", "far landing pads", "cycles", "overlaps", "copied nesting", "50,000-level iterative depth"]
+concurrency = "Loom exhaustively models competing charges; eight-thread stress preserves the exact initial balance"
+benchmark = "checked-in local/shared charge comparison; 2026-08-30 Linux container sample: 1.60 ns local, 8.57 ns shared per charge"
+validation = "Rust 1.98 and 1.85 tests; public API doc/compile-fail tests; Clippy -D warnings; Bazel 18/18"
 
 [evidence.M05]
 crate = "crates/capnp-message"

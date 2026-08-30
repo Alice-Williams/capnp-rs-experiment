@@ -1,10 +1,16 @@
 #![doc = "Safe Cap'n Proto messages, readers, builders, and traversal budgets."]
 
+mod budget;
 mod validation;
 
+#[cfg(target_has_atomic = "64")]
+pub use budget::SharedTraversalBudget;
+pub use budget::{
+    BudgetExhausted, LocalTraversalBudget, NestingLimit, NestingLimitExceeded, TraversalBudget,
+};
 pub use validation::{
-    CapabilityRef, ListRef, MessageSegments, ResolvedPointer, StructRef, ValidationError,
-    WireLocation,
+    BoundedPointer, CapabilityRef, ListRef, MessageSegments, ResolvedPointer, StructRef,
+    TraversalError, TraversalStats, ValidationError, WireLocation,
 };
 
 #[cfg(test)]

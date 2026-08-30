@@ -2,6 +2,8 @@ use core::fmt;
 
 use capnp_wire::{ElementSize, PointerKind, WirePointer};
 
+use crate::{BudgetExhausted, NestingLimit, NestingLimitExceeded, TraversalBudget};
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct WireLocation {
     pub segment_id: u32,
@@ -35,6 +37,65 @@ pub enum ResolvedPointer {
     Struct(StructRef),
     List(ListRef),
     Capability(CapabilityRef),
+}
+
+/// A validated target whose traversal charge has already been deducted.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BoundedPointer {
+    pub pointer: ResolvedPointer,
+    pub child_nesting: NestingLimit,
+    pub charged_words: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct TraversalStats {
+    pub pointers_followed: u64,
+    pub words_charged: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TraversalError {
+    Validation(ValidationError),
+    Budget(BudgetExhausted),
+    Nesting(NestingLimitExceeded),
+}
+
+impl fmt::Display for TraversalError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Validation(error) => error.fmt(formatter),
+            Self::Budget(error) => error.fmt(formatter),
+            Self::Nesting(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for TraversalError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Validation(error) => Some(error),
+            Self::Budget(error) => Some(error),
+            Self::Nesting(error) => Some(error),
+        }
+    }
+}
+
+impl From<ValidationError> for TraversalError {
+    fn from(value: ValidationError) -> Self {
+        Self::Validation(value)
+    }
+}
+
+impl From<BudgetExhausted> for TraversalError {
+    fn from(value: BudgetExhausted) -> Self {
+        Self::Budget(value)
+    }
+}
+
+impl From<NestingLimitExceeded> for TraversalError {
+    fn from(value: NestingLimitExceeded) -> Self {
+        Self::Nesting(value)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -143,6 +204,174 @@ impl<'a> MessageSegments<'a> {
                 lower32: pointer.lower32(),
             }),
         }
+    }
+
+    /// Validates one pointer, applies its complete traversal charge, then returns its view.
+    ///
+    /// Struct and list targets consume one copied nesting level. Null and capability
+    /// pointers do not. Far landing pads, physical target words, and zero-sized-list
+    /// amplification are included in the single all-or-nothing charge.
+    pub fn validate_pointer_with_limits<B: TraversalBudget>(
+        &self,
+        location: WireLocation,
+        budget: &B,
+        nesting: NestingLimit,
+    ) -> Result<BoundedPointer, TraversalError> {
+        let wire_pointer = self.read_pointer(location)?;
+        let pointer = self.validate_pointer(location)?;
+        let child_nesting = match pointer {
+            ResolvedPointer::Struct(_) | ResolvedPointer::List(_) => nesting.descend()?,
+            ResolvedPointer::Null | ResolvedPointer::Capability(_) => nesting,
+        };
+        let charged_words = traversal_charge(wire_pointer, pointer)?;
+        budget.try_charge(charged_words)?;
+        Ok(BoundedPointer {
+            pointer,
+            child_nesting,
+            charged_words,
+        })
+    }
+
+    /// Iteratively visits every pointer reachable from `root`.
+    ///
+    /// Range frames keep wide lists and structs from creating one work-list entry
+    /// per sibling. Cycles and overlaps are intentionally revisited and charged;
+    /// they terminate through the traversal or nesting limit rather than a call
+    /// stack or an identity set.
+    pub fn walk_pointer_graph<B: TraversalBudget>(
+        &self,
+        root: WireLocation,
+        budget: &B,
+        nesting: NestingLimit,
+    ) -> Result<TraversalStats, TraversalError> {
+        let mut work = vec![WalkItem::Pointer {
+            location: root,
+            nesting,
+        }];
+        let mut stats = TraversalStats::default();
+
+        while let Some(item) = work.pop() {
+            match item {
+                WalkItem::Pointer { location, nesting } => {
+                    let bounded = self.validate_pointer_with_limits(location, budget, nesting)?;
+                    stats.pointers_followed = stats
+                        .pointers_followed
+                        .checked_add(1)
+                        .ok_or(ValidationError::TargetWordOverflow)?;
+                    stats.words_charged = stats
+                        .words_charged
+                        .checked_add(bounded.charged_words)
+                        .ok_or(ValidationError::TargetWordOverflow)?;
+                    match bounded.pointer {
+                        ResolvedPointer::Struct(value) if value.pointer_count != 0 => {
+                            let first = add_words(value.content, u64::from(value.data_words))?;
+                            work.push(WalkItem::PointerRange {
+                                next: first,
+                                remaining: u32::from(value.pointer_count),
+                                stride_words: 1,
+                                nesting: bounded.child_nesting,
+                            });
+                        }
+                        ResolvedPointer::List(value)
+                            if value.element_size == ElementSize::Pointer
+                                && value.element_count != 0 =>
+                        {
+                            work.push(WalkItem::PointerRange {
+                                next: value.content,
+                                remaining: value.element_count,
+                                stride_words: 1,
+                                nesting: bounded.child_nesting,
+                            });
+                        }
+                        ResolvedPointer::List(value)
+                            if value.element_size == ElementSize::InlineComposite =>
+                        {
+                            if let Some((data_words, pointer_count)) = value.inline_struct_size {
+                                if value.element_count != 0 && pointer_count != 0 {
+                                    let element_nesting = bounded.child_nesting.descend()?;
+                                    work.push(WalkItem::InlinePointers {
+                                        content: value.content,
+                                        element: 0,
+                                        element_count: value.element_count,
+                                        data_words,
+                                        pointer_count,
+                                        pointer_index: 0,
+                                        nesting: element_nesting,
+                                    });
+                                }
+                            }
+                        }
+                        ResolvedPointer::Null
+                        | ResolvedPointer::Struct(_)
+                        | ResolvedPointer::List(_)
+                        | ResolvedPointer::Capability(_) => {}
+                    }
+                }
+                WalkItem::PointerRange {
+                    next,
+                    remaining,
+                    stride_words,
+                    nesting,
+                } => {
+                    if remaining > 1 {
+                        work.push(WalkItem::PointerRange {
+                            next: add_words(next, u64::from(stride_words))?,
+                            remaining: remaining - 1,
+                            stride_words,
+                            nesting,
+                        });
+                    }
+                    work.push(WalkItem::Pointer {
+                        location: next,
+                        nesting,
+                    });
+                }
+                WalkItem::InlinePointers {
+                    content,
+                    element,
+                    element_count,
+                    data_words,
+                    pointer_count,
+                    pointer_index,
+                    nesting,
+                } => {
+                    let words_per_element = u64::from(data_words) + u64::from(pointer_count);
+                    let element_offset = u64::from(element)
+                        .checked_mul(words_per_element)
+                        .ok_or(ValidationError::TargetWordOverflow)?;
+                    let pointer_offset = element_offset
+                        .checked_add(u64::from(data_words))
+                        .and_then(|offset| offset.checked_add(u64::from(pointer_index)))
+                        .ok_or(ValidationError::TargetWordOverflow)?;
+                    let location = add_words(content, pointer_offset)?;
+
+                    let next_pointer = pointer_index + 1;
+                    if next_pointer < pointer_count {
+                        work.push(WalkItem::InlinePointers {
+                            content,
+                            element,
+                            element_count,
+                            data_words,
+                            pointer_count,
+                            pointer_index: next_pointer,
+                            nesting,
+                        });
+                    } else if element + 1 < element_count {
+                        work.push(WalkItem::InlinePointers {
+                            content,
+                            element: element + 1,
+                            element_count,
+                            data_words,
+                            pointer_count,
+                            pointer_index: 0,
+                            nesting,
+                        });
+                    }
+                    work.push(WalkItem::Pointer { location, nesting });
+                }
+            }
+        }
+        Ok(stats)
     }
 
     fn validate_struct(
@@ -336,6 +565,72 @@ impl<'a> MessageSegments<'a> {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+enum WalkItem {
+    Pointer {
+        location: WireLocation,
+        nesting: NestingLimit,
+    },
+    PointerRange {
+        next: WireLocation,
+        remaining: u32,
+        stride_words: u32,
+        nesting: NestingLimit,
+    },
+    InlinePointers {
+        content: WireLocation,
+        element: u32,
+        element_count: u32,
+        data_words: u16,
+        pointer_count: u16,
+        pointer_index: u16,
+        nesting: NestingLimit,
+    },
+}
+
+fn traversal_charge(
+    wire_pointer: WirePointer,
+    resolved: ResolvedPointer,
+) -> Result<u64, ValidationError> {
+    let landing_pad_words = wire_pointer
+        .far_fields()
+        .map_or(0, |fields| if fields.double_far { 2 } else { 1 });
+    let target_words = match resolved {
+        ResolvedPointer::Null | ResolvedPointer::Capability(_) => 0,
+        ResolvedPointer::Struct(value) => {
+            u64::from(value.data_words) + u64::from(value.pointer_count)
+        }
+        ResolvedPointer::List(value) => {
+            let physical = u64::from(value.content_words)
+                + u64::from(value.element_size == ElementSize::InlineComposite);
+            let amplified = if value.element_size == ElementSize::Void
+                || value.inline_struct_size == Some((0, 0))
+            {
+                u64::from(value.element_count)
+            } else {
+                0
+            };
+            physical
+                .checked_add(amplified)
+                .ok_or(ValidationError::TargetWordOverflow)?
+        }
+    };
+    target_words
+        .checked_add(landing_pad_words)
+        .ok_or(ValidationError::TargetWordOverflow)
+}
+
+fn add_words(location: WireLocation, words: u64) -> Result<WireLocation, ValidationError> {
+    let word_offset = u64::from(location.word_offset)
+        .checked_add(words)
+        .and_then(|offset| u32::try_from(offset).ok())
+        .ok_or(ValidationError::TargetWordOverflow)?;
+    Ok(WireLocation {
+        segment_id: location.segment_id,
+        word_offset,
+    })
+}
+
 fn positional_target(
     pointer_location: WireLocation,
     offset: i32,
@@ -390,6 +685,7 @@ fn list_word_count(element_size: ElementSize, count: u32) -> Result<u64, Validat
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{LocalTraversalBudget, TraversalBudget};
 
     fn with_pointer(pointer: WirePointer, trailing_words: usize) -> Vec<u8> {
         let mut bytes = vec![0u8; (trailing_words + 1) * 8];
@@ -654,5 +950,188 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_target_is_charged_completely_before_its_view_is_returned() {
+        let bytes = with_pointer(
+            WirePointer::new_struct(0, 2, 1).expect("struct pointer fits"),
+            3,
+        );
+        let segments = MessageSegments::new(&[&bytes]).expect("segment is aligned");
+        let budget = LocalTraversalBudget::new(2);
+        assert_eq!(
+            segments.validate_pointer_with_limits(
+                WireLocation {
+                    segment_id: 0,
+                    word_offset: 0,
+                },
+                &budget,
+                NestingLimit::new(1),
+            ),
+            Err(TraversalError::Budget(BudgetExhausted {
+                requested_words: 3,
+                remaining_words: 2,
+            }))
+        );
+        assert_eq!(budget.remaining_words(), 2);
+    }
+
+    #[test]
+    fn void_and_zero_sized_struct_lists_pay_amplification_charges() {
+        let void = with_pointer(
+            WirePointer::new_list(0, ElementSize::Void, 20).expect("void list fits"),
+            0,
+        );
+        let segments = MessageSegments::new(&[&void]).expect("segment is aligned");
+        let budget = LocalTraversalBudget::new(19);
+        assert!(matches!(
+            segments.validate_pointer_with_limits(
+                WireLocation {
+                    segment_id: 0,
+                    word_offset: 0,
+                },
+                &budget,
+                NestingLimit::new(1),
+            ),
+            Err(TraversalError::Budget(BudgetExhausted {
+                requested_words: 20,
+                remaining_words: 19,
+            }))
+        ));
+
+        let list = WirePointer::new_list(0, ElementSize::InlineComposite, 0)
+            .expect("inline list pointer fits");
+        let tag = WirePointer::new_inline_composite_tag(20, 0, 0).expect("tag fits");
+        let mut bytes = vec![0u8; 16];
+        list.write_to(&mut bytes, 0).expect("list fits");
+        tag.write_to(&mut bytes, 8).expect("tag fits");
+        let segments = MessageSegments::new(&[&bytes]).expect("segment is aligned");
+        let budget = LocalTraversalBudget::new(21);
+        let bounded = segments
+            .validate_pointer_with_limits(
+                WireLocation {
+                    segment_id: 0,
+                    word_offset: 0,
+                },
+                &budget,
+                NestingLimit::new(1),
+            )
+            .expect("tag plus one word per logical element fits exactly");
+        assert_eq!(bounded.charged_words, 21);
+        assert_eq!(budget.remaining_words(), 0);
+    }
+
+    #[test]
+    fn far_landing_pads_are_part_of_the_charge() {
+        let segment0 = with_pointer(
+            WirePointer::new_far(false, 0, 1).expect("outer far pointer fits"),
+            0,
+        );
+        let segment1 = with_pointer(
+            WirePointer::new_struct(0, 1, 0).expect("landing pointer fits"),
+            1,
+        );
+        let segments = MessageSegments::new(&[&segment0, &segment1]).expect("segments are aligned");
+        let budget = LocalTraversalBudget::new(2);
+        let bounded = segments
+            .validate_pointer_with_limits(
+                WireLocation {
+                    segment_id: 0,
+                    word_offset: 0,
+                },
+                &budget,
+                NestingLimit::new(1),
+            )
+            .expect("landing pad and target both fit");
+        assert_eq!(bounded.charged_words, 2);
+        assert_eq!(budget.remaining_words(), 0);
+    }
+
+    #[test]
+    fn cycles_repeat_charges_until_the_exact_budget_terminates_the_walk() {
+        let bytes = with_pointer(
+            WirePointer::new_struct(-1, 0, 1).expect("self pointer fits"),
+            0,
+        );
+        let segments = MessageSegments::new(&[&bytes]).expect("segment is aligned");
+        let budget = LocalTraversalBudget::new(3);
+        assert_eq!(
+            segments.walk_pointer_graph(
+                WireLocation {
+                    segment_id: 0,
+                    word_offset: 0,
+                },
+                &budget,
+                NestingLimit::new(10),
+            ),
+            Err(TraversalError::Budget(BudgetExhausted {
+                requested_words: 1,
+                remaining_words: 0,
+            }))
+        );
+        assert_eq!(budget.remaining_words(), 0);
+    }
+
+    #[test]
+    fn overlapping_targets_are_charged_for_each_dereference() {
+        let mut bytes = vec![0u8; 32];
+        WirePointer::new_struct(0, 0, 2)
+            .expect("root fits")
+            .write_to(&mut bytes, 0)
+            .expect("root word fits");
+        WirePointer::new_struct(1, 1, 0)
+            .expect("first child fits")
+            .write_to(&mut bytes, 8)
+            .expect("first child word fits");
+        WirePointer::new_struct(0, 1, 0)
+            .expect("second child fits")
+            .write_to(&mut bytes, 16)
+            .expect("second child word fits");
+        let segments = MessageSegments::new(&[&bytes]).expect("segment is aligned");
+        let budget = LocalTraversalBudget::new(4);
+        assert_eq!(
+            segments
+                .walk_pointer_graph(
+                    WireLocation {
+                        segment_id: 0,
+                        word_offset: 0,
+                    },
+                    &budget,
+                    NestingLimit::new(2),
+                )
+                .expect("both aliases fit"),
+            TraversalStats {
+                pointers_followed: 3,
+                words_charged: 4,
+            }
+        );
+        assert_eq!(budget.remaining_words(), 0);
+    }
+
+    #[test]
+    fn malicious_depth_uses_an_iterative_work_list() {
+        const POINTERS: usize = 50_000;
+        let mut bytes = vec![0u8; POINTERS * 8];
+        for index in 0..POINTERS - 1 {
+            WirePointer::new_struct(0, 0, 1)
+                .expect("chain pointer fits")
+                .write_to(&mut bytes, index * 8)
+                .expect("chain word fits");
+        }
+        let segments = MessageSegments::new(&[&bytes]).expect("segment is aligned");
+        let budget = LocalTraversalBudget::new(POINTERS as u64);
+        let stats = segments
+            .walk_pointer_graph(
+                WireLocation {
+                    segment_id: 0,
+                    word_offset: 0,
+                },
+                &budget,
+                NestingLimit::new((POINTERS - 1) as u32),
+            )
+            .expect("iterative traversal reaches the null terminator");
+        assert_eq!(stats.pointers_followed, POINTERS as u64);
+        assert_eq!(stats.words_charged, (POINTERS - 1) as u64);
     }
 }

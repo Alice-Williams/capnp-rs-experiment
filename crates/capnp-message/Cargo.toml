@@ -8,8 +8,12 @@ publish.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+loom-tests = ["dep:loom"]
+
 [lints]
 workspace = true
 
 [dependencies]
 capnp-wire = { path = "../capnp-wire" }
+loom = { version = "0.7.2", optional = true }

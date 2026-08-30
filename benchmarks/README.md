@@ -34,3 +34,16 @@ modified.
 
 Results are baselines, not universal performance claims. Compare revisions on
 the same hardware and container setup.
+
+## Exact traversal-budget microbenchmark
+
+M06 adds a single-thread comparison of complete local and atomic shared budget
+charges. Run it in the development container; an optional argument selects the
+number of charges:
+
+```console
+cargo run --release -p capnp-message --example traversal_budget -- 10000000
+```
+
+This is a guardrail for the accounting design, not a parallel scaling claim.
+Later parallel-read milestones own representative workload and scaling gates.
