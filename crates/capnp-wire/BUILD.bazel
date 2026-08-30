@@ -2,7 +2,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 rust_library(
     name = "capnp_wire",
-    srcs = ["src/lib.rs"],
+    srcs = glob(["src/**/*.rs"]),
     crate_name = "capnp_wire",
     edition = "2024",
     visibility = ["//visibility:public"],
@@ -12,4 +12,3 @@ rust_test(
     name = "capnp_wire_test",
     crate = ":capnp_wire",
 )
-

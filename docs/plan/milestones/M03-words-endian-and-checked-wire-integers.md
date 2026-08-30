@@ -1,6 +1,6 @@
 # M03 — Words, endian, and checked wire integers
 
-- Status: planned
+- Status: in-progress
 - Phase: 1
 - Depends on: M00, M02
 
@@ -23,4 +23,3 @@ Exact scalar and NaN fixtures, signed 30-bit edge tests, pointer-field propertie
 ## Scope boundary
 
 Later milestone behavior may be anticipated in types only where required to avoid a known compatibility dead end. It must not be implemented or claimed here.
-
