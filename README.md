@@ -16,18 +16,28 @@ previous prototype's implementation.
 - Prefer a small, correct subset over broad APIs that only round-trip against
   themselves.
 
-## Initial scope
+## Plan and current scope
 
-The crate currently defines only the wire word size and a smoke test. The first
-implementation milestone is message framing and bounded segment-table parsing,
-validated against bytes produced by the reference implementation. Pointer and
-layout support comes next; schema/code generation and RPC remain out of scope
-until the wire layer is demonstrably compatible.
+The original engineering dossier has been decomposed into 49 dependency-ordered
+milestones under [`docs/plan`](docs/plan/README.md). M00 is establishing the
+project charter, pinned compatibility oracles, Cargo/Bazel workspace, support
+matrix, and CI. Safety/concurrency ADRs follow before wire primitives begin.
+
+The repository is now an eleven-crate workspace matching the intended
+architecture. Only `capnp-wire` preserves the initial word-size smoke test;
+the other crates are explicit ownership boundaries, not implemented features.
 
 ## Development
 
+On non-Linux hosts, run commands in the repository's Dev Container:
+
 ```console
-cargo test
+cargo test --workspace --all-targets
+bazel test //...
 ```
+
+The project intentionally supports both build systems: Cargo is the native
+Rust package/MSRV interface, while Bazel is the pinned Linux orchestration and
+conformance environment.
 
 This is experimental software and is not yet suitable for production use.

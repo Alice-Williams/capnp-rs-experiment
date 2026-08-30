@@ -1,0 +1,55 @@
+manifest_version = 1
+updated = "2026-08-30"
+
+[upstream.capnproto]
+role = "primary product and protocol oracle"
+commit = "e7c9cd96f1505b5ae486db7821006c2f5dce5b5b"
+
+[[upstream.capnproto.schemas]]
+name = "schema.capnp"
+url = "https://raw.githubusercontent.com/capnproto/capnproto/e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/c%2B%2B/src/capnp/schema.capnp"
+sha256 = "3557ff301cec23ef90f59ba2265a741f8fe59ba63bf0e5d12b1619cfc8d74c8d"
+
+[[upstream.capnproto.schemas]]
+name = "rpc.capnp"
+url = "https://raw.githubusercontent.com/capnproto/capnproto/e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/c%2B%2B/src/capnp/rpc.capnp"
+sha256 = "2ecc3049d4f7f2d48a3a368dbb9ef4b97b31c1365996d615bd19c267983a1931"
+
+[[upstream.capnproto.schemas]]
+name = "rpc-twoparty.capnp"
+url = "https://raw.githubusercontent.com/capnproto/capnproto/e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/c%2B%2B/src/capnp/rpc-twoparty.capnp"
+sha256 = "22680f70c56e3c44dc73b52bf8dfd2838a5ea44249be01609be2d362d308b518"
+
+[[upstream.capnproto.schemas]]
+name = "persistent.capnp"
+url = "https://raw.githubusercontent.com/capnproto/capnproto/e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/c%2B%2B/src/capnp/persistent.capnp"
+sha256 = "d77d4d2e2c1e9c42ded13de54ed11b535b076ac210945b53ecf76fd7648a867a"
+
+[upstream.capnproto_rust]
+role = "secondary regression and Rust ergonomics oracle"
+commit = "2228b71e55cee819c30450bb9bfd9c1f6a722429"
+
+[toolchain]
+msrv = "1.85.0"
+development_rust = "1.98.0"
+rust_edition = "2024"
+bazel = "9.2.0"
+bazelisk = "1.29.0"
+rules_rust = "0.74.0"
+
+[support]
+wire = "not-started"
+generated_api = "not-started"
+native_compiler = "not-started"
+rpc_level = "none"
+parallel_read = "not-started"
+parallel_build = "not-started"
+std = "workspace-skeleton"
+no_std_alloc = "planned"
+no_allocation = "planned"
+
+[parallel_gates]
+four_core_shared_read_ratio = 3.0
+four_core_rpc_handler_ratio = 3.0
+four_core_partitioned_build_ratio = 2.5
+maximum_unexplained_single_thread_regression_percent = 5.0

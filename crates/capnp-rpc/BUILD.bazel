@@ -1,0 +1,19 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "capnp_rpc",
+    srcs = ["src/lib.rs"],
+    crate_name = "capnp_rpc",
+    edition = "2024",
+    deps = [
+        "//crates/capnp-async:capnp_async",
+        "//crates/capnp-rpc-core:capnp_rpc_core",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+rust_test(
+    name = "capnp_rpc_test",
+    crate = ":capnp_rpc",
+)
+

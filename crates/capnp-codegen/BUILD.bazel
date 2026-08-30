@@ -1,0 +1,18 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "capnp_codegen",
+    srcs = ["src/lib.rs"],
+    crate_name = "capnp_codegen",
+    edition = "2024",
+    deps = [
+        "//crates/capnp-schema:capnp_schema",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+rust_test(
+    name = "capnp_codegen_test",
+    crate = ":capnp_codegen",
+)
+

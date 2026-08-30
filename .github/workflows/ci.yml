@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  conformance-foundation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify pinned upstream schemas
+        run: bash tools/verify-upstream-pins.sh
+
+      - name: Test Cargo workspace with development Rust
+        run: cargo test --workspace --all-targets
+
+      - name: Test Cargo workspace at MSRV
+        run: |
+          rustup toolchain install 1.85.0 --profile minimal
+          cargo +1.85.0 test --workspace --all-targets
+
+      - name: Install pinned Bazelisk
+        env:
+          BAZELISK_VERSION: 1.29.0
+          BAZELISK_SHA256: 5a408715e932c0250d28bd84555f12edbf70117de42f9181691c736eacc4a992
+        run: |
+          curl --fail --silent --show-error --location \
+            --output /tmp/bazelisk \
+            "https://github.com/bazelbuild/bazelisk/releases/download/v${BAZELISK_VERSION}/bazelisk-linux-amd64"
+          echo "${BAZELISK_SHA256}  /tmp/bazelisk" | sha256sum --check
+          sudo install -m 0755 /tmp/bazelisk /usr/local/bin/bazel
+
+      - name: Test Bazel workspace
+        run: bazel test //...

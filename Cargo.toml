@@ -1,12 +1,18 @@
-[package]
-name = "capnp-rs-experiment"
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 publish = false
-description = "A conformance-first, Rust-native Cap'n Proto experiment"
+repository = "https://github.com/Alice-Williams/capnp-rs-experiment"
 
-[dependencies]
-
-[lints.rust]
+[workspace.lints.rust]
 unsafe_code = "forbid"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+panic = "warn"
+unwrap_used = "warn"

@@ -1,0 +1,12 @@
+module(
+    name = "capnp_rs_experiment",
+    version = "0.1.0",
+)
+
+bazel_dep(name = "rules_rust", version = "0.74.0")
+
+rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
+rust.toolchain(
+    edition = "2024",
+    versions = ["1.98.0"],
+)

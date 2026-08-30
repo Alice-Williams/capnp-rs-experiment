@@ -1,0 +1,16 @@
+[package]
+name = "capnp-async"
+description = "Executor-neutral asynchronous framing and bounded queues"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+capnp-message = { path = "../capnp-message" }
+capnp-io = { path = "../capnp-io" }
+

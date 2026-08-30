@@ -3,5 +3,81 @@
 version = 4
 
 [[package]]
-name = "capnp-rs-experiment"
+name = "capnp-async"
+version = "0.1.0"
+dependencies = [
+ "capnp-io",
+ "capnp-message",
+]
+
+[[package]]
+name = "capnp-cli"
+version = "0.1.0"
+dependencies = [
+ "capnp-compiler",
+ "capnp-io",
+]
+
+[[package]]
+name = "capnp-codegen"
+version = "0.1.0"
+dependencies = [
+ "capnp-schema",
+]
+
+[[package]]
+name = "capnp-compat"
+version = "0.1.0"
+dependencies = [
+ "capnp-message",
+ "capnp-schema",
+]
+
+[[package]]
+name = "capnp-compiler"
+version = "0.1.0"
+dependencies = [
+ "capnp-schema",
+]
+
+[[package]]
+name = "capnp-io"
+version = "0.1.0"
+dependencies = [
+ "capnp-message",
+ "capnp-wire",
+]
+
+[[package]]
+name = "capnp-message"
+version = "0.1.0"
+dependencies = [
+ "capnp-wire",
+]
+
+[[package]]
+name = "capnp-rpc"
+version = "0.1.0"
+dependencies = [
+ "capnp-async",
+ "capnp-rpc-core",
+]
+
+[[package]]
+name = "capnp-rpc-core"
+version = "0.1.0"
+dependencies = [
+ "capnp-message",
+ "capnp-schema",
+]
+
+[[package]]
+name = "capnp-schema"
+version = "0.1.0"
+dependencies = [
+ "capnp-message",
+]
+
+[[package]]
+name = "capnp-wire"
 version = "0.1.0"
