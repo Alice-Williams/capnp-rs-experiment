@@ -1,6 +1,6 @@
 # M04 — Segment tables and standard framing
 
-- Status: planned
+- Status: in-progress
 - Phase: 1
 - Depends on: M03
 
@@ -23,4 +23,3 @@ Clean EOF differs from truncation; limits/overflow/padding/short bodies fail saf
 ## Scope boundary
 
 Later milestone behavior may be anticipated in types only where required to avoid a known compatibility dead end. It must not be implemented or claimed here.
-
