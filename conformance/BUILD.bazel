@@ -4,6 +4,7 @@ filegroup(
     name = "cpp_wire_frames",
     srcs = [
         "fixtures/cpp/e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/wire-multisegment.bin",
+        "fixtures/cpp/e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/wire-packed.bin",
         "fixtures/cpp/e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/wire-two-segment.bin",
         "fixtures/cpp/e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/wire-unpacked.bin",
     ],

@@ -57,6 +57,7 @@ std = "workspace-skeleton"
 no_std_alloc = "planned"
 no_allocation = "planned"
 construction = "M14 bounded schema-independent canonicalization and exact canonical checking"
+packed = "M15 bounded incremental encoder and decoder with pinned C++ byte parity"
 
 [milestones]
 M00 = "complete"
@@ -74,6 +75,16 @@ M11 = "complete"
 M12 = "complete"
 M13 = "complete"
 M14 = "complete"
+M15 = "complete"
+
+[evidence.M15]
+crate = "crates/capnp-io"
+oracle_fixtures = ["wire-unpacked.bin", "wire-packed.bin"]
+oracle_check = "tools/verify-m15-packed.sh: native output is byte-identical to pinned C++; C++ decodes native and native decodes C++"
+streaming = ["arbitrary encoder byte chunks", "arbitrary decoder byte chunks", "partial words retained until finish", "zero and raw runs capped at 255 words"]
+limits = ["checked output bound before every extension", "unaligned encoder input rejected", "truncated tag payloads and run bodies rejected", "failed streams become terminal"]
+properties = ["all pinned C++ simple vectors", "every chunk size across the 800-byte oracle frame", "400 deterministic randomized round trips", "512 arbitrary packed inputs terminate within bounds"]
+validation = "Rust 1.98 and 1.85 tests; public API docs; live pinned C++ interoperability; Clippy -D warnings; Bazel 18/18"
 
 [evidence.M14]
 crate = "crates/capnp-message"
