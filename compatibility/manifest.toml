@@ -36,6 +36,7 @@ rust_edition = "2024"
 bazel = "9.2.0"
 bazelisk = "1.29.0"
 rules_rust = "0.74.0"
+rules_shell = "0.8.0"
 
 [support]
 wire = "not-started"
@@ -50,7 +51,7 @@ no_allocation = "planned"
 
 [milestones]
 M00 = "in-progress"
-M01 = "planned"
+M01 = "in-progress"
 M02 = "complete"
 
 [parallel_gates]

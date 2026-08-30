@@ -1,0 +1,20 @@
+producer = "capnproto/capnproto"
+commit = "e7c9cd96f1505b5ae486db7821006c2f5dce5b5b"
+retrieved = "2026-08-30"
+method = "tools/fetch-upstream-schemas.sh"
+
+[[files]]
+path = "schema.capnp"
+sha256 = "3557ff301cec23ef90f59ba2265a741f8fe59ba63bf0e5d12b1619cfc8d74c8d"
+
+[[files]]
+path = "rpc.capnp"
+sha256 = "2ecc3049d4f7f2d48a3a368dbb9ef4b97b31c1365996d615bd19c267983a1931"
+
+[[files]]
+path = "rpc-twoparty.capnp"
+sha256 = "22680f70c56e3c44dc73b52bf8dfd2838a5ea44249be01609be2d362d308b518"
+
+[[files]]
+path = "persistent.capnp"
+sha256 = "d77d4d2e2c1e9c42ded13de54ed11b535b076ac210945b53ecf76fd7648a867a"

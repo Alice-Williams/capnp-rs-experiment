@@ -14,7 +14,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Verify pinned upstream schemas
-        run: bash tools/verify-upstream-pins.sh
+        run: |
+          bash tools/verify-upstream-pins.sh
+          bash conformance/verify-upstream-schema-files.sh
 
       - name: Test Cargo workspace with development Rust
         run: cargo test --workspace --all-targets

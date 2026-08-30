@@ -1,0 +1,12 @@
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+sh_test(
+    name = "upstream_schema_hashes_test",
+    srcs = ["verify-upstream-schema-files.sh"],
+    data = [
+        "upstream/capnproto/e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/persistent.capnp",
+        "upstream/capnproto/e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/rpc-twoparty.capnp",
+        "upstream/capnproto/e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/rpc.capnp",
+        "upstream/capnproto/e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/schema.capnp",
+    ],
+)
