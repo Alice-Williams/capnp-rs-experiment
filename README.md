@@ -30,8 +30,10 @@ unpacked framing over immutable segment descriptors. `capnp-message` implements
 M05's coordinate-only, bounds-checked pointer validation and M06's exact local
 and concurrent traversal limits, copied nesting limits, amplification defense,
 and iterative hostile-depth traversal. M07 adds default-aware primitive and
-enum reads plus charged, zero-copy Text and Data views. The remaining crates
-are explicit ownership boundaries rather than claimed protocol features.
+enum reads plus charged, zero-copy Text and Data views. M08 adds coordinate-
+based struct/group readers, union-tag preservation, short-section evolution,
+and limited pointer defaults. The remaining crates are explicit ownership
+boundaries rather than claimed protocol features.
 
 ## Development
 

@@ -11,10 +11,14 @@ language_schema = "conformance/schemas/language-fixture.capnp"
 language_schema_sha256 = "f2514581e686efdf18a4bf33305f48531cbcdf70541a89750c282c79955968a5"
 language_input = "conformance/fixtures/source/language-fixture.txt"
 language_input_sha256 = "e98ea1269a0b0204d57b24f2b94956132c3aa0567c477a3ef802c43aace0fd15"
-evolution_schema = "conformance/schemas/evolution-v1.capnp"
-evolution_schema_sha256 = "52e2aef150349e65e3cb53bc78a73f437656b5322bffcdb3cc5f223ec2c5fa3b"
-evolution_input = "conformance/fixtures/source/evolution-v1.txt"
-evolution_input_sha256 = "f028bc19fcd6e6268a8593c747a6229ab2bbab94b660e74fc5425468f7eca20d"
+evolution_v1_schema = "conformance/schemas/evolution-v1.capnp"
+evolution_v1_schema_sha256 = "52e2aef150349e65e3cb53bc78a73f437656b5322bffcdb3cc5f223ec2c5fa3b"
+evolution_v1_input = "conformance/fixtures/source/evolution-v1.txt"
+evolution_v1_input_sha256 = "f028bc19fcd6e6268a8593c747a6229ab2bbab94b660e74fc5425468f7eca20d"
+evolution_v2_schema = "conformance/schemas/evolution-v2.capnp"
+evolution_v2_schema_sha256 = "491d63466427cff4289234eae0dae073c3f4c1efdc7a476d77246aef22a80c12"
+evolution_v2_input = "conformance/fixtures/source/evolution-v2.txt"
+evolution_v2_input_sha256 = "ee816dbbff2f9269ba9cba426f9d4660971e0879a945eaa4fe3d96a81b1911f6"
 
 commands = [
   "capnp encode wire-fixture.capnp WireFixture",
@@ -24,6 +28,7 @@ commands = [
   "capnp encode --segment-size=1 wire-fixture.capnp WireFixture",
   "capnp encode language-fixture.capnp LanguageFixture",
   "capnp encode evolution-v1.capnp Record",
+  "capnp encode evolution-v2.capnp Record",
   "capnp compile --src-prefix=conformance/schemas -Iconformance/schemas -o- <schema>",
 ]
 
@@ -93,6 +98,10 @@ sha256 = "710d0f3b8fa044bc1e84e6ec2b96c237ad872bbeee097db2cdd45f0b9a5bea6b"
 [[output]]
 path = "evolution-v1-unpacked.bin"
 sha256 = "92c3692013def957bca1f54299b6d0f56089d3c310588707384f3c2a1ffa71c7"
+
+[[output]]
+path = "evolution-v2-unpacked.bin"
+sha256 = "7558e6643ac71ee8a883da2d6aab3ab5c6d0b45d0899b4c10ddf1f528a892588"
 
 [[output]]
 path = "language-unpacked.bin"

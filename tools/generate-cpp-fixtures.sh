@@ -38,8 +38,10 @@ wire_schema=conformance/schemas/wire-fixture.capnp
 wire_input=conformance/fixtures/source/wire-fixture.txt
 language_schema=conformance/schemas/language-fixture.capnp
 language_input=conformance/fixtures/source/language-fixture.txt
-evolution_schema=conformance/schemas/evolution-v1.capnp
-evolution_input=conformance/fixtures/source/evolution-v1.txt
+evolution_v1_schema=conformance/schemas/evolution-v1.capnp
+evolution_v1_input=conformance/fixtures/source/evolution-v1.txt
+evolution_v2_schema=conformance/schemas/evolution-v2.capnp
+evolution_v2_input=conformance/fixtures/source/evolution-v2.txt
 
 "$oracle" encode "$wire_schema" WireFixture \
     < "$wire_input" > "$staging/wire-unpacked.bin"
@@ -53,8 +55,10 @@ evolution_input=conformance/fixtures/source/evolution-v1.txt
     < "$wire_input" > "$staging/wire-multisegment.bin"
 "$oracle" encode "$language_schema" LanguageFixture \
     < "$language_input" > "$staging/language-unpacked.bin"
-"$oracle" encode "$evolution_schema" Record \
-    < "$evolution_input" > "$staging/evolution-v1-unpacked.bin"
+"$oracle" encode "$evolution_v1_schema" Record \
+    < "$evolution_v1_input" > "$staging/evolution-v1-unpacked.bin"
+"$oracle" encode "$evolution_v2_schema" Record \
+    < "$evolution_v2_input" > "$staging/evolution-v2-unpacked.bin"
 
 schemas=(
     conformance/schemas/evolution-v1.capnp
@@ -78,8 +82,10 @@ schema_sha=$(sha256sum "$wire_schema" | cut -d ' ' -f 1)
 input_sha=$(sha256sum "$wire_input" | cut -d ' ' -f 1)
 language_schema_sha=$(sha256sum "$language_schema" | cut -d ' ' -f 1)
 language_input_sha=$(sha256sum "$language_input" | cut -d ' ' -f 1)
-evolution_schema_sha=$(sha256sum "$evolution_schema" | cut -d ' ' -f 1)
-evolution_input_sha=$(sha256sum "$evolution_input" | cut -d ' ' -f 1)
+evolution_v1_schema_sha=$(sha256sum "$evolution_v1_schema" | cut -d ' ' -f 1)
+evolution_v1_input_sha=$(sha256sum "$evolution_v1_input" | cut -d ' ' -f 1)
+evolution_v2_schema_sha=$(sha256sum "$evolution_v2_schema" | cut -d ' ' -f 1)
+evolution_v2_input_sha=$(sha256sum "$evolution_v2_input" | cut -d ' ' -f 1)
 
 (
     cd "$staging"
@@ -101,10 +107,14 @@ evolution_input_sha=$(sha256sum "$evolution_input" | cut -d ' ' -f 1)
     printf 'language_schema_sha256 = "%s"\n' "$language_schema_sha"
     printf 'language_input = "%s"\n' "$language_input"
     printf 'language_input_sha256 = "%s"\n' "$language_input_sha"
-    printf 'evolution_schema = "%s"\n' "$evolution_schema"
-    printf 'evolution_schema_sha256 = "%s"\n' "$evolution_schema_sha"
-    printf 'evolution_input = "%s"\n' "$evolution_input"
-    printf 'evolution_input_sha256 = "%s"\n' "$evolution_input_sha"
+    printf 'evolution_v1_schema = "%s"\n' "$evolution_v1_schema"
+    printf 'evolution_v1_schema_sha256 = "%s"\n' "$evolution_v1_schema_sha"
+    printf 'evolution_v1_input = "%s"\n' "$evolution_v1_input"
+    printf 'evolution_v1_input_sha256 = "%s"\n' "$evolution_v1_input_sha"
+    printf 'evolution_v2_schema = "%s"\n' "$evolution_v2_schema"
+    printf 'evolution_v2_schema_sha256 = "%s"\n' "$evolution_v2_schema_sha"
+    printf 'evolution_v2_input = "%s"\n' "$evolution_v2_input"
+    printf 'evolution_v2_input_sha256 = "%s"\n' "$evolution_v2_input_sha"
     printf '\ncommands = [\n'
     printf '  "capnp encode wire-fixture.capnp WireFixture",\n'
     printf '  "capnp encode --packed wire-fixture.capnp WireFixture",\n'
@@ -113,6 +123,7 @@ evolution_input_sha=$(sha256sum "$evolution_input" | cut -d ' ' -f 1)
     printf '  "capnp encode --segment-size=1 wire-fixture.capnp WireFixture",\n'
     printf '  "capnp encode language-fixture.capnp LanguageFixture",\n'
     printf '  "capnp encode evolution-v1.capnp Record",\n'
+    printf '  "capnp encode evolution-v2.capnp Record",\n'
     printf '  "capnp compile --src-prefix=conformance/schemas -Iconformance/schemas -o- <schema>",\n'
     printf ']\n'
     for schema in "${schemas[@]}"; do

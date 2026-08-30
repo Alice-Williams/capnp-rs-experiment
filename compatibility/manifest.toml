@@ -47,7 +47,7 @@ rules_rust = "0.74.0"
 rules_shell = "0.8.0"
 
 [support]
-wire = "M07 default-aware primitive, enum, Text, and Data readers over exact traversal limits"
+wire = "M08 coordinate struct/group readers and evolution semantics over exact traversal limits"
 generated_api = "not-started"
 native_compiler = "not-started"
 rpc_level = "none"
@@ -66,6 +66,14 @@ M04 = "complete"
 M05 = "complete"
 M06 = "complete"
 M07 = "complete"
+M08 = "complete"
+
+[evidence.M08]
+crate = "crates/capnp-message"
+oracle_fixtures = ["evolution-v1-unpacked.bin", "evolution-v2-unpacked.bin"]
+cross_read = "pinned C++ v2 decodes v1 with absent defaults; pinned C++ v1 decodes v2 while preserving unknown enum ordinal 2"
+coverage = ["data and pointer sections", "short-section defaults", "old/new cross-read both directions", "groups share storage", "known and unknown union tags", "nested structs", "pointer defaults charged under traversal and nesting limits"]
+validation = "Rust 1.98 and 1.85 tests; public API doc tests; Clippy -D warnings; C++ fixture hashes; Bazel 18/18"
 
 [evidence.M07]
 crate = "crates/capnp-message"

@@ -16,5 +16,6 @@ rust_test(
     crate = ":capnp_message",
     compile_data = [
         "//conformance:cpp_wire_frames",
+        "//conformance:evolution_wire_frames",
     ],
 )

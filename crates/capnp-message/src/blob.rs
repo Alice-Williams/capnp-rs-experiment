@@ -51,6 +51,10 @@ impl From<TraversalError> for BlobError {
 pub struct DataReader<'a>(&'a [u8]);
 
 impl<'a> DataReader<'a> {
+    pub const fn empty() -> Self {
+        Self(&[])
+    }
+
     pub const fn as_bytes(self) -> &'a [u8] {
         self.0
     }
@@ -76,6 +80,10 @@ pub struct TextReader<'a> {
 }
 
 impl<'a> TextReader<'a> {
+    pub const fn empty() -> Self {
+        Self { with_nul: b"\0" }
+    }
+
     /// Creates a borrowed Text view after checking the mandatory terminator.
     ///
     /// ```
@@ -135,7 +143,7 @@ impl<'a> MessageSegments<'a> {
     ) -> Result<DataReader<'a>, BlobError> {
         match self.byte_list(location, budget, nesting)? {
             Some(bytes) => Ok(DataReader(bytes)),
-            None => Ok(DataReader(&[])),
+            None => Ok(DataReader::empty()),
         }
     }
 
@@ -148,7 +156,7 @@ impl<'a> MessageSegments<'a> {
     ) -> Result<TextReader<'a>, BlobError> {
         match self.byte_list(location, budget, nesting)? {
             Some(bytes) => TextReader::from_bytes_with_nul(bytes),
-            None => TextReader::from_bytes_with_nul(b"\0"),
+            None => Ok(TextReader::empty()),
         }
     }
 

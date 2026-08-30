@@ -48,7 +48,7 @@ wire safety or protocol ordering.
 - [M05 — Pointer validation](milestones/M05-pointer-validation.md) — complete
 - [M06 — Exact traversal and nesting limits](milestones/M06-exact-traversal-and-nesting-limits.md) — complete
 - [M07 — Primitive, enum, text, and data readers](milestones/M07-primitive-enum-text-and-data-readers.md) — complete
-- [M08 — Struct readers and evolution semantics](milestones/M08-struct-readers-and-evolution-semantics.md)
+- [M08 — Struct readers and evolution semantics](milestones/M08-struct-readers-and-evolution-semantics.md) — complete
 - [M09 — List readers and upgrade semantics](milestones/M09-list-readers-and-upgrade-semantics.md)
 - [M10 — Owned shared messages and stable object references](milestones/M10-owned-shared-messages-and-stable-object-references.md)
 

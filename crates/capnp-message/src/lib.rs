@@ -3,10 +3,13 @@
 mod blob;
 mod budget;
 mod primitive;
+mod structure;
 mod validation;
 
 #[cfg(test)]
 mod m07_oracle_tests;
+#[cfg(test)]
+mod m08_evolution_tests;
 
 pub use blob::{BlobError, DataReader, TextReader};
 #[cfg(target_has_atomic = "64")]
@@ -15,6 +18,10 @@ pub use budget::{
     BudgetExhausted, LocalTraversalBudget, NestingLimit, NestingLimitExceeded, TraversalBudget,
 };
 pub use primitive::{DataSection, EnumValue, PrimitiveError, PrimitiveType, PrimitiveValue};
+pub use structure::{
+    PointerDefault, ResolvedPointerField, StructReadError, StructReader, UnionDiscriminant,
+    UnionValue,
+};
 pub use validation::{
     BoundedPointer, CapabilityRef, ListRef, MessageSegments, ResolvedPointer, StructRef,
     TraversalError, TraversalStats, ValidationError, WireLocation,

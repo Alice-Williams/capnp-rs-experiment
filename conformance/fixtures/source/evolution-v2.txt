@@ -1,0 +1,12 @@
+(
+  id = 17,
+  name = "written with evolution-v2",
+  state = paused,
+  values = [
+    (value = 7, label = "seven"),
+    (value = 42, label = "forty-two")
+  ],
+  email = "v2@example.test",
+  contact = (phone = "+44 20 7946 0000"),
+  audit = (created = 123456789, updated = 987654321)
+)

@@ -19,6 +19,7 @@ expected_files=(
     compiler-request-streaming-fixture.bin
     compiler-request-wire-fixture.bin
     evolution-v1-unpacked.bin
+    evolution-v2-unpacked.bin
     language-unpacked.bin
     wire-flat.bin
     wire-multisegment.bin
@@ -41,5 +42,6 @@ printf '%s  %s\n' f2514581e686efdf18a4bf33305f48531cbcdf70541a89750c282c79955968
 printf '%s  %s\n' 60fd1f08e21660d58652a62d846995a1b330514595f588142563525abf5da8e4 conformance/schemas/streaming-fixture.capnp | sha256sum --check
 printf '%s  %s\n' 90033dafffbf663a85c6091c89964078553b023bb023b16bef8917f17a3a57c9 conformance/schemas/wire-fixture.capnp | sha256sum --check
 printf '%s  %s\n' f028bc19fcd6e6268a8593c747a6229ab2bbab94b660e74fc5425468f7eca20d conformance/fixtures/source/evolution-v1.txt | sha256sum --check
+printf '%s  %s\n' ee816dbbff2f9269ba9cba426f9d4660971e0879a945eaa4fe3d96a81b1911f6 conformance/fixtures/source/evolution-v2.txt | sha256sum --check
 printf '%s  %s\n' e98ea1269a0b0204d57b24f2b94956132c3aa0567c477a3ef802c43aace0fd15 conformance/fixtures/source/language-fixture.txt | sha256sum --check
 printf '%s  %s\n' 216d5390813d8bf13838460cd81161bbb72b91c16c8bf85458fb835537c6f4fc conformance/fixtures/source/wire-fixture.txt | sha256sum --check
