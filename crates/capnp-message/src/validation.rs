@@ -470,6 +470,41 @@ mod tests {
     }
 
     #[test]
+    fn valid_inline_composite_and_reserved_other_are_distinguished() {
+        let list =
+            WirePointer::new_list(0, ElementSize::InlineComposite, 4).expect("list pointer fits");
+        let tag = WirePointer::new_inline_composite_tag(2, 1, 1).expect("tag fits");
+        let mut bytes = vec![0u8; 48];
+        list.write_to(&mut bytes, 0).expect("list fits");
+        tag.write_to(&mut bytes, 8).expect("tag fits");
+        let segments = MessageSegments::new(&[&bytes]).expect("segment is aligned");
+        assert!(matches!(
+            segments.validate_pointer(WireLocation {
+                segment_id: 0,
+                word_offset: 0,
+            }),
+            Ok(ResolvedPointer::List(ListRef {
+                element_size: ElementSize::InlineComposite,
+                element_count: 2,
+                content_words: 4,
+                inline_struct_size: Some((1, 1)),
+                ..
+            }))
+        ));
+
+        let reserved = WirePointer::from_le_bytes([7, 0, 0, 0, 0, 0, 0, 0]);
+        let bytes = with_pointer(reserved, 0);
+        let segments = MessageSegments::new(&[&bytes]).expect("segment is aligned");
+        assert_eq!(
+            segments.validate_pointer(WireLocation {
+                segment_id: 0,
+                word_offset: 0,
+            }),
+            Err(ValidationError::ReservedPointer { lower32: 7 })
+        );
+    }
+
+    #[test]
     fn single_far_pointer_resolves_relative_to_its_landing_pad() {
         let segment0 = with_pointer(
             WirePointer::new_far(false, 0, 1).expect("outer far pointer fits"),
@@ -577,6 +612,45 @@ mod tests {
                     ResolvedPointer::Struct(value) => assert!(value.content.word_offset <= 1),
                     ResolvedPointer::List(value) => assert!(value.content.word_offset <= 1),
                     ResolvedPointer::Null | ResolvedPointer::Capability(_) => {}
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn randomized_multisegment_words_never_return_out_of_bounds_coordinates() {
+        let mut state = 0x0ddc_0ffe_e15e_beefu64;
+        for _ in 0..10_000 {
+            let mut first = [0u8; 32];
+            let mut second = [0u8; 32];
+            for chunk in first.chunks_exact_mut(8).chain(second.chunks_exact_mut(8)) {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                chunk.copy_from_slice(&state.to_le_bytes());
+            }
+            let segments = MessageSegments::new(&[&first, &second]).expect("segments are aligned");
+            for segment_id in 0..2 {
+                if let Ok(resolved) = segments.validate_pointer(WireLocation {
+                    segment_id,
+                    word_offset: 0,
+                }) {
+                    match resolved {
+                        ResolvedPointer::Struct(value) => {
+                            let end = u64::from(value.content.word_offset)
+                                + u64::from(value.data_words)
+                                + u64::from(value.pointer_count);
+                            assert!(value.content.segment_id < 2);
+                            assert!(end <= 4);
+                        }
+                        ResolvedPointer::List(value) => {
+                            let end = u64::from(value.content.word_offset)
+                                + u64::from(value.content_words);
+                            assert!(value.content.segment_id < 2);
+                            assert!(end <= 4);
+                        }
+                        ResolvedPointer::Null | ResolvedPointer::Capability(_) => {}
+                    }
                 }
             }
         }
