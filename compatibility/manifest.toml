@@ -47,7 +47,7 @@ rules_rust = "0.74.0"
 rules_shell = "0.8.0"
 
 [support]
-wire = "M04 standard unpacked framing over M03 wire primitives"
+wire = "M05 bounded pointer validation over standard unpacked framing"
 generated_api = "not-started"
 native_compiler = "not-started"
 rpc_level = "none"
@@ -63,7 +63,12 @@ M01 = "complete"
 M02 = "complete"
 M03 = "complete"
 M04 = "complete"
-M05 = "in-progress"
+M05 = "complete"
+
+[evidence.M05]
+crate = "crates/capnp-message"
+coverage = ["null", "struct", "all list sizes", "inline composite", "single far", "double far", "capability", "reserved", "malformed randomized words"]
+validation = "Rust 1.98 and 1.85 tests; Clippy -D warnings; Bazel 18/18"
 
 [evidence.M04]
 crate = "crates/capnp-io"
