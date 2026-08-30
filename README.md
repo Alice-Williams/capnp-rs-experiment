@@ -23,9 +23,10 @@ milestones under [`docs/plan`](docs/plan/README.md). The Phase 0 foundation,
 oracle corpus, benchmark harnesses, and safety/concurrency ADRs are complete.
 Implementation now proceeds through the conformance-first wire milestones.
 
-The repository is now an eleven-crate workspace matching the intended
-architecture. Only `capnp-wire` preserves the initial word-size smoke test;
-the other crates are explicit ownership boundaries, not implemented features.
+The repository is an eleven-crate workspace matching the intended architecture.
+`capnp-wire` now implements M03's no_std words, little-endian scalar access,
+checked ranges, and raw pointer bitfields. The other crates remain explicit
+ownership boundaries rather than claimed protocol features.
 
 ## Development
 

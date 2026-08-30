@@ -43,7 +43,7 @@ wire safety or protocol ordering.
 
 ### Phase 1 — Wire primitives and safe messages
 
-- [M03 — Words, endian, and checked wire integers](milestones/M03-words-endian-and-checked-wire-integers.md)
+- [M03 — Words, endian, and checked wire integers](milestones/M03-words-endian-and-checked-wire-integers.md) — complete
 - [M04 — Segment tables and standard framing](milestones/M04-segment-tables-and-standard-framing.md)
 - [M05 — Pointer validation](milestones/M05-pointer-validation.md)
 - [M06 — Exact traversal and nesting limits](milestones/M06-exact-traversal-and-nesting-limits.md)

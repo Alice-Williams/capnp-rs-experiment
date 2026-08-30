@@ -47,7 +47,7 @@ rules_rust = "0.74.0"
 rules_shell = "0.8.0"
 
 [support]
-wire = "not-started"
+wire = "M03 words, endian scalars, checked ranges, and raw pointer bitfields"
 generated_api = "not-started"
 native_compiler = "not-started"
 rpc_level = "none"
@@ -61,7 +61,13 @@ no_allocation = "planned"
 M00 = "complete"
 M01 = "complete"
 M02 = "complete"
-M03 = "in-progress"
+M03 = "complete"
+
+[evidence.M03]
+crate = "crates/capnp-wire"
+oracle_fixture = "conformance/fixtures/cpp/e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/wire-unpacked.bin"
+coverage = ["scalar bytes", "NaN payloads", "checked arithmetic", "signed 30-bit offsets", "pointer bitfields", "unaligned byte paths"]
+validation = "Rust 1.98 and 1.85 tests; Clippy -D warnings; Bazel 18/18"
 
 [evidence.M01]
 cpp_fixtures = "conformance/fixtures/cpp/e7c9cd96f1505b5ae486db7821006c2f5dce5b5b"
