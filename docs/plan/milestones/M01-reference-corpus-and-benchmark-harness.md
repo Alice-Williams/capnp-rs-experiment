@@ -1,6 +1,6 @@
 # M01 — Reference corpus and benchmark harness
 
-- Status: in-progress
+- Status: complete
 - Phase: 0
 - Depends on: M00
 
@@ -38,9 +38,7 @@ Check in independently generated C++ and current-Rust schemas/fixtures, provenan
 
 Every pointer, list, and schema category has an oracle fixture; provenance hashes verify; C++ baselines are primary and current Rust is secondary.
 
-All M01-specific exit evidence is present. The milestone remains marked
-in-progress only because its M00 dependency still needs the owner's license
-choice and the first hosted CI run.
+All M01-specific exit evidence is present, and its M00 dependency is complete.
 
 ## Scope boundary
 

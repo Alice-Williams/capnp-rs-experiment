@@ -58,8 +58,8 @@ no_std_alloc = "planned"
 no_allocation = "planned"
 
 [milestones]
-M00 = "in-progress"
-M01 = "in-progress"
+M00 = "complete"
+M01 = "complete"
 M02 = "complete"
 
 [evidence.M01]

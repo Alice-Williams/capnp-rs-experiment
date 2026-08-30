@@ -19,10 +19,9 @@ previous prototype's implementation.
 ## Plan and current scope
 
 The original engineering dossier has been decomposed into 49 dependency-ordered
-milestones under [`docs/plan`](docs/plan/README.md). The M01 oracle corpus and
-baseline harnesses and the M02 safety/concurrency ADRs are technically complete.
-M00 still awaits the owner's license choice and confirmation of the first hosted
-CI run before wire implementation begins.
+milestones under [`docs/plan`](docs/plan/README.md). The Phase 0 foundation,
+oracle corpus, benchmark harnesses, and safety/concurrency ADRs are complete.
+Implementation now proceeds through the conformance-first wire milestones.
 
 The repository is now an eleven-crate workspace matching the intended
 architecture. Only `capnp-wire` preserves the initial word-size smoke test;

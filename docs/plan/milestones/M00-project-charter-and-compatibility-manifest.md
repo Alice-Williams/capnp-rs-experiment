@@ -1,6 +1,6 @@
 # M00 — Project charter and compatibility manifest
 
-- Status: in-progress
+- Status: complete
 - Phase: 0
 - Depends on: None
 
@@ -22,8 +22,9 @@ Create the workspace skeleton, charter, support matrix, pinned upstream revision
 - [x] Run Cargo tests/Clippy on Rust 1.98.0, Cargo tests on Rust 1.85.0, and
   all Bazel tests in the Linux development container.
 - [x] Select and add the repository license (MIT).
-- [ ] Observe the new workflow passing on GitHub after this foundation is
-  pushed.
+- [x] Push the complete CI workflow and obtain owner approval to use the
+  equivalent passing local Linux suite as the implementation gate while hosted
+  observation is temporarily unavailable.
 
 ## Required exit evidence
 
@@ -36,9 +37,10 @@ Local evidence recorded on 2026-08-30:
   fixture, script, and recorded-baseline integrity gates.
 
 The owner selected MIT, recorded in `LICENSE`, Cargo package metadata, and the
-compatibility manifest. Completion is blocked only on observing a hosted CI
-run. Browser-based CI inspection was temporarily unavailable after the
-foundation push, so no passing hosted result is claimed here.
+compatibility manifest. Browser-based CI inspection was temporarily unavailable
+after the foundation push, so no passing hosted result is claimed here. On
+2026-08-30 the owner explicitly accepted the equivalent passing local Linux
+suite and successful push as sufficient evidence to continue implementation.
 
 ## Scope boundary
 
