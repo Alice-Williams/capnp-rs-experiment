@@ -7,7 +7,9 @@ rust_library(
     edition = "2024",
     deps = [
         "//crates/capnp-async:capnp_async",
+        "//crates/capnp-message:capnp_message",
         "//crates/capnp-rpc-core:capnp_rpc_core",
+        "//crates/capnp-schema:capnp_schema",
     ],
     visibility = ["//visibility:public"],
 )
@@ -16,4 +18,3 @@ rust_test(
     name = "capnp_rpc_test",
     crate = ":capnp_rpc",
 )
-

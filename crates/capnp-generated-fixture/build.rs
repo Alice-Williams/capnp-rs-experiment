@@ -20,6 +20,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             "compiler-request-language-fixture.bin",
             "language_fixture.rs",
         ),
+        (
+            "compiler-request-streaming-fixture.bin",
+            "streaming_fixture.rs",
+        ),
     ] {
         generate(&fixtures.join(fixture), &output.join(destination))?;
     }

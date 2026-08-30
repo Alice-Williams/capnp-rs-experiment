@@ -48,9 +48,9 @@ rules_shell = "0.8.0"
 
 [support]
 wire = "M10 borrowed and Arc-owned typed readers with stable coordinate references"
-generated_api = "M20 typed generic brands, constants, annotations, and external import maps"
+generated_api = "M21 typed data and thread-safe local interface APIs with exact pipelines"
 native_compiler = "not-started"
-rpc_level = "none"
+rpc_level = "M21 in-memory local dispatch, inheritance, streaming completion, and capability pipelines; network protocol deferred to M32+"
 parallel_read = "not-started"
 parallel_build = "not-started"
 std = "M16 sync partial-I/O and executor-neutral async framing adapters"
@@ -81,6 +81,17 @@ M17 = "complete"
 M18 = "complete"
 M19 = "complete"
 M20 = "complete"
+M21 = "complete"
+
+[evidence.M21]
+crates = ["crates/capnp-codegen", "crates/capnp-rpc", "crates/capnp-generated-fixture", "crates/capnp-generated-import-fixture"]
+interfaces = ["thread-safe typed clients", "Send + Sync server traits with Send response futures", "typed request/result readers", "generic interface and method parameters", "default unimplemented methods"]
+inheritance = "GenericService(String) local adapter dispatches BaseService.ping through the inherited interface ID and returns the typed result"
+pipelines = ["generated struct pipeline types", "exact pointer-field transform vectors", "typed capability pipelines", "nested runtime transform coverage", "open().stream resolves capability 42 at pointer slot 0"]
+streaming = "generated StreamingCall exposes completion backpressure; local handler remains unexecuted until completion is polled"
+oracle_fixtures = ["compiler-request-language-fixture.bin", "compiler-request-streaming-fixture.bin"]
+scope = "in-memory local transport only; network RPC protocol tables, vats, cancellation, embargo, and reconnect behavior remain M32+"
+validation = "Rust 1.98 and 1.85 workspace tests; generated-module and cross-crate compilation; public API docs; Clippy -D warnings; Bazel complete test suite"
 
 [evidence.M20]
 crates = ["crates/capnp-codegen", "crates/capnp-generated-fixture", "crates/capnp-generated-import-fixture"]

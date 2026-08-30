@@ -6,15 +6,17 @@
 //! share its checked wire traversal, evolution defaults, and exclusive-builder
 //! invariants. M19 emits core data declarations; M20 adds inherited generic
 //! scopes, concrete and unbound brands, scalar and aggregate constants, typed
-//! annotations, and configurable cross-crate imports. Interfaces, method
-//! surfaces, and pipelines remain intentionally deferred to M21.
+//! annotations, and configurable cross-crate imports. M21 adds thread-safe
+//! local interface clients and servers, exact typed pipeline paths,
+//! inheritance dispatch, method generics, and streaming completion futures.
+//! Network RPC state machines and protocol tables remain deferred to M32+.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Write};
 
 use capnp_schema::{
-    AnyPointerType, Brand, BrandBinding, CompiledSchema, Field, FieldKind, Node, NodeId, NodeKind,
-    ScopeBinding, Type,
+    AnyPointerKind, AnyPointerType, Brand, BrandBinding, CompiledSchema, Field, FieldKind, Node,
+    NodeId, NodeKind, ScopeBinding, Type,
 };
 
 /// A generated Rust module and its stable source text.
@@ -37,6 +39,7 @@ pub enum GenerateError {
     UnknownType(NodeId),
     NameCollision(String),
     InvalidName(String),
+    PointerOffset(u32),
     Format,
 }
 
@@ -120,7 +123,10 @@ pub fn generate_requested_file_with_options(
             NodeKind::Annotation(annotation) => {
                 emit_annotation(&mut source, schema, node, annotation, &names)?;
             }
-            NodeKind::File | NodeKind::Interface(_) => {}
+            NodeKind::Interface(interface) => {
+                emit_interface(&mut source, schema, node, interface, &names)?;
+            }
+            NodeKind::File => {}
         }
     }
 
@@ -149,6 +155,9 @@ impl Names {
             let candidate = match node.kind {
                 NodeKind::Struct(_) => rust_snake(node.short_name().unwrap_or(&node.display_name)),
                 NodeKind::Enum(_) => rust_pascal(node.short_name().unwrap_or(&node.display_name)),
+                NodeKind::Interface(_) => {
+                    rust_snake(node.short_name().unwrap_or(&node.display_name))
+                }
                 _ => continue,
             };
             if candidate.is_empty() {
@@ -708,6 +717,8 @@ struct GenericParameter {
     name: String,
 }
 
+const IMPLICIT_METHOD_SCOPE: NodeId = NodeId::MAX;
+
 fn generic_parameters(schema: &CompiledSchema, node: &Node) -> Vec<GenericParameter> {
     let mut scopes = Vec::new();
     let mut current = Some(node);
@@ -738,7 +749,74 @@ fn generic_parameters(schema: &CompiledSchema, node: &Node) -> Vec<GenericParame
             }
         }
     }
+    let mut referenced = BTreeSet::new();
+    if let NodeKind::Struct(structure) = &node.kind {
+        for field in &structure.fields {
+            if let FieldKind::Slot { ty, .. } = &field.kind {
+                collect_parameter_references(ty, &mut referenced);
+            }
+        }
+    }
+    for (scope_id, index) in referenced {
+        if output
+            .iter()
+            .any(|parameter| parameter.scope_id == scope_id && parameter.index == index)
+        {
+            continue;
+        }
+        let base = schema
+            .node(scope_id)
+            .and_then(|scope| scope.parameters.get(usize::from(index)))
+            .map(|parameter| rust_pascal(&parameter.name))
+            .unwrap_or_else(|| format!("P{index}"));
+        let mut name = base.clone();
+        let mut suffix = 2usize;
+        while !used.insert(name.clone()) {
+            name = format!("{base}{suffix}");
+            suffix += 1;
+        }
+        output.push(GenericParameter {
+            scope_id,
+            index,
+            name,
+        });
+    }
     output
+}
+
+fn collect_parameter_references(ty: &Type, output: &mut BTreeSet<(NodeId, u16)>) {
+    match ty {
+        Type::List(element) => collect_parameter_references(element, output),
+        Type::Enum { brand, .. } | Type::Struct { brand, .. } | Type::Interface { brand, .. } => {
+            for scope in &brand.scopes {
+                if let ScopeBinding::Bind(bindings) = &scope.binding {
+                    for binding in bindings {
+                        if let BrandBinding::Type(ty) = binding {
+                            collect_parameter_references(ty, output);
+                        }
+                    }
+                }
+            }
+        }
+        Type::AnyPointer(AnyPointerType::Parameter { scope_id, index }) => {
+            output.insert((*scope_id, *index));
+        }
+        Type::Void
+        | Type::Bool
+        | Type::Int8
+        | Type::Int16
+        | Type::Int32
+        | Type::Int64
+        | Type::UInt8
+        | Type::UInt16
+        | Type::UInt32
+        | Type::UInt64
+        | Type::Float32
+        | Type::Float64
+        | Type::Text
+        | Type::Data
+        | Type::AnyPointer(_) => {}
+    }
 }
 
 fn generic_declaration(parameters: &[GenericParameter], defaults: bool) -> String {
@@ -960,6 +1038,44 @@ fn emit_struct(
         .map_err(|_| GenerateError::Format)?;
     writeln!(output, "    }}").map_err(|_| GenerateError::Format)?;
 
+    let rpc_bounds = parameters
+        .iter()
+        .map(|parameter| format!("{}: GeneratedType + Send + 'static", parameter.name))
+        .collect::<Vec<_>>()
+        .join(", ");
+    writeln!(
+        output,
+        "    impl{implementation} capnp_rpc::TypedReader for Reader{arguments}"
+    )
+    .map_err(|_| GenerateError::Format)?;
+    if rpc_bounds.is_empty() {
+        writeln!(output, "    {{").map_err(|_| GenerateError::Format)?;
+    } else {
+        writeln!(output, "    where {rpc_bounds} {{").map_err(|_| GenerateError::Format)?;
+    }
+    writeln!(output, "        fn from_message(schema: Arc<capnp_schema::CompiledSchema>, message: Arc<capnp_message::OwnedMessage>) -> Result<Self, capnp_rpc::RpcError> {{ Self::from_root(schema, message).map_err(Into::into) }}")
+        .map_err(|_| GenerateError::Format)?;
+    writeln!(output, "    }}").map_err(|_| GenerateError::Format)?;
+
+    writeln!(output, "    #[derive(Clone, Debug)]").map_err(|_| GenerateError::Format)?;
+    writeln!(output, "    pub struct Pipeline{declaration} {{ transform: capnp_rpc::PipelineTransform, marker: PhantomData<fn() -> {marker}> }}")
+        .map_err(|_| GenerateError::Format)?;
+    writeln!(output, "    impl{implementation} Pipeline{arguments} {{")
+        .map_err(|_| GenerateError::Format)?;
+    writeln!(output, "        pub fn root() -> Self {{ Self::from_transform(capnp_rpc::PipelineTransform::root()) }}")
+        .map_err(|_| GenerateError::Format)?;
+    writeln!(output, "        #[doc(hidden)]\n        pub fn from_transform(transform: capnp_rpc::PipelineTransform) -> Self {{ Self {{ transform, marker: PhantomData }} }}")
+        .map_err(|_| GenerateError::Format)?;
+    writeln!(
+        output,
+        "        pub fn transform(&self) -> &capnp_rpc::PipelineTransform {{ &self.transform }}"
+    )
+    .map_err(|_| GenerateError::Format)?;
+    for field in &structure.fields {
+        emit_pipeline_field(output, schema, field, names, &parameters)?;
+    }
+    writeln!(output, "    }}").map_err(|_| GenerateError::Format)?;
+
     writeln!(output, "    #[allow(dead_code)]").map_err(|_| GenerateError::Format)?;
     writeln!(output, "    pub struct Builder<'schema, 'arena{comma}{params}> {{ inner: capnp_schema::DynamicStructBuilder<'schema, 'arena>, marker: PhantomData<fn() -> {marker}> }}",
         comma = if parameters.is_empty() { "" } else { ", " },
@@ -1025,6 +1141,407 @@ fn emit_struct(
     Ok(())
 }
 
+const STREAM_RESULT_TYPE_ID: NodeId = 0x995f_9a33_77c0_b16e;
+
+fn method_parameters(
+    base: &[GenericParameter],
+    method: &capnp_schema::Method,
+) -> Vec<GenericParameter> {
+    let mut output = base.to_vec();
+    let mut used = output
+        .iter()
+        .map(|parameter| parameter.name.clone())
+        .collect::<BTreeSet<_>>();
+    for (index, parameter) in method.implicit_parameters.iter().enumerate() {
+        let base_name = rust_pascal(&parameter.name);
+        let mut name = base_name.clone();
+        let mut suffix = 2usize;
+        while !used.insert(name.clone()) {
+            name = format!("{base_name}{suffix}");
+            suffix += 1;
+        }
+        if let Ok(index) = u16::try_from(index) {
+            output.push(GenericParameter {
+                scope_id: IMPLICIT_METHOD_SCOPE,
+                index,
+                name,
+            });
+        }
+    }
+    output
+}
+
+fn method_generic_declaration(base_len: usize, context: &[GenericParameter]) -> String {
+    let method = &context[base_len..];
+    if method.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "<{}>",
+            method
+                .iter()
+                .map(|parameter| format!("{}: GeneratedType + Send + 'static", parameter.name))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    }
+}
+
+fn interface_server_type(
+    schema: &CompiledSchema,
+    type_id: NodeId,
+    brand: Option<&Brand>,
+    names: &Names,
+    context: &[GenericParameter],
+) -> Result<String, GenerateError> {
+    let arguments = branded_arguments(schema, type_id, brand, names, context)?;
+    let suffix = if arguments.is_empty() {
+        String::new()
+    } else {
+        format!("<{}>", arguments.join(", "))
+    };
+    Ok(format!(
+        "{}::Server{suffix}",
+        names.reference(type_id, true)?
+    ))
+}
+
+fn method_struct_type(
+    schema: &CompiledSchema,
+    type_id: NodeId,
+    brand: &Brand,
+    names: &Names,
+    context: &[GenericParameter],
+    method: &capnp_schema::Method,
+    member: &str,
+) -> Result<String, GenerateError> {
+    let target = schema
+        .node(type_id)
+        .ok_or(GenerateError::UnknownType(type_id))?;
+    let target_parameters = generic_parameters(schema, target);
+    let mut arguments = branded_arguments(schema, type_id, Some(brand), names, context)?;
+    for (target_parameter, argument) in target_parameters.iter().zip(&mut arguments) {
+        if argument != "capnp_schema::DynamicValue" {
+            continue;
+        }
+        if let Some((index, _)) = method
+            .implicit_parameters
+            .iter()
+            .enumerate()
+            .find(|(_, parameter)| rust_pascal(&parameter.name) == target_parameter.name)
+        {
+            if let Ok(index) = u16::try_from(index) {
+                if let Some(name) = parameter_name(context, IMPLICIT_METHOD_SCOPE, index) {
+                    *argument = name.to_owned();
+                }
+            }
+        }
+    }
+    let suffix = if arguments.is_empty() {
+        String::new()
+    } else {
+        format!("<{}>", arguments.join(", "))
+    };
+    Ok(format!(
+        "{}::{member}{suffix}",
+        names.reference(type_id, true)?
+    ))
+}
+
+fn emit_interface(
+    output: &mut String,
+    schema: &CompiledSchema,
+    node: &Node,
+    interface: &capnp_schema::InterfaceSchema,
+    names: &Names,
+) -> Result<(), GenerateError> {
+    let module = names.get(node.id)?;
+    let parameters = generic_parameters(schema, node);
+    let declaration = generic_declaration(&parameters, true);
+    let implementation = generic_declaration(&parameters, false);
+    let arguments = generic_arguments(&parameters);
+    let marker = marker_type(&parameters);
+    let type_bounds = parameters
+        .iter()
+        .map(|parameter| format!("{}: GeneratedType + Send + Sync + 'static", parameter.name))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    writeln!(output).map_err(|_| GenerateError::Format)?;
+    emit_docs(output, schema, node, "Generated RPC interface module")?;
+    writeln!(output, "pub mod {module} {{").map_err(|_| GenerateError::Format)?;
+    writeln!(output, "    use super::*;").map_err(|_| GenerateError::Format)?;
+    writeln!(output, "    pub const TYPE_ID: u64 = 0x{:016x};", node.id)
+        .map_err(|_| GenerateError::Format)?;
+    writeln!(output, "    #[derive(Clone, Debug)]").map_err(|_| GenerateError::Format)?;
+    writeln!(output, "    pub struct Client{declaration} {{ inner: capnp_rpc::LocalClient, marker: PhantomData<fn() -> {marker}> }}")
+        .map_err(|_| GenerateError::Format)?;
+    writeln!(output, "    impl{implementation} Client{arguments}")
+        .map_err(|_| GenerateError::Format)?;
+    let client_bounds = parameters
+        .iter()
+        .map(|parameter| format!("{}: GeneratedType + Send + 'static", parameter.name))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if client_bounds.is_empty() {
+        writeln!(output, "    {{").map_err(|_| GenerateError::Format)?;
+    } else {
+        writeln!(output, "    where {client_bounds} {{").map_err(|_| GenerateError::Format)?;
+    }
+    writeln!(output, "        pub fn from_local(inner: capnp_rpc::LocalClient) -> Self {{ Self {{ inner, marker: PhantomData }} }}")
+        .map_err(|_| GenerateError::Format)?;
+    writeln!(
+        output,
+        "        pub fn local(&self) -> &capnp_rpc::LocalClient {{ &self.inner }}"
+    )
+    .map_err(|_| GenerateError::Format)?;
+    for method in &interface.methods {
+        let context = method_parameters(&parameters, method);
+        let method_generics = method_generic_declaration(parameters.len(), &context);
+        let method_name = rust_snake(&method.name);
+        let params = method_struct_type(
+            schema,
+            method.param_struct_type,
+            &method.param_brand,
+            names,
+            &context,
+            method,
+            "Reader",
+        )?;
+        if method.result_struct_type == STREAM_RESULT_TYPE_ID {
+            writeln!(output, "        pub fn {method_name}{method_generics}(&self, params: Arc<capnp_message::OwnedMessage>) -> capnp_rpc::StreamingCall {{ self.inner.call_streaming(TYPE_ID, {}, params) }}", method.code_order)
+                .map_err(|_| GenerateError::Format)?;
+        } else {
+            let results = method_struct_type(
+                schema,
+                method.result_struct_type,
+                &method.result_brand,
+                names,
+                &context,
+                method,
+                "Reader",
+            )?;
+            let pipeline = method_struct_type(
+                schema,
+                method.result_struct_type,
+                &method.result_brand,
+                names,
+                &context,
+                method,
+                "Pipeline",
+            )?;
+            let pipeline_expression = expression_path(&pipeline);
+            writeln!(output, "        pub fn {method_name}{method_generics}(&self, params: Arc<capnp_message::OwnedMessage>) -> capnp_rpc::PendingCall<{results}, {pipeline}> {{ self.inner.call(TYPE_ID, {}, params, {pipeline_expression}::root()) }}", method.code_order)
+                .map_err(|_| GenerateError::Format)?;
+        }
+        let _ = params;
+    }
+    for superclass in &interface.superclasses {
+        let super_node = schema
+            .node(superclass.id)
+            .ok_or(GenerateError::UnknownType(superclass.id))?;
+        let method_name = format!(
+            "as_{}",
+            rust_snake(super_node.short_name().unwrap_or(&super_node.display_name))
+        );
+        let target = interface_client_type(
+            schema,
+            superclass.id,
+            Some(&superclass.brand),
+            names,
+            &parameters,
+        )?;
+        writeln!(output, "        pub fn {method_name}(&self) -> {target} {{ {target}::from_local(self.inner.clone()) }}")
+            .map_err(|_| GenerateError::Format)?;
+    }
+    writeln!(output, "    }}").map_err(|_| GenerateError::Format)?;
+
+    let supertraits = interface
+        .superclasses
+        .iter()
+        .map(|superclass| {
+            interface_server_type(
+                schema,
+                superclass.id,
+                Some(&superclass.brand),
+                names,
+                &parameters,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let inheritance = if supertraits.is_empty() {
+        String::new()
+    } else {
+        format!("{} + ", supertraits.join(" + "))
+    };
+    writeln!(
+        output,
+        "    pub trait Server{declaration}: {inheritance}Send + Sync + 'static {{"
+    )
+    .map_err(|_| GenerateError::Format)?;
+    for method in &interface.methods {
+        let context = method_parameters(&parameters, method);
+        let method_generics = method_generic_declaration(parameters.len(), &context);
+        let method_name = rust_snake(&method.name);
+        let params = method_struct_type(
+            schema,
+            method.param_struct_type,
+            &method.param_brand,
+            names,
+            &context,
+            method,
+            "Reader",
+        )?;
+        writeln!(output, "        fn {method_name}{method_generics}(&self, _params: {params}) -> capnp_rpc::MessageFuture {{ Box::pin(async {{ Err(capnp_rpc::RpcError::Unimplemented {{ interface_id: TYPE_ID, method_id: {} }}) }}) }}", method.code_order)
+            .map_err(|_| GenerateError::Format)?;
+    }
+    writeln!(output, "    }}").map_err(|_| GenerateError::Format)?;
+
+    writeln!(output, "    pub struct LocalServer<S{comma}{params}> {{ server: Arc<S>, schema: Arc<capnp_schema::CompiledSchema>, marker: PhantomData<fn() -> {marker}> }}",
+        comma = if parameters.is_empty() { "" } else { ", " },
+        params = parameters.iter().map(|parameter| format!("{} = capnp_schema::DynamicValue", parameter.name)).collect::<Vec<_>>().join(", "))
+        .map_err(|_| GenerateError::Format)?;
+    writeln!(
+        output,
+        "    impl<S{comma}{params}> LocalServer<S{comma}{args}> {{",
+        comma = if parameters.is_empty() { "" } else { ", " },
+        params = parameters
+            .iter()
+            .map(|parameter| parameter.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", "),
+        args = parameters
+            .iter()
+            .map(|parameter| parameter.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+    .map_err(|_| GenerateError::Format)?;
+    writeln!(output, "        pub fn new(server: Arc<S>, schema: Arc<capnp_schema::CompiledSchema>) -> Self {{ Self {{ server, schema, marker: PhantomData }} }}")
+        .map_err(|_| GenerateError::Format)?;
+    writeln!(output, "    }}").map_err(|_| GenerateError::Format)?;
+    writeln!(
+        output,
+        "    impl<S{comma}{params}> capnp_rpc::LocalService for LocalServer<S{comma}{args}>",
+        comma = if parameters.is_empty() { "" } else { ", " },
+        params = parameters
+            .iter()
+            .map(|parameter| parameter.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", "),
+        args = parameters
+            .iter()
+            .map(|parameter| parameter.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+    .map_err(|_| GenerateError::Format)?;
+    let mut bounds = vec![format!("S: Server{arguments}")];
+    if !type_bounds.is_empty() {
+        bounds.push(type_bounds);
+    }
+    writeln!(output, "    where {} {{", bounds.join(", ")).map_err(|_| GenerateError::Format)?;
+    writeln!(output, "        fn dispatch(self: Arc<Self>, interface_id: u64, method_id: u16, params: Arc<capnp_message::OwnedMessage>) -> capnp_rpc::MessageFuture {{")
+        .map_err(|_| GenerateError::Format)?;
+    writeln!(output, "            match (interface_id, method_id) {{")
+        .map_err(|_| GenerateError::Format)?;
+    emit_dispatch_arms(
+        output,
+        schema,
+        node.id,
+        interface,
+        names,
+        &parameters,
+        "Server",
+    )?;
+    for superclass in &interface.superclasses {
+        let super_node = schema
+            .node(superclass.id)
+            .ok_or(GenerateError::UnknownType(superclass.id))?;
+        let NodeKind::Interface(super_interface) = &super_node.kind else {
+            return Err(GenerateError::UnknownType(superclass.id));
+        };
+        let server_type = interface_server_type(
+            schema,
+            superclass.id,
+            Some(&superclass.brand),
+            names,
+            &parameters,
+        )?;
+        emit_dispatch_arms(
+            output,
+            schema,
+            superclass.id,
+            super_interface,
+            names,
+            &parameters,
+            &server_type,
+        )?;
+    }
+    writeln!(output, "                (TYPE_ID, method_id) => Box::pin(async move {{ Err(capnp_rpc::RpcError::UnknownMethod {{ interface_id: TYPE_ID, method_id }}) }}),")
+        .map_err(|_| GenerateError::Format)?;
+    writeln!(output, "                (interface_id, _) => Box::pin(async move {{ Err(capnp_rpc::RpcError::UnknownInterface(interface_id)) }}),")
+        .map_err(|_| GenerateError::Format)?;
+    writeln!(output, "            }}\n        }}\n    }}\n}}")
+        .map_err(|_| GenerateError::Format)?;
+    Ok(())
+}
+
+fn emit_dispatch_arms(
+    output: &mut String,
+    schema: &CompiledSchema,
+    interface_id: NodeId,
+    interface: &capnp_schema::InterfaceSchema,
+    names: &Names,
+    parameters: &[GenericParameter],
+    server_trait: &str,
+) -> Result<(), GenerateError> {
+    for method in &interface.methods {
+        let mut context = method_parameters(parameters, method);
+        for parameter in &mut context[parameters.len()..] {
+            parameter.name = "capnp_schema::DynamicValue".to_owned();
+        }
+        let params_type = method_struct_type(
+            schema,
+            method.param_struct_type,
+            &method.param_brand,
+            names,
+            &context,
+            method,
+            "Reader",
+        )?;
+        let method_name = rust_snake(&method.name);
+        let turbofish = if method.implicit_parameters.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "::<{}>",
+                method
+                    .implicit_parameters
+                    .iter()
+                    .map(|_| "capnp_schema::DynamicValue")
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        writeln!(
+            output,
+            "                (0x{interface_id:016x}, {}) => {{",
+            method.code_order
+        )
+        .map_err(|_| GenerateError::Format)?;
+        writeln!(output, "                    let reader = match <{params_type} as capnp_rpc::TypedReader>::from_message(Arc::clone(&self.schema), params) {{ Ok(value) => value, Err(error) => return Box::pin(async move {{ Err(error) }}), }};")
+            .map_err(|_| GenerateError::Format)?;
+        writeln!(
+            output,
+            "                    {server_trait}::{method_name}{turbofish}(&*self.server, reader)"
+        )
+        .map_err(|_| GenerateError::Format)?;
+        writeln!(output, "                }},").map_err(|_| GenerateError::Format)?;
+    }
+    Ok(())
+}
+
 fn struct_reader_type(
     schema: &CompiledSchema,
     type_id: NodeId,
@@ -1042,6 +1559,122 @@ fn struct_reader_type(
         "{}::Reader{suffix}",
         names.reference(type_id, true)?
     ))
+}
+
+fn struct_pipeline_type(
+    schema: &CompiledSchema,
+    type_id: NodeId,
+    brand: Option<&Brand>,
+    names: &Names,
+    context: &[GenericParameter],
+) -> Result<String, GenerateError> {
+    let arguments = branded_arguments(schema, type_id, brand, names, context)?;
+    let suffix = if arguments.is_empty() {
+        String::new()
+    } else {
+        format!("<{}>", arguments.join(", "))
+    };
+    Ok(format!(
+        "{}::Pipeline{suffix}",
+        names.reference(type_id, true)?
+    ))
+}
+
+fn interface_client_type(
+    schema: &CompiledSchema,
+    type_id: NodeId,
+    brand: Option<&Brand>,
+    names: &Names,
+    context: &[GenericParameter],
+) -> Result<String, GenerateError> {
+    let arguments = branded_arguments(schema, type_id, brand, names, context)?;
+    let suffix = if arguments.is_empty() {
+        String::new()
+    } else {
+        format!("<{}>", arguments.join(", "))
+    };
+    Ok(format!(
+        "{}::Client{suffix}",
+        names.reference(type_id, true)?
+    ))
+}
+
+fn emit_pipeline_field(
+    output: &mut String,
+    schema: &CompiledSchema,
+    field: &Field,
+    names: &Names,
+    context: &[GenericParameter],
+) -> Result<(), GenerateError> {
+    let method = rust_snake(&field.name);
+    let (target, offset) = match &field.kind {
+        FieldKind::Group { type_id } => (
+            Some(struct_pipeline_type(
+                schema, *type_id, None, names, context,
+            )?),
+            None,
+        ),
+        FieldKind::Slot { offset, ty, .. } => {
+            let target = match ty {
+                Type::Struct { type_id, brand } => Some(struct_pipeline_type(
+                    schema,
+                    *type_id,
+                    Some(brand),
+                    names,
+                    context,
+                )?),
+                Type::Interface { type_id, brand } => Some(format!(
+                    "capnp_rpc::TypedPipeline<{}>",
+                    interface_client_type(schema, *type_id, Some(brand), names, context)?
+                )),
+                Type::AnyPointer(AnyPointerType::Parameter { scope_id, index }) => Some(format!(
+                    "capnp_rpc::TypedPipeline<{}>",
+                    parameter_name(context, *scope_id, *index)
+                        .unwrap_or("capnp_schema::DynamicValue")
+                )),
+                Type::AnyPointer(AnyPointerType::ImplicitMethodParameter { index }) => {
+                    Some(format!(
+                        "capnp_rpc::TypedPipeline<{}>",
+                        parameter_name(context, IMPLICIT_METHOD_SCOPE, *index)
+                            .unwrap_or("capnp_schema::DynamicValue")
+                    ))
+                }
+                Type::AnyPointer(AnyPointerType::Unconstrained(AnyPointerKind::Capability)) => {
+                    Some("capnp_rpc::CapabilityPipeline".to_owned())
+                }
+                _ => None,
+            };
+            (
+                target,
+                Some(u16::try_from(*offset).map_err(|_| GenerateError::PointerOffset(*offset))?),
+            )
+        }
+    };
+    let Some(target) = target else {
+        return Ok(());
+    };
+    let transform = offset.map_or_else(
+        || "self.transform.clone()".to_owned(),
+        |value| format!("self.transform.pointer_field({value})"),
+    );
+    let constructor = if target.starts_with("capnp_rpc::") {
+        "new"
+    } else {
+        "from_transform"
+    };
+    let expression = expression_path(&target);
+    writeln!(
+        output,
+        "        pub fn {method}(&self) -> {target} {{ {expression}::{constructor}({transform}) }}"
+    )
+    .map_err(|_| GenerateError::Format)
+}
+
+fn expression_path(path: &str) -> String {
+    path.find('<').map_or_else(
+        || path.to_owned(),
+        |index| format!("{}::<{}", &path[..index], &path[index + 1..]),
+    )
 }
 
 fn branded_arguments(
@@ -1131,6 +1764,11 @@ fn rust_value_type(
         Type::Interface { .. } => "Option<u32>".into(),
         Type::AnyPointer(AnyPointerType::Parameter { scope_id, index }) => {
             parameter_name(context, *scope_id, *index)
+                .unwrap_or("capnp_schema::DynamicValue")
+                .to_owned()
+        }
+        Type::AnyPointer(AnyPointerType::ImplicitMethodParameter { index }) => {
+            parameter_name(context, IMPLICIT_METHOD_SCOPE, *index)
                 .unwrap_or("capnp_schema::DynamicValue")
                 .to_owned()
         }
@@ -1428,9 +2066,11 @@ fn emit_docs(
         .map(|info| info.doc_comment.as_str())
         .filter(|docs| !docs.trim().is_empty());
     if let Some(docs) = docs {
+        writeln!(output, "/// ```text").map_err(|_| GenerateError::Format)?;
         for line in docs.lines() {
             writeln!(output, "/// {}", line.trim_end()).map_err(|_| GenerateError::Format)?;
         }
+        writeln!(output, "/// ```").map_err(|_| GenerateError::Format)?;
     } else {
         writeln!(output, "/// {fallback} for `{}`.", node.display_name)
             .map_err(|_| GenerateError::Format)?;
@@ -1451,10 +2091,12 @@ fn emit_field_docs(
         .map(|member| member.doc_comment.as_str())
         .filter(|docs| !docs.trim().is_empty());
     if let Some(docs) = docs {
+        writeln!(output, "        /// ```text").map_err(|_| GenerateError::Format)?;
         for line in docs.lines() {
             writeln!(output, "        /// {}", line.trim_end())
                 .map_err(|_| GenerateError::Format)?;
         }
+        writeln!(output, "        /// ```").map_err(|_| GenerateError::Format)?;
     } else {
         writeln!(output, "        /// Reads `{}`.", field.name)
             .map_err(|_| GenerateError::Format)?;
@@ -1606,6 +2248,7 @@ fn is_keyword(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use capnp_schema::LoadLimits;
 
     const WIRE: &[u8] = include_bytes!(concat!(
@@ -1619,6 +2262,18 @@ mod tests {
         "/../../conformance/fixtures/cpp/",
         "e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/",
         "compiler-request-import-fixture.bin"
+    ));
+    const LANGUAGE: &[u8] = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../conformance/fixtures/cpp/",
+        "e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/",
+        "compiler-request-language-fixture.bin"
+    ));
+    const STREAMING: &[u8] = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../conformance/fixtures/cpp/",
+        "e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/",
+        "compiler-request-streaming-fixture.bin"
     ));
 
     #[test]
@@ -1687,6 +2342,25 @@ mod tests {
         );
         assert!(!generated.source.contains("pub mod wire_fixture"));
         assert!(!generated.source.contains("pub mod language_fixture"));
+    }
+
+    #[test]
+    fn interfaces_emit_generics_inheritance_streaming_and_pipelines() {
+        let language = CompiledSchema::from_code_generator_request(LANGUAGE, LoadLimits::default())
+            .expect("language request");
+        let source = &generate_requested_files(&language).expect("generates")[0].source;
+        assert!(source.contains("pub trait Server<T = capnp_schema::DynamicValue>: super::base_service::Server + Send + Sync + 'static"));
+        assert!(source.contains("pub fn transform<U: GeneratedType + Send + 'static>"));
+        assert!(source.contains("transform_results::Reader<U>"));
+        assert!(source.contains("(0xb02e0a639958c628, 0) =>"));
+
+        let streaming =
+            CompiledSchema::from_code_generator_request(STREAMING, LoadLimits::default())
+                .expect("streaming request");
+        let source = &generate_requested_files(&streaming).expect("generates")[0].source;
+        assert!(source.contains("-> capnp_rpc::StreamingCall"));
+        assert!(source.contains("TypedPipeline<super::byte_stream::Client>"));
+        assert!(source.contains("self.transform.pointer_field(0)"));
     }
 
     #[test]

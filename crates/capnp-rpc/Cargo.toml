@@ -13,4 +13,6 @@ workspace = true
 
 [dependencies]
 capnp-async = { path = "../capnp-async" }
+capnp-message = { path = "../capnp-message" }
 capnp-rpc-core = { path = "../capnp-rpc-core" }
+capnp-schema = { path = "../capnp-schema" }

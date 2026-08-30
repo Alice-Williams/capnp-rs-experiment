@@ -57,6 +57,7 @@ dependencies = [
  "capnp-codegen",
  "capnp-io",
  "capnp-message",
+ "capnp-rpc",
  "capnp-schema",
 ]
 
@@ -67,6 +68,7 @@ dependencies = [
  "capnp-codegen",
  "capnp-generated-fixture",
  "capnp-message",
+ "capnp-rpc",
  "capnp-schema",
 ]
 
@@ -91,7 +93,9 @@ name = "capnp-rpc"
 version = "0.1.0"
 dependencies = [
  "capnp-async",
+ "capnp-message",
  "capnp-rpc-core",
+ "capnp-schema",
 ]
 
 [[package]]

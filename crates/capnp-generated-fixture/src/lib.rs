@@ -16,9 +16,17 @@ pub mod language {
     include!(concat!(env!("OUT_DIR"), "/language_fixture.rs"));
 }
 
+pub mod streaming {
+    include!(concat!(env!("OUT_DIR"), "/streaming_fixture.rs"));
+}
+
 #[cfg(test)]
 mod tests {
+    use std::future::Future;
+    use std::pin::pin;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::task::{Context, Poll, Waker};
 
     use capnp_io::{FrameLimits, FrameRead, parse_frame};
     use capnp_message::{ExclusiveArena, OwnedMessage, ReaderLimits};
@@ -57,12 +65,96 @@ mod tests {
         "e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/",
         "language-unpacked.bin"
     ));
+    const STREAMING_REQUEST: &[u8] = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../conformance/fixtures/cpp/",
+        "e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/",
+        "compiler-request-streaming-fixture.bin"
+    ));
+
+    fn block_on<F: Future>(future: F) -> F::Output {
+        let mut context = Context::from_waker(Waker::noop());
+        let mut future = pin!(future);
+        loop {
+            match future.as_mut().poll(&mut context) {
+                Poll::Ready(value) => return value,
+                Poll::Pending => std::thread::yield_now(),
+            }
+        }
+    }
 
     fn schema() -> Arc<CompiledSchema> {
         Arc::new(
             CompiledSchema::from_code_generator_request(REQUEST, LoadLimits::default())
                 .expect("pinned request loads"),
         )
+    }
+
+    fn language_schema() -> Arc<CompiledSchema> {
+        Arc::new(
+            CompiledSchema::from_code_generator_request(LANGUAGE_REQUEST, LoadLimits::default())
+                .expect("language request loads"),
+        )
+    }
+
+    fn streaming_schema() -> Arc<CompiledSchema> {
+        Arc::new(
+            CompiledSchema::from_code_generator_request(STREAMING_REQUEST, LoadLimits::default())
+                .expect("streaming request loads"),
+        )
+    }
+
+    fn owned_arena(arena: ExclusiveArena) -> Arc<OwnedMessage> {
+        OwnedMessage::new(arena.into_segments(), ReaderLimits::default())
+            .expect("generated message validates")
+    }
+
+    struct LanguageService {
+        schema: Arc<CompiledSchema>,
+    }
+
+    impl super::language::base_service::Server for LanguageService {
+        fn ping(&self, _params: super::language::ping_params::Reader) -> capnp_rpc::MessageFuture {
+            let mut arena = ExclusiveArena::new(4, 64).expect("result arena");
+            super::language::ping_results::Builder::init_root(&self.schema, &mut arena)
+                .expect("ping result root")
+                .set_value(73)
+                .expect("ping result value");
+            let response = owned_arena(arena);
+            Box::pin(async move { Ok(response) })
+        }
+    }
+
+    impl super::language::generic_service::Server<String> for LanguageService {}
+
+    struct FactoryService {
+        response: Arc<OwnedMessage>,
+    }
+
+    impl super::streaming::stream_factory::Server for FactoryService {
+        fn open(&self, _params: super::streaming::open_params::Reader) -> capnp_rpc::MessageFuture {
+            let response = Arc::clone(&self.response);
+            Box::pin(async move { Ok(response) })
+        }
+    }
+
+    struct ByteService {
+        schema: Arc<CompiledSchema>,
+        writes: Arc<AtomicUsize>,
+    }
+
+    impl super::streaming::byte_stream::Server for ByteService {
+        fn write(
+            &self,
+            _params: super::streaming::write_params::Reader,
+        ) -> capnp_rpc::MessageFuture {
+            self.writes.fetch_add(1, Ordering::SeqCst);
+            let mut arena = ExclusiveArena::new(1, 16).expect("stream result arena");
+            super::streaming::stream_result::Builder::init_root(&self.schema, &mut arena)
+                .expect("stream result root");
+            let response = owned_arena(arena);
+            Box::pin(async move { Ok(response) })
+        }
     }
 
     fn cpp_message() -> Arc<OwnedMessage> {
@@ -342,5 +434,87 @@ mod tests {
         );
         assert_eq!(super::evolution_v2::State::Paused.ordinal(), 2);
         assert_eq!(super::evolution_v2::record::TYPE_ID, 0x8178_7eed_de27_c411);
+    }
+
+    #[test]
+    fn generated_local_client_dispatches_inherited_interface_method() {
+        let schema = language_schema();
+        let service = Arc::new(super::language::generic_service::LocalServer::<
+            LanguageService,
+            String,
+        >::new(
+            Arc::new(LanguageService {
+                schema: Arc::clone(&schema),
+            }),
+            Arc::clone(&schema),
+        ));
+        let local = capnp_rpc::LocalClient::new(Arc::clone(&schema), service);
+        let client = super::language::generic_service::Client::<String>::from_local(local);
+
+        let mut arena = ExclusiveArena::new(1, 16).expect("params arena");
+        super::language::ping_params::Builder::init_root(&schema, &mut arena).expect("ping params");
+        let call = client.as_base_service().ping(owned_arena(arena));
+        let response = block_on(call.response()).expect("inherited ping dispatches");
+        assert_eq!(response.value().expect("typed ping result"), 73);
+    }
+
+    #[test]
+    fn generated_pipeline_and_streaming_completion_are_exact_and_thread_safe() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<super::language::generic_service::Client<String>>();
+        assert_send_sync::<super::streaming::open_results::Pipeline>();
+
+        let schema = streaming_schema();
+        let mut result_arena = ExclusiveArena::new(2, 32).expect("open result arena");
+        super::streaming::open_results::Builder::init_root(&schema, &mut result_arena)
+            .expect("open result")
+            .set_stream(42)
+            .expect("pipeline capability");
+        let raw_response = owned_arena(result_arena);
+        let factory = Arc::new(super::streaming::stream_factory::LocalServer::new(
+            Arc::new(FactoryService {
+                response: Arc::clone(&raw_response),
+            }),
+            Arc::clone(&schema),
+        ));
+        let factory_client = super::streaming::stream_factory::Client::from_local(
+            capnp_rpc::LocalClient::new(Arc::clone(&schema), factory),
+        );
+        let mut open_arena = ExclusiveArena::new(2, 32).expect("open params arena");
+        super::streaming::open_params::Builder::init_root(&schema, &mut open_arena)
+            .expect("open params")
+            .set_name("fixture")
+            .expect("open name");
+        let call = factory_client.open(owned_arena(open_arena));
+        let stream_pipeline = call.pipeline.stream();
+        assert_eq!(stream_pipeline.transform().pointer_fields(), &[0]);
+        assert_eq!(
+            stream_pipeline
+                .resolve(&raw_response)
+                .expect("pipeline resolves"),
+            Some(42)
+        );
+        let _ = block_on(call.response()).expect("open response");
+
+        let writes = Arc::new(AtomicUsize::new(0));
+        let byte_server = Arc::new(super::streaming::byte_stream::LocalServer::new(
+            Arc::new(ByteService {
+                schema: Arc::clone(&schema),
+                writes: Arc::clone(&writes),
+            }),
+            Arc::clone(&schema),
+        ));
+        let byte_client = super::streaming::byte_stream::Client::from_local(
+            capnp_rpc::LocalClient::new(Arc::clone(&schema), byte_server),
+        );
+        let mut write_arena = ExclusiveArena::new(2, 32).expect("write params arena");
+        super::streaming::write_params::Builder::init_root(&schema, &mut write_arena)
+            .expect("write params")
+            .set_bytes(&[1, 2, 3, 4])
+            .expect("write bytes");
+        let streaming = byte_client.write(owned_arena(write_arena));
+        assert_eq!(writes.load(Ordering::SeqCst), 0);
+        block_on(streaming.completion()).expect("streaming completion");
+        assert_eq!(writes.load(Ordering::SeqCst), 1);
     }
 }
