@@ -12,6 +12,7 @@
     "source=capnp-rs-experiment-cargo-registry,target=/usr/local/cargo/registry,type=volume",
     "source=capnp-rs-experiment-cargo-git,target=/usr/local/cargo/git,type=volume",
     "source=capnp-rs-experiment-bazelisk-cache,target=/root/.cache/bazelisk,type=volume",
-    "source=capnp-rs-experiment-bazel-cache,target=/root/.cache/bazel,type=volume"
+    "source=capnp-rs-experiment-bazel-cache,target=/root/.cache/bazel,type=volume",
+    "source=capnp-rs-experiment-oracles,target=/opt/capnp-oracles,type=volume"
   ]
 }

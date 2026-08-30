@@ -8,6 +8,8 @@ code must not generate its own expected values.
 
 - `upstream/capnproto/<commit>/`: exact upstream schemas or test inputs copied
   from the pinned C++ product oracle.
+- `oracles/<implementation>/<commit>/`: build provenance for independently
+  installed fixture producers; the installations themselves are not committed.
 - `schemas/`: project-owned coverage/evolution schemas.
 - `fixtures/cpp/<commit>/`: bytes and text metadata emitted by the pinned C++
   tools.
@@ -18,3 +20,12 @@ code must not generate its own expected values.
 Generated fixture directories are committed deliberately. Each generator must
 write to a temporary location, verify its producer revision, and install output
 atomically so partial files cannot look authoritative.
+
+The pinned C++ oracle is built into the persistent container volume with:
+
+```console
+bash tools/build-cpp-oracle.sh
+```
+
+Its source, build, and install trees live under `/opt/capnp-oracles` and are not
+part of the Git repository or Docker image.

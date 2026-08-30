@@ -1,4 +1,4 @@
-FROM rust:1-bookworm
+FROM rust:1-trixie
 
 ENV DEBIAN_FRONTEND=noninteractive \
     CARGO_HOME=/usr/local/cargo \
@@ -12,10 +12,13 @@ RUN apt-get update \
         build-essential \
         ca-certificates \
         capnproto \
+        clang \
+        cmake \
         curl \
         file \
         git \
         less \
+        ninja-build \
         pkg-config \
         python3 \
         vim-tiny \

@@ -21,7 +21,7 @@ capabilities.
 | Dimension | M00 policy |
 |---|---|
 | Development host | Any host that can run the repository's Linux Dev Container |
-| Primary execution target | Linux x86-64 |
+| Primary execution target | Linux x86-64 (Debian Trixie Dev Container) |
 | Cargo MSRV | Rust 1.85.0 |
 | Pinned development/Bazel Rust | Rust 1.98.0 |
 | Rust edition | 2024 |
