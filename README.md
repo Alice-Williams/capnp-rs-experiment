@@ -24,9 +24,10 @@ oracle corpus, benchmark harnesses, and safety/concurrency ADRs are complete.
 Implementation now proceeds through the conformance-first wire milestones.
 
 The repository is an eleven-crate workspace matching the intended architecture.
-`capnp-wire` now implements M03's no_std words, little-endian scalar access,
-checked ranges, and raw pointer bitfields. The other crates remain explicit
-ownership boundaries rather than claimed protocol features.
+`capnp-wire` implements M03's no_std words, little-endian scalar access, checked
+ranges, and raw pointer bitfields. `capnp-io` implements M04's bounded standard
+unpacked framing over immutable segment descriptors. The other crates remain
+explicit ownership boundaries rather than claimed protocol features.
 
 ## Development
 

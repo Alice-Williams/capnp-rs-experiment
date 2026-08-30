@@ -47,7 +47,7 @@ rules_rust = "0.74.0"
 rules_shell = "0.8.0"
 
 [support]
-wire = "M03 words, endian scalars, checked ranges, and raw pointer bitfields"
+wire = "M04 standard unpacked framing over M03 wire primitives"
 generated_api = "not-started"
 native_compiler = "not-started"
 rpc_level = "none"
@@ -62,7 +62,14 @@ M00 = "complete"
 M01 = "complete"
 M02 = "complete"
 M03 = "complete"
-M04 = "in-progress"
+M04 = "complete"
+
+[evidence.M04]
+crate = "crates/capnp-io"
+oracle_fixtures = ["wire-unpacked.bin", "wire-two-segment.bin", "wire-multisegment.bin"]
+oracle_segment_counts = [1, 2, 33]
+coverage = ["clean EOF", "table padding", "truncation", "limits", "overflow", "concatenated frames", "exact re-encoding"]
+validation = "Rust 1.98 and 1.85 tests; Clippy -D warnings; Bazel 18/18"
 
 [evidence.M03]
 crate = "crates/capnp-wire"
