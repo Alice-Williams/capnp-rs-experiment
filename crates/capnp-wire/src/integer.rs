@@ -15,6 +15,13 @@ pub enum WireError {
     },
     /// A signed relative offset moved before byte/word position zero.
     OffsetBeforeStart { base: usize, delta: i32 },
+    /// A value cannot be represented by its allotted wire bitfield.
+    ValueOutOfRange {
+        field: &'static str,
+        value: i64,
+        min: i64,
+        max: i64,
+    },
 }
 
 impl fmt::Display for WireError {
@@ -32,6 +39,15 @@ impl fmt::Display for WireError {
             Self::OffsetBeforeStart { base, delta } => {
                 write!(formatter, "wire offset {delta} moves before base {base}")
             }
+            Self::ValueOutOfRange {
+                field,
+                value,
+                min,
+                max,
+            } => write!(
+                formatter,
+                "wire field {field} value {value} is outside {min}..={max}"
+            ),
         }
     }
 }

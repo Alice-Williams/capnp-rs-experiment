@@ -13,6 +13,7 @@
 
 mod endian;
 mod integer;
+mod pointer;
 
 pub use endian::{
     Word, read_f32_le, read_f64_le, read_i8, read_i16_le, read_i32_le, read_i64_le, read_u8,
@@ -20,6 +21,10 @@ pub use endian::{
     write_i32_le, write_i64_le, write_u8, write_u16_le, write_u32_le, write_u64_le,
 };
 pub use integer::{WireError, checked_add_signed, checked_range, checked_word_range};
+pub use pointer::{
+    ElementSize, FarPointerFields, InlineCompositeTagFields, ListPointerFields, PointerKind,
+    StructPointerFields, WirePointer,
+};
 
 /// Cap'n Proto's fundamental wire-format unit is a 64-bit word.
 pub const WORD_BYTES: usize = 8;
