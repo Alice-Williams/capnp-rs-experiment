@@ -56,6 +56,7 @@ parallel_build = "not-started"
 std = "workspace-skeleton"
 no_std_alloc = "planned"
 no_allocation = "planned"
+construction = "M11 exclusive zeroed single-segment arena with typed offsets and base-shape emitters"
 
 [milestones]
 M00 = "complete"
@@ -69,6 +70,15 @@ M07 = "complete"
 M08 = "complete"
 M09 = "complete"
 M10 = "complete"
+M11 = "complete"
+
+[evidence.M11]
+crate = "crates/capnp-message"
+oracle_schema = "conformance/schemas/builder-fixture.capnp"
+oracle_check = "tools/verify-m11-cpp-decode.sh: pinned C++ decodes the native 248-byte flat message with exact expected values"
+coverage = ["root struct and list initialization", "growth from a one-word reservation", "default-XOR scalar writes", "all primitive list encodings", "Text and Data", "nested structs", "pointer lists", "nested lists", "inline-composite struct lists", "capability pointer emission", "empty and zero-sized allocations", "bounds, size, and allocation limits"]
+safety = ["all allocation growth is zero-initialized", "typed word offsets instead of native pointers", "child builders exclusively reborrow the arena", "aliasing builders rejected by compile-fail test", "failed limits do not expose partial allocations"]
+validation = "Rust 1.98 and 1.85 tests; public API and compile-fail doc tests; pinned C++ flat decode; schema syntax; Clippy -D warnings; Bazel 18/18"
 
 [evidence.M10]
 crate = "crates/capnp-message"

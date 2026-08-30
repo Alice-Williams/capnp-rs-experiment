@@ -2,6 +2,7 @@
 
 mod blob;
 mod budget;
+mod builder;
 mod list;
 #[cfg(target_has_atomic = "64")]
 mod owned;
@@ -21,6 +22,10 @@ pub use blob::{BlobError, DataReader, TextReader};
 pub use budget::SharedTraversalBudget;
 pub use budget::{
     BudgetExhausted, LocalTraversalBudget, NestingLimit, NestingLimitExceeded, TraversalBudget,
+};
+pub use builder::{
+    ArenaError, DataListBuilder, ExclusiveArena, ListOffset, PointerListBuilder,
+    PrimitiveListValue, StructBuilder, StructListBuilder, StructOffset, WordOffset,
 };
 pub use list::{
     EnumListIter, EnumListReader, ListReadError, ListReader, PointerListIter, PointerListReader,

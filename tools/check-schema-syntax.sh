@@ -14,6 +14,7 @@ else
 fi
 
 for schema in \
+    builder-fixture.capnp \
     wire-fixture.capnp \
     language-fixture.capnp \
     import-fixture.capnp \

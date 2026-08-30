@@ -15,6 +15,9 @@
   references.
 - `streaming-fixture.capnp` exercises streaming methods, backpressure-shaped
   results, capability returns, and lists of data chunks.
+- `builder-fixture.capnp` is the compact independent C++ decode target for the
+  native arena's scalar, blob, struct, primitive-list, pointer-list,
+  inline-composite, and nested-list output.
 
 The pinned C++ compiler is the final acceptance oracle. The container's system
 compiler may be used as an early syntax check, but its version is not provenance
