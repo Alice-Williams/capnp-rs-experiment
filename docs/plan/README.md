@@ -39,7 +39,7 @@ wire safety or protocol ordering.
 
 - [M00 — Project charter and compatibility manifest](milestones/M00-project-charter-and-compatibility-manifest.md) — in progress
 - [M01 — Reference corpus and benchmark harness](milestones/M01-reference-corpus-and-benchmark-harness.md)
-- [M02 — Safety and concurrency model ADRs](milestones/M02-safety-and-concurrency-model-adrs.md)
+- [M02 — Safety and concurrency model ADRs](milestones/M02-safety-and-concurrency-model-adrs.md) — complete
 
 ### Phase 1 — Wire primitives and safe messages
 

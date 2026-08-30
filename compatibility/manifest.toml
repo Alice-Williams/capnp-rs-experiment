@@ -48,6 +48,11 @@ std = "workspace-skeleton"
 no_std_alloc = "planned"
 no_allocation = "planned"
 
+[milestones]
+M00 = "in-progress"
+M01 = "planned"
+M02 = "complete"
+
 [parallel_gates]
 four_core_shared_read_ratio = 3.0
 four_core_rpc_handler_ratio = 3.0
