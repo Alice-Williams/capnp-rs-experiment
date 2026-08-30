@@ -1,0 +1,55 @@
+producer = "capnproto-rust-capnpc"
+repository = "https://github.com/capnproto/capnproto-rust.git"
+commit = "2228b71e55cee819c30450bb9bfd9c1f6a722429"
+capnpc_version = "0.27.0"
+binary_sha256 = "35b16697d581ecac65fa4d211f6981bdbfe39ed88785738807a8a1d04db1006f"
+request_producer = "capnproto-c++"
+request_producer_commit = "e7c9cd96f1505b5ae486db7821006c2f5dce5b5b"
+request_producer_version = "Cap'n Proto version 2.0-dev"
+generator = "tools/generate-rust-fixtures.sh"
+command = "capnp compile --src-prefix=conformance/schemas -Iconformance/schemas -o<capnpc-rust>:<output> <schema>"
+
+[[schema]]
+path = "conformance/schemas/evolution-v1.capnp"
+sha256 = "52e2aef150349e65e3cb53bc78a73f437656b5322bffcdb3cc5f223ec2c5fa3b"
+output = "evolution_v1_capnp.rs"
+
+[[schema]]
+path = "conformance/schemas/evolution-v2.capnp"
+sha256 = "491d63466427cff4289234eae0dae073c3f4c1efdc7a476d77246aef22a80c12"
+output = "evolution_v2_capnp.rs"
+
+[[schema]]
+path = "conformance/schemas/import-fixture.capnp"
+sha256 = "77b63f2c548c62f7ff30b971561b6659fe9a3aba0c115f0241c26a671a54116b"
+output = "import_fixture_capnp.rs"
+
+[[schema]]
+path = "conformance/schemas/language-fixture.capnp"
+sha256 = "9866cc6d7246b8520f48e55ca542a42b020b3cd371965569945964c098d64816"
+output = "language_fixture_capnp.rs"
+
+[[schema]]
+path = "conformance/schemas/wire-fixture.capnp"
+sha256 = "425508a1fa43e56660a78f30605e1f083c7d9f49579b7b3979204ab30d2972f6"
+output = "wire_fixture_capnp.rs"
+
+[[output]]
+path = "evolution_v1_capnp.rs"
+sha256 = "5a45c5abedecccee3c3e834df608e152831dea0d4342cf55a1f02a86584afa68"
+
+[[output]]
+path = "evolution_v2_capnp.rs"
+sha256 = "e42c5cfd666a4216e2b011cbb2b63b36a4de49cf3d26b15d7e40cfea00dab4a7"
+
+[[output]]
+path = "import_fixture_capnp.rs"
+sha256 = "9997d8aeda4421bc4aa8d1cbed286a1edb6436ad11db269ff72413959d78bf03"
+
+[[output]]
+path = "language_fixture_capnp.rs"
+sha256 = "d0b0808a943aef7d0e1162f450c021ba42c473c0736bbbbb6c760ea875e86e27"
+
+[[output]]
+path = "wire_fixture_capnp.rs"
+sha256 = "343c35cdd13e081c4f767aa3f0955a3c71a6b95fa148e898dbe75d99ebe8ff54"

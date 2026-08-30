@@ -19,3 +19,10 @@ sh_test(
         "fixtures/source/**",
     ]) + ["//conformance/schemas:schema_files"],
 )
+
+sh_test(
+    name = "rust_fixture_hashes_test",
+    srcs = ["verify-rust-fixtures.sh"],
+    data = glob(["fixtures/capnproto-rust/**"])
+        + ["//conformance/schemas:schema_files"],
+)

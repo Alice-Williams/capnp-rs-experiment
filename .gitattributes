@@ -1,2 +1,4 @@
 * text=auto eol=lf
 *.bin binary
+# Preserve exact code-generator output, including upstream whitespace quirks.
+conformance/fixtures/capnproto-rust/**/*.rs -whitespace
