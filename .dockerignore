@@ -1,0 +1,7 @@
+.git
+.devcontainer/.cache
+target
+bazel-bin
+bazel-out
+bazel-testlogs
+.cache
