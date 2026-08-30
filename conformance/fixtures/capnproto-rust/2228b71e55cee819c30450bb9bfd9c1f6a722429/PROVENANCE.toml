@@ -20,18 +20,28 @@ sha256 = "491d63466427cff4289234eae0dae073c3f4c1efdc7a476d77246aef22a80c12"
 output = "evolution_v2_capnp.rs"
 
 [[schema]]
+path = "conformance/schemas/evolution-v3.capnp"
+sha256 = "1813b83c6b1b437786bf9eb858ef0d3852037e7fba6c21aa43b366b01b9781c3"
+output = "evolution_v3_capnp.rs"
+
+[[schema]]
 path = "conformance/schemas/import-fixture.capnp"
 sha256 = "77b63f2c548c62f7ff30b971561b6659fe9a3aba0c115f0241c26a671a54116b"
 output = "import_fixture_capnp.rs"
 
 [[schema]]
 path = "conformance/schemas/language-fixture.capnp"
-sha256 = "9866cc6d7246b8520f48e55ca542a42b020b3cd371965569945964c098d64816"
+sha256 = "f2514581e686efdf18a4bf33305f48531cbcdf70541a89750c282c79955968a5"
 output = "language_fixture_capnp.rs"
 
 [[schema]]
+path = "conformance/schemas/streaming-fixture.capnp"
+sha256 = "60fd1f08e21660d58652a62d846995a1b330514595f588142563525abf5da8e4"
+output = "streaming_fixture_capnp.rs"
+
+[[schema]]
 path = "conformance/schemas/wire-fixture.capnp"
-sha256 = "425508a1fa43e56660a78f30605e1f083c7d9f49579b7b3979204ab30d2972f6"
+sha256 = "90033dafffbf663a85c6091c89964078553b023bb023b16bef8917f17a3a57c9"
 output = "wire_fixture_capnp.rs"
 
 [[output]]
@@ -43,13 +53,21 @@ path = "evolution_v2_capnp.rs"
 sha256 = "e42c5cfd666a4216e2b011cbb2b63b36a4de49cf3d26b15d7e40cfea00dab4a7"
 
 [[output]]
+path = "evolution_v3_capnp.rs"
+sha256 = "b8b37aabc22e129915bc9be42ed10f6f346f299176e18f6384a17c67548089e2"
+
+[[output]]
 path = "import_fixture_capnp.rs"
 sha256 = "9997d8aeda4421bc4aa8d1cbed286a1edb6436ad11db269ff72413959d78bf03"
 
 [[output]]
 path = "language_fixture_capnp.rs"
-sha256 = "d0b0808a943aef7d0e1162f450c021ba42c473c0736bbbbb6c760ea875e86e27"
+sha256 = "2ba95613d249ff7a648bba915c323de8a0f01f200882a3ba90aab09706aeec3e"
+
+[[output]]
+path = "streaming_fixture_capnp.rs"
+sha256 = "4a00793b793435dafc2b4a28d1dc91fc89767b65dacc9278ab799708c96ca5fb"
 
 [[output]]
 path = "wire_fixture_capnp.rs"
-sha256 = "343c35cdd13e081c4f767aa3f0955a3c71a6b95fa148e898dbe75d99ebe8ff54"
+sha256 = "a343829ba0435d0164e9e3e1d16d1d0b1726364964fb10f75ef74714f804b6d2"

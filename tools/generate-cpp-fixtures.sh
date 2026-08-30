@@ -57,8 +57,10 @@ evolution_input=conformance/fixtures/source/evolution-v1.txt
 schemas=(
     conformance/schemas/evolution-v1.capnp
     conformance/schemas/evolution-v2.capnp
+    conformance/schemas/evolution-v3.capnp
     conformance/schemas/import-fixture.capnp
     conformance/schemas/language-fixture.capnp
+    conformance/schemas/streaming-fixture.capnp
     conformance/schemas/wire-fixture.capnp
 )
 for schema in "${schemas[@]}"; do

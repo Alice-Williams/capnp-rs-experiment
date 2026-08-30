@@ -70,4 +70,6 @@ struct WireFixture @0x99c9abad73963922 {
   emptyStructs @41 :List(Empty);
   defaulted @42 :UInt32 = 123456;
   defaultText @43 :Text = "default text";
+  anyStruct @44 :AnyStruct;
+  anyList @45 :AnyList;
 }

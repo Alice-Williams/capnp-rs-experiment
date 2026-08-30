@@ -4,11 +4,11 @@ commit = "e7c9cd96f1505b5ae486db7821006c2f5dce5b5b"
 reported_version = "Cap'n Proto version 2.0-dev"
 generator = "tools/generate-cpp-fixtures.sh"
 wire_schema = "conformance/schemas/wire-fixture.capnp"
-wire_schema_sha256 = "425508a1fa43e56660a78f30605e1f083c7d9f49579b7b3979204ab30d2972f6"
+wire_schema_sha256 = "90033dafffbf663a85c6091c89964078553b023bb023b16bef8917f17a3a57c9"
 wire_input = "conformance/fixtures/source/wire-fixture.txt"
 wire_input_sha256 = "216d5390813d8bf13838460cd81161bbb72b91c16c8bf85458fb835537c6f4fc"
 language_schema = "conformance/schemas/language-fixture.capnp"
-language_schema_sha256 = "9866cc6d7246b8520f48e55ca542a42b020b3cd371965569945964c098d64816"
+language_schema_sha256 = "f2514581e686efdf18a4bf33305f48531cbcdf70541a89750c282c79955968a5"
 language_input = "conformance/fixtures/source/language-fixture.txt"
 language_input_sha256 = "e98ea1269a0b0204d57b24f2b94956132c3aa0567c477a3ef802c43aace0fd15"
 evolution_schema = "conformance/schemas/evolution-v1.capnp"
@@ -37,18 +37,28 @@ schema_sha256 = "491d63466427cff4289234eae0dae073c3f4c1efdc7a476d77246aef22a80c1
 output = "compiler-request-evolution-v2.bin"
 
 [[compiler_request]]
+schema = "conformance/schemas/evolution-v3.capnp"
+schema_sha256 = "1813b83c6b1b437786bf9eb858ef0d3852037e7fba6c21aa43b366b01b9781c3"
+output = "compiler-request-evolution-v3.bin"
+
+[[compiler_request]]
 schema = "conformance/schemas/import-fixture.capnp"
 schema_sha256 = "77b63f2c548c62f7ff30b971561b6659fe9a3aba0c115f0241c26a671a54116b"
 output = "compiler-request-import-fixture.bin"
 
 [[compiler_request]]
 schema = "conformance/schemas/language-fixture.capnp"
-schema_sha256 = "9866cc6d7246b8520f48e55ca542a42b020b3cd371965569945964c098d64816"
+schema_sha256 = "f2514581e686efdf18a4bf33305f48531cbcdf70541a89750c282c79955968a5"
 output = "compiler-request-language-fixture.bin"
 
 [[compiler_request]]
+schema = "conformance/schemas/streaming-fixture.capnp"
+schema_sha256 = "60fd1f08e21660d58652a62d846995a1b330514595f588142563525abf5da8e4"
+output = "compiler-request-streaming-fixture.bin"
+
+[[compiler_request]]
 schema = "conformance/schemas/wire-fixture.capnp"
-schema_sha256 = "425508a1fa43e56660a78f30605e1f083c7d9f49579b7b3979204ab30d2972f6"
+schema_sha256 = "90033dafffbf663a85c6091c89964078553b023bb023b16bef8917f17a3a57c9"
 output = "compiler-request-wire-fixture.bin"
 
 [[output]]
@@ -60,16 +70,24 @@ path = "compiler-request-evolution-v2.bin"
 sha256 = "2fcecad58cec7eaf66f1da6fc1d4d718fdcf31f9bd66951523eda7399ffad1ee"
 
 [[output]]
+path = "compiler-request-evolution-v3.bin"
+sha256 = "73b1c57fe119118c0bf2b2d1c806bc5d40f0644a0865f0716ff709769c3c245a"
+
+[[output]]
 path = "compiler-request-import-fixture.bin"
-sha256 = "8f29731863ef593506474a7592b6be1331f4be35dabd21ed57c4f3b4cc7f7ac8"
+sha256 = "6633295d6c5b0facd4cf24e8c28468520f71a34bd1b6d5abda11db5692fccd53"
 
 [[output]]
 path = "compiler-request-language-fixture.bin"
-sha256 = "4aa8387992dfe83d6d8d12e00141235c066959f030885d15a8e89ce423c0c2e3"
+sha256 = "493971f7fc42b4f34ccd03bc3a987fbea6c21bf983f6aebb249b247ffc07ed0a"
+
+[[output]]
+path = "compiler-request-streaming-fixture.bin"
+sha256 = "b2f858c5d4bfdff598ecc3b5f20fb540a125f0d3dc28b4e7c8e716bb2b9f4edd"
 
 [[output]]
 path = "compiler-request-wire-fixture.bin"
-sha256 = "0c1444d394375361ec9ec6e933503d68e19543360f9faca78d1a3bb8ba212881"
+sha256 = "710d0f3b8fa044bc1e84e6ec2b96c237ad872bbeee097db2cdd45f0b9a5bea6b"
 
 [[output]]
 path = "evolution-v1-unpacked.bin"
@@ -81,16 +99,16 @@ sha256 = "072f28d7fb56dd5fff07d93ca24eaa99d2ddce2e04f1435445ecbf8073a45e77"
 
 [[output]]
 path = "wire-flat.bin"
-sha256 = "69485a806d971d3f77193ee5995647aa5dbac74d50b778d22cdadf00cedeecaa"
+sha256 = "a62ba36fec13ab4149323e29db1595e3c22458eb3b5c9d25d0f37b39f03d1dc5"
 
 [[output]]
 path = "wire-multisegment.bin"
-sha256 = "51b81eca45698b2872cf33e9b9bea10fea29b3738768471ab74aa3e715352dc7"
+sha256 = "f97c389a1eca07bf467a4ece3480be7236072649bbad05aa4f9a9049792c0e13"
 
 [[output]]
 path = "wire-packed.bin"
-sha256 = "23edefa1631c531c873b778048d06b5345da6447ea8f16b75449f6aa2646844a"
+sha256 = "cb6c510f2fec05315e3fabd8eb04aec769a3ea8c1d6b6574317e2d90e1022471"
 
 [[output]]
 path = "wire-unpacked.bin"
-sha256 = "e0d681cc82c859915c9a8cd87dfc408b686550f9334ab13cd5996dfe7517c3c8"
+sha256 = "3bb2f03bd64067a1dfde1cdd29aa2fabb6564de72bdf0173ff5631383ae51db6"

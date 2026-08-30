@@ -776,18 +776,18 @@ pub mod language_fixture {
         }
     }
     mod _private {
-        pub(crate) static ENCODED_NODE: [::capnp::Word; 155] = [
+        pub(crate) static ENCODED_NODE: [::capnp::Word; 166] = [
             ::capnp::word(0, 0, 0, 0, 6, 0, 6, 0),
             ::capnp::word(22, 177, 169, 26, 178, 53, 196, 180),
             ::capnp::word(23, 0, 0, 0, 1, 0, 1, 0),
             ::capnp::word(69, 69, 250, 136, 208, 253, 107, 205),
             ::capnp::word(4, 0, 7, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(23, 1, 0, 0, 119, 2, 0, 0),
+            ::capnp::word(23, 1, 0, 0, 20, 3, 0, 0),
             ::capnp::word(21, 0, 0, 0, 58, 1, 0, 0),
-            ::capnp::word(37, 0, 0, 0, 55, 0, 0, 0),
+            ::capnp::word(37, 0, 0, 0, 103, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-            ::capnp::word(73, 0, 0, 0, 31, 1, 0, 0),
+            ::capnp::word(117, 0, 0, 0, 31, 1, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(108, 97, 110, 103, 117, 97, 103, 101),
@@ -795,17 +795,28 @@ pub mod language_fixture {
             ::capnp::word(46, 99, 97, 112, 110, 112, 58, 76),
             ::capnp::word(97, 110, 103, 117, 97, 103, 101, 70),
             ::capnp::word(105, 120, 116, 117, 114, 101, 0, 0),
-            ::capnp::word(12, 0, 0, 0, 1, 0, 1, 0),
+            ::capnp::word(24, 0, 0, 0, 1, 0, 1, 0),
             ::capnp::word(58, 159, 7, 214, 124, 201, 207, 168),
-            ::capnp::word(17, 0, 0, 0, 50, 0, 0, 0),
+            ::capnp::word(41, 0, 0, 0, 50, 0, 0, 0),
             ::capnp::word(138, 229, 240, 184, 117, 250, 240, 214),
-            ::capnp::word(13, 0, 0, 0, 58, 0, 0, 0),
+            ::capnp::word(37, 0, 0, 0, 58, 0, 0, 0),
             ::capnp::word(38, 212, 106, 236, 111, 102, 196, 216),
-            ::capnp::word(9, 0, 0, 0, 74, 0, 0, 0),
+            ::capnp::word(33, 0, 0, 0, 74, 0, 0, 0),
+            ::capnp::word(203, 236, 206, 218, 164, 59, 229, 135),
+            ::capnp::word(33, 0, 0, 0, 82, 0, 0, 0),
+            ::capnp::word(219, 176, 34, 160, 162, 97, 117, 137),
+            ::capnp::word(33, 0, 0, 0, 58, 0, 0, 0),
+            ::capnp::word(183, 136, 245, 27, 238, 88, 154, 224),
+            ::capnp::word(29, 0, 0, 0, 82, 0, 0, 0),
             ::capnp::word(83, 116, 97, 116, 101, 0, 0, 0),
             ::capnp::word(97, 110, 115, 119, 101, 114, 0, 0),
             ::capnp::word(103, 114, 101, 101, 116, 105, 110, 103),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
+            ::capnp::word(115, 105, 103, 110, 97, 116, 117, 114),
+            ::capnp::word(101, 0, 0, 0, 0, 0, 0, 0),
+            ::capnp::word(112, 114, 105, 109, 101, 115, 0, 0),
+            ::capnp::word(115, 97, 109, 112, 108, 101, 66, 111),
+            ::capnp::word(120, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(20, 0, 0, 0, 3, 0, 4, 0),
             ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
             ::capnp::word(0, 0, 1, 0, 0, 0, 0, 0),
@@ -1047,6 +1058,27 @@ pub mod language_fixture {
     }
     pub const ANSWER: u64 = 42;
     pub const GREETING: &str = "hello";
+    pub const SIGNATURE: &[u8] = &[0, 202, 254, 255];
+    pub static PRIMES: ::capnp::constant::Reader<::capnp::primitive_list::Owned<u16>> = {
+        static WORDS: [::capnp::Word; 3] = [
+            ::capnp::word(1, 0, 0, 0, 43, 0, 0, 0),
+            ::capnp::word(2, 0, 3, 0, 5, 0, 7, 0),
+            ::capnp::word(11, 0, 0, 0, 0, 0, 0, 0),
+        ];
+        static ARENA: ::capnp::private::arena::GeneratedCodeArena = ::capnp::private::arena::GeneratedCodeArena::new(&WORDS);
+        ::capnp::constant::Reader::new(&ARENA)
+    };
+    pub static SAMPLE_BOX: ::capnp::constant::Reader<crate::language_fixture_capnp::box_::Owned<::capnp::text::Owned>> = {
+        static WORDS: [::capnp::Word; 5] = [
+            ::capnp::word(0, 0, 0, 0, 0, 0, 1, 0),
+            ::capnp::word(1, 0, 0, 0, 194, 0, 0, 0),
+            ::capnp::word(99, 111, 110, 115, 116, 97, 110, 116),
+            ::capnp::word(32, 103, 101, 110, 101, 114, 105, 99),
+            ::capnp::word(32, 115, 116, 114, 117, 99, 116, 0),
+        ];
+        static ARENA: ::capnp::private::arena::GeneratedCodeArena = ::capnp::private::arena::GeneratedCodeArena::new(&WORDS);
+        ::capnp::constant::Reader::new(&ARENA)
+    };
 }
 
 
@@ -1280,7 +1312,7 @@ pub mod base_service {
                 ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
                 ::capnp::word(0, 0, 7, 0, 0, 0, 0, 0),
                 ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-                ::capnp::word(175, 2, 0, 0, 177, 2, 0, 0),
+                ::capnp::word(76, 3, 0, 0, 78, 3, 0, 0),
                 ::capnp::word(21, 0, 0, 0, 122, 1, 0, 0),
                 ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
                 ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -1459,7 +1491,7 @@ pub mod base_service {
                 ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
                 ::capnp::word(0, 0, 7, 0, 0, 0, 0, 0),
                 ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
-                ::capnp::word(181, 2, 0, 0, 196, 2, 0, 0),
+                ::capnp::word(82, 3, 0, 0, 97, 3, 0, 0),
                 ::capnp::word(21, 0, 0, 0, 130, 1, 0, 0),
                 ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
                 ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -1798,7 +1830,7 @@ pub mod generic_service { /* (T) */
                 ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
                 ::capnp::word(1, 0, 7, 0, 0, 0, 0, 0),
                 ::capnp::word(0, 0, 0, 0, 1, 0, 0, 0),
-                ::capnp::word(26, 3, 0, 0, 37, 3, 0, 0),
+                ::capnp::word(183, 3, 0, 0, 194, 3, 0, 0),
                 ::capnp::word(21, 0, 0, 0, 138, 1, 0, 0),
                 ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
                 ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -2027,7 +2059,7 @@ pub mod generic_service { /* (T) */
                 ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
                 ::capnp::word(1, 0, 7, 0, 0, 0, 0, 0),
                 ::capnp::word(0, 0, 0, 0, 1, 0, 0, 0),
-                ::capnp::word(41, 3, 0, 0, 51, 3, 0, 0),
+                ::capnp::word(198, 3, 0, 0, 208, 3, 0, 0),
                 ::capnp::word(21, 0, 0, 0, 146, 1, 0, 0),
                 ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
                 ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -2280,7 +2312,7 @@ pub mod generic_service { /* (T) */
                 ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
                 ::capnp::word(2, 0, 7, 0, 0, 0, 0, 0),
                 ::capnp::word(0, 0, 0, 0, 1, 0, 0, 0),
-                ::capnp::word(62, 3, 0, 0, 83, 3, 0, 0),
+                ::capnp::word(219, 3, 0, 0, 240, 3, 0, 0),
                 ::capnp::word(21, 0, 0, 0, 138, 1, 0, 0),
                 ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
                 ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -2494,7 +2526,7 @@ pub mod generic_service { /* (T) */
                 ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
                 ::capnp::word(0, 0, 7, 0, 0, 0, 0, 0),
                 ::capnp::word(0, 0, 0, 0, 1, 0, 0, 0),
-                ::capnp::word(87, 3, 0, 0, 89, 3, 0, 0),
+                ::capnp::word(244, 3, 0, 0, 246, 3, 0, 0),
                 ::capnp::word(21, 0, 0, 0, 146, 1, 0, 0),
                 ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
                 ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -2704,7 +2736,7 @@ pub mod generic_service { /* (T) */
                 ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
                 ::capnp::word(1, 0, 7, 0, 0, 0, 0, 0),
                 ::capnp::word(0, 0, 0, 0, 1, 0, 0, 0),
-                ::capnp::word(110, 3, 0, 0, 120, 3, 0, 0),
+                ::capnp::word(11, 4, 0, 0, 21, 4, 0, 0),
                 ::capnp::word(21, 0, 0, 0, 186, 1, 0, 0),
                 ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
                 ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
@@ -2932,7 +2964,7 @@ pub mod generic_service { /* (T) */
                 ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
                 ::capnp::word(1, 0, 7, 0, 0, 0, 0, 0),
                 ::capnp::word(0, 0, 0, 0, 1, 0, 0, 0),
-                ::capnp::word(124, 3, 0, 0, 140, 3, 0, 0),
+                ::capnp::word(25, 4, 0, 0, 41, 4, 0, 0),
                 ::capnp::word(21, 0, 0, 0, 194, 1, 0, 0),
                 ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),
                 ::capnp::word(0, 0, 0, 0, 0, 0, 0, 0),

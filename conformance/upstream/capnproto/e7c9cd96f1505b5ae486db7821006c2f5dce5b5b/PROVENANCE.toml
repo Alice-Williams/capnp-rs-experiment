@@ -18,3 +18,7 @@ sha256 = "22680f70c56e3c44dc73b52bf8dfd2838a5ea44249be01609be2d362d308b518"
 [[files]]
 path = "persistent.capnp"
 sha256 = "d77d4d2e2c1e9c42ded13de54ed11b535b076ac210945b53ecf76fd7648a867a"
+
+[[files]]
+path = "stream.capnp"
+sha256 = "5b0656ca3daca9ef28740c14813d5dd474fd0f9991ce99f652838f4cccf6fb30"

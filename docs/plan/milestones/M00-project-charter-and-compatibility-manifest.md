@@ -18,7 +18,7 @@ Create the workspace skeleton, charter, support matrix, pinned upstream revision
 - [x] Add an ADR template and repository-wide agent rules.
 - [x] Add CI steps for remote pin verification, development/MSRV Cargo tests,
   and Bazel tests.
-- [x] Verify all four schema hashes against the pinned upstream commit.
+- [x] Verify all pinned standard-schema hashes against the upstream commit.
 - [x] Run Cargo tests/Clippy on Rust 1.98.0, Cargo tests on Rust 1.85.0, and
   all Bazel tests in the Linux development container.
 - [ ] Select and add the repository license.

@@ -15,8 +15,10 @@ grep -Fx "request_producer_commit = \"$cpp_commit\"" PROVENANCE.toml
 expected_files=(
     evolution_v1_capnp.rs
     evolution_v2_capnp.rs
+    evolution_v3_capnp.rs
     import_fixture_capnp.rs
     language_fixture_capnp.rs
+    streaming_fixture_capnp.rs
     wire_fixture_capnp.rs
 )
 
@@ -32,6 +34,8 @@ done < SHA256SUMS
 cd "$repo_root"
 printf '%s  %s\n' 52e2aef150349e65e3cb53bc78a73f437656b5322bffcdb3cc5f223ec2c5fa3b conformance/schemas/evolution-v1.capnp | sha256sum --check
 printf '%s  %s\n' 491d63466427cff4289234eae0dae073c3f4c1efdc7a476d77246aef22a80c12 conformance/schemas/evolution-v2.capnp | sha256sum --check
+printf '%s  %s\n' 1813b83c6b1b437786bf9eb858ef0d3852037e7fba6c21aa43b366b01b9781c3 conformance/schemas/evolution-v3.capnp | sha256sum --check
 printf '%s  %s\n' 77b63f2c548c62f7ff30b971561b6659fe9a3aba0c115f0241c26a671a54116b conformance/schemas/import-fixture.capnp | sha256sum --check
-printf '%s  %s\n' 9866cc6d7246b8520f48e55ca542a42b020b3cd371965569945964c098d64816 conformance/schemas/language-fixture.capnp | sha256sum --check
-printf '%s  %s\n' 425508a1fa43e56660a78f30605e1f083c7d9f49579b7b3979204ab30d2972f6 conformance/schemas/wire-fixture.capnp | sha256sum --check
+printf '%s  %s\n' f2514581e686efdf18a4bf33305f48531cbcdf70541a89750c282c79955968a5 conformance/schemas/language-fixture.capnp | sha256sum --check
+printf '%s  %s\n' 60fd1f08e21660d58652a62d846995a1b330514595f588142563525abf5da8e4 conformance/schemas/streaming-fixture.capnp | sha256sum --check
+printf '%s  %s\n' 90033dafffbf663a85c6091c89964078553b023bb023b16bef8917f17a3a57c9 conformance/schemas/wire-fixture.capnp | sha256sum --check

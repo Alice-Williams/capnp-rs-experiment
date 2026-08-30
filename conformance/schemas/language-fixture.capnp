@@ -30,6 +30,9 @@ struct LanguageFixture @0xb4c435b21aa9b116 {
   state @4 :State = ready;
   const answer :UInt64 = 42;
   const greeting :Text = "hello";
+  const signature :Data = 0x"00cafeff";
+  const primes :List(UInt16) = [2, 3, 5, 7, 11];
+  const sampleBox :Box(Text) = (value = "constant generic struct");
 }
 
 interface BaseService @0xb02e0a639958c628 {
