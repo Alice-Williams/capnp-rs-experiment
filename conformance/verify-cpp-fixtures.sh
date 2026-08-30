@@ -23,6 +23,7 @@ expected_files=(
     wire-flat.bin
     wire-multisegment.bin
     wire-packed.bin
+    wire-two-segment.bin
     wire-unpacked.bin
 )
 

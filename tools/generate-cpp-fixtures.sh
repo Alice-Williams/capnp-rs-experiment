@@ -47,6 +47,8 @@ evolution_input=conformance/fixtures/source/evolution-v1.txt
     < "$wire_input" > "$staging/wire-packed.bin"
 "$oracle" encode --flat "$wire_schema" WireFixture \
     < "$wire_input" > "$staging/wire-flat.bin"
+"$oracle" encode --segment-size=64 "$wire_schema" WireFixture \
+    < "$wire_input" > "$staging/wire-two-segment.bin"
 "$oracle" encode --segment-size=1 "$wire_schema" WireFixture \
     < "$wire_input" > "$staging/wire-multisegment.bin"
 "$oracle" encode "$language_schema" LanguageFixture \
@@ -107,6 +109,7 @@ evolution_input_sha=$(sha256sum "$evolution_input" | cut -d ' ' -f 1)
     printf '  "capnp encode wire-fixture.capnp WireFixture",\n'
     printf '  "capnp encode --packed wire-fixture.capnp WireFixture",\n'
     printf '  "capnp encode --flat wire-fixture.capnp WireFixture",\n'
+    printf '  "capnp encode --segment-size=64 wire-fixture.capnp WireFixture",\n'
     printf '  "capnp encode --segment-size=1 wire-fixture.capnp WireFixture",\n'
     printf '  "capnp encode language-fixture.capnp LanguageFixture",\n'
     printf '  "capnp encode evolution-v1.capnp Record",\n'

@@ -20,6 +20,7 @@ commands = [
   "capnp encode wire-fixture.capnp WireFixture",
   "capnp encode --packed wire-fixture.capnp WireFixture",
   "capnp encode --flat wire-fixture.capnp WireFixture",
+  "capnp encode --segment-size=64 wire-fixture.capnp WireFixture",
   "capnp encode --segment-size=1 wire-fixture.capnp WireFixture",
   "capnp encode language-fixture.capnp LanguageFixture",
   "capnp encode evolution-v1.capnp Record",
@@ -108,6 +109,10 @@ sha256 = "f97c389a1eca07bf467a4ece3480be7236072649bbad05aa4f9a9049792c0e13"
 [[output]]
 path = "wire-packed.bin"
 sha256 = "cb6c510f2fec05315e3fabd8eb04aec769a3ea8c1d6b6574317e2d90e1022471"
+
+[[output]]
+path = "wire-two-segment.bin"
+sha256 = "d43dbaece980df2f453bd903d7f3cd847f687f787aca98f6356331c6e189d590"
 
 [[output]]
 path = "wire-unpacked.bin"
