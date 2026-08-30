@@ -22,3 +22,7 @@ sha256 = "d77d4d2e2c1e9c42ded13de54ed11b535b076ac210945b53ecf76fd7648a867a"
 [[files]]
 path = "stream.capnp"
 sha256 = "5b0656ca3daca9ef28740c14813d5dd474fd0f9991ce99f652838f4cccf6fb30"
+
+[[files]]
+path = "c++.capnp"
+sha256 = "52ead0eaa560b21e692d6f3d9966a52dfc99e19f53ae2d7c7bd2944a240d86de"

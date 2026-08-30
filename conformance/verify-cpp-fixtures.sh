@@ -16,6 +16,7 @@ expected_files=(
     compiler-request-evolution-v3.bin
     compiler-request-import-fixture.bin
     compiler-request-language-fixture.bin
+    compiler-request-schema.bin
     compiler-request-streaming-fixture.bin
     compiler-request-wire-fixture.bin
     evolution-v1-unpacked.bin

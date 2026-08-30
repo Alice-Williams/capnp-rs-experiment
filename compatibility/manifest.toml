@@ -1,5 +1,5 @@
 manifest_version = 1
-updated = "2026-08-30"
+updated = "2026-08-31"
 
 [project]
 license = "MIT"
@@ -33,6 +33,11 @@ name = "stream.capnp"
 url = "https://raw.githubusercontent.com/capnproto/capnproto/e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/c%2B%2B/src/capnp/stream.capnp"
 sha256 = "5b0656ca3daca9ef28740c14813d5dd474fd0f9991ce99f652838f4cccf6fb30"
 
+[[upstream.capnproto.schemas]]
+name = "c++.capnp"
+url = "https://raw.githubusercontent.com/capnproto/capnproto/e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/c%2B%2B/src/capnp/c%2B%2B.capnp"
+sha256 = "52ead0eaa560b21e692d6f3d9966a52dfc99e19f53ae2d7c7bd2944a240d86de"
+
 [upstream.capnproto_rust]
 role = "secondary regression and Rust ergonomics oracle"
 commit = "2228b71e55cee819c30450bb9bfd9c1f6a722429"
@@ -49,7 +54,7 @@ rules_shell = "0.8.0"
 [support]
 wire = "M10 borrowed and Arc-owned typed readers with stable coordinate references"
 generated_api = "M21 typed data and thread-safe local interface APIs with exact pipelines"
-native_compiler = "M24 deterministic semantic resolution and C++-compatible struct/group/union layout; CodeGeneratorRequest emission remains M25"
+native_compiler = "M25 native CodeGeneratorRequest construction, deterministic standard serialization, and self-hosted Rust generation without a system capnp compiler"
 rpc_level = "M21 in-memory local dispatch, inheritance, streaming completion, and capability pipelines; network protocol deferred to M32+"
 parallel_read = "not-started"
 parallel_build = "not-started"
@@ -85,6 +90,18 @@ M21 = "complete"
 M22 = "complete"
 M23 = "complete"
 M24 = "complete"
+M25 = "complete"
+
+[evidence.M25]
+crates = ["crates/capnp-compiler", "crates/capnp-schema", "crates/capnp-message", "crates/capnp-codegen"]
+bootstrap = "the pinned schema.capnp CodeGeneratorRequest is checked in as reflection data; native compilation of the pinned schema source reproduces its semantic model, emits a reloadable standard request, and generates byte-identical canonical Rust"
+native_model = ["files, structs, groups, enums, constants, annotations, interfaces, methods, parameters and results", "explicit, child, group, and method IDs", "types, brands, generics, annotations, superclasses, imports, source information, and identifiers", "scalar and owned aggregate constants", "streaming result metadata"]
+oracle = "native models agree with all eight pinned C++ CodeGeneratorRequest fixtures; schema.capnp exercises nested unions, qualified identifiers, primitive aliases, documentation, standard annotations, and complete reflection metadata"
+serialization = "all pinned requests serialize through native dynamic builders, reload under bounded validation, and preserve semantic nodes and requested-file metadata"
+self_hosting = "generated fixture crates now resolve .capnp sources, construct native requests, and run Rust code generation during clean Cargo builds without invoking capnp"
+determinism = ["canonical code-generation node identity order", "repeat generation equality", "repeat native request emission equality", "native and reloaded request generation equality"]
+compatibility_fixes = ["aggregate pointer graph copying", "applied generic member expressions", "keyword-named fields and groups", "nested constants and constant references", "implicit layout IDs", "nested-union allocation through containing arms", "union padding ownership", "standard stream and C++ annotation modules"]
+validation = "Rust 1.98 and 1.85 workspace tests; public API docs; Clippy -D warnings; fixture hashes; Bazel complete test suite"
 
 [evidence.M24]
 crate = "crates/capnp-compiler"

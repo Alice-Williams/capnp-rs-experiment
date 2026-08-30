@@ -42,6 +42,8 @@ evolution_v1_schema=conformance/schemas/evolution-v1.capnp
 evolution_v1_input=conformance/fixtures/source/evolution-v1.txt
 evolution_v2_schema=conformance/schemas/evolution-v2.capnp
 evolution_v2_input=conformance/fixtures/source/evolution-v2.txt
+schema_schema="conformance/upstream/capnproto/$commit/schema.capnp"
+oracle_include="$oracle_root/capnproto-$commit/install/include"
 
 "$oracle" encode "$wire_schema" WireFixture \
     < "$wire_input" > "$staging/wire-unpacked.bin"
@@ -77,6 +79,11 @@ for schema in "${schemas[@]}"; do
         -o- \
         "$schema" > "$staging/compiler-request-$schema_name.bin"
 done
+"$oracle" compile \
+    --src-prefix="conformance/upstream/capnproto/$commit" \
+    -I"$oracle_include" \
+    -o- \
+    "$schema_schema" > "$staging/compiler-request-schema.bin"
 
 schema_sha=$(sha256sum "$wire_schema" | cut -d ' ' -f 1)
 input_sha=$(sha256sum "$wire_input" | cut -d ' ' -f 1)
@@ -134,6 +141,10 @@ evolution_v2_input_sha=$(sha256sum "$evolution_v2_input" | cut -d ' ' -f 1)
         printf 'schema_sha256 = "%s"\n' "$compiler_schema_sha"
         printf 'output = "compiler-request-%s.bin"\n' "$schema_name"
     done
+    printf '\n[[compiler_request]]\n'
+    printf 'schema = "%s"\n' "$schema_schema"
+    printf 'schema_sha256 = "%s"\n' "$(sha256sum "$schema_schema" | cut -d ' ' -f 1)"
+    printf 'output = "compiler-request-schema.bin"\n'
     while read -r output_sha output_name; do
         printf '\n[[output]]\n'
         printf 'path = "%s"\n' "$output_name"

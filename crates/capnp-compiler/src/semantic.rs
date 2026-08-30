@@ -15,10 +15,34 @@ use crate::{
     TokenSequence, parse_schema,
 };
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct ModuleSources {
     explicit: BTreeMap<String, Arc<str>>,
     standard: BTreeMap<String, Arc<str>>,
+}
+
+impl Default for ModuleSources {
+    fn default() -> Self {
+        let mut output = Self {
+            explicit: BTreeMap::new(),
+            standard: BTreeMap::new(),
+        };
+        output.insert_standard(
+            "/capnp/stream.capnp",
+            include_str!(concat!(
+                "../../../conformance/upstream/capnproto/",
+                "e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/stream.capnp"
+            )),
+        );
+        output.insert_standard(
+            "/capnp/c++.capnp",
+            include_str!(concat!(
+                "../../../conformance/upstream/capnproto/",
+                "e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/c++.capnp"
+            )),
+        );
+        output
+    }
 }
 
 impl ModuleSources {
@@ -107,11 +131,13 @@ pub struct ResolvedDeclaration {
     pub kind: DeclarationKind,
     pub is_unnamed_union: bool,
     pub id: Option<DeclarationId>,
+    pub id_range: Option<SourceRange>,
     pub generic_parameters: Vec<String>,
     pub annotation_targets: Option<AnnotationTargets>,
     pub expression: Option<Expression>,
     pub value: Option<Expression>,
     pub annotations: Vec<AnnotationUse>,
+    pub doc_comment: Option<String>,
     pub range: SourceRange,
 }
 
@@ -192,6 +218,12 @@ pub enum Expression {
         arguments: Vec<(Option<String>, Expression)>,
         range: SourceRange,
     },
+    Member {
+        base: Box<Expression>,
+        name: String,
+        target: NameTarget,
+        range: SourceRange,
+    },
     Unknown {
         range: SourceRange,
     },
@@ -210,6 +242,7 @@ impl Expression {
             | Self::List { range, .. }
             | Self::Tuple { range, .. }
             | Self::Apply { range, .. }
+            | Self::Member { range, .. }
             | Self::Unknown { range } => *range,
         }
     }
@@ -800,6 +833,41 @@ fn resolve_expression(
                 );
             }
         }
+        Expression::Member {
+            base,
+            name,
+            target,
+            range,
+        } => {
+            resolve_expression(
+                Some(base),
+                module,
+                context,
+                imports,
+                generic_scopes,
+                index,
+                diagnostics,
+            );
+            *target = match terminal_target(base) {
+                Some(NameTarget::Declaration {
+                    module: target_module,
+                    qualified_name,
+                }) => resolve_member_tail(
+                    target_module,
+                    qualified_name,
+                    std::slice::from_ref(name),
+                    index,
+                ),
+                _ => NameTarget::Unresolved,
+            };
+            if *target == NameTarget::Unresolved {
+                diagnostics.push(SemanticDiagnostic {
+                    module: module.to_owned(),
+                    range: *range,
+                    message: format!("unresolved member `{name}`"),
+                });
+            }
+        }
         Expression::Import {
             path,
             member_path,
@@ -970,7 +1038,28 @@ fn parse_declaration(
 ) -> Option<ResolvedDeclaration> {
     let tokens = &statement.tokens;
     let first = identifier(tokens.first()?)?;
-    let (kind, name_index) = match first {
+    let begins_named_declaration = matches!(
+        first,
+        "using" | "const" | "enum" | "struct" | "interface" | "annotation"
+    ) && tokens.get(1).and_then(identifier).is_some();
+    let contextual = match parent_kind {
+        Some(DeclarationKind::Enum) => Some((DeclarationKind::Enumerant, 0)),
+        Some(DeclarationKind::Interface) => Some((DeclarationKind::Method, 0)),
+        Some(DeclarationKind::Struct | DeclarationKind::Union | DeclarationKind::Group)
+            if !begins_named_declaration
+                && tokens.iter().any(|token| operator(token) == Some(":")) =>
+        {
+            Some(if has_named_group_marker(tokens, "group") {
+                (DeclarationKind::Group, 0)
+            } else if has_named_group_marker(tokens, "union") {
+                (DeclarationKind::Union, 0)
+            } else {
+                (DeclarationKind::Field, 0)
+            })
+        }
+        _ => None,
+    };
+    let (kind, name_index) = contextual.unwrap_or(match first {
         "using" => (DeclarationKind::Alias, 1),
         "const" => (DeclarationKind::Const, 1),
         "enum" => (DeclarationKind::Enum, 1),
@@ -978,21 +1067,11 @@ fn parse_declaration(
         "interface" => (DeclarationKind::Interface, 1),
         "annotation" => (DeclarationKind::Annotation, 1),
         "union" => (DeclarationKind::Union, 0),
-        _ => match parent_kind {
-            Some(DeclarationKind::Enum) => (DeclarationKind::Enumerant, 0),
-            Some(DeclarationKind::Interface) => (DeclarationKind::Method, 0),
-            Some(DeclarationKind::Struct | DeclarationKind::Union | DeclarationKind::Group) => {
-                if has_named_group_marker(tokens, "group") {
-                    (DeclarationKind::Group, 0)
-                } else if has_named_group_marker(tokens, "union") {
-                    (DeclarationKind::Union, 0)
-                } else {
-                    (DeclarationKind::Field, 0)
-                }
-            }
-            _ => return None,
-        },
-    };
+        _ => (DeclarationKind::Unknown, 0),
+    });
+    if kind == DeclarationKind::Unknown {
+        return None;
+    }
     let name = if kind == DeclarationKind::Union && name_index == 0 && first == "union" {
         "union".to_owned()
     } else if kind == DeclarationKind::Alias
@@ -1008,7 +1087,7 @@ fn parse_declaration(
         identifier(tokens.get(name_index)?)?.to_owned()
     };
     let qualified_name = parent.map_or_else(|| name.clone(), |parent| format!("{parent}.{name}"));
-    let id = find_id(tokens, kind);
+    let (id, id_range) = find_id(tokens, kind).unzip();
     let generic_parameters = find_generics(tokens, kind);
     let annotation_targets = (kind == DeclarationKind::Annotation)
         .then(|| parse_annotation_targets(tokens))
@@ -1022,11 +1101,13 @@ fn parse_declaration(
         kind,
         is_unnamed_union: kind == DeclarationKind::Union && first == "union",
         id,
+        id_range,
         generic_parameters,
         annotation_targets,
         expression,
         value,
         annotations,
+        doc_comment: statement.doc_comment.clone(),
         range: statement.range,
     })
 }
@@ -1206,6 +1287,15 @@ fn parse_expression_at(tokens: &[Token], cursor: &mut usize) -> Option<Expressio
                 *cursor += 2;
                 continue;
             }
+            let joined = merge(expression.range(), tokens[*cursor + 1].range);
+            expression = Expression::Member {
+                base: Box::new(expression),
+                name: name.to_owned(),
+                target: NameTarget::Pending,
+                range: joined,
+            };
+            *cursor += 2;
+            continue;
         }
         if let Some(Token {
             kind: TokenKind::Parenthesized(items),
@@ -1280,7 +1370,7 @@ fn parse_annotations(tokens: &[Token]) -> Vec<AnnotationUse> {
     output
 }
 
-fn find_id(tokens: &[Token], kind: DeclarationKind) -> Option<DeclarationId> {
+fn find_id(tokens: &[Token], kind: DeclarationKind) -> Option<(DeclarationId, SourceRange)> {
     let at = tokens
         .iter()
         .position(|token| operator(token) == Some("@"))?;
@@ -1294,9 +1384,12 @@ fn find_id(tokens: &[Token], kind: DeclarationKind) -> Option<DeclarationId> {
             | DeclarationKind::Method
             | DeclarationKind::Union
     ) {
-        u16::try_from(value).ok().map(DeclarationId::Ordinal)
+        u16::try_from(value)
+            .ok()
+            .map(DeclarationId::Ordinal)
+            .map(|id| (id, tokens[at + 1].range))
     } else {
-        Some(DeclarationId::Uid(value))
+        Some((DeclarationId::Uid(value), tokens[at + 1].range))
     }
 }
 
@@ -1476,6 +1569,7 @@ fn is_builtin(value: &str) -> bool {
             | "void"
             | "inf"
             | "nan"
+            | "stream"
     )
 }
 
@@ -1503,6 +1597,7 @@ fn expression_nodes(expression: Option<&Expression>) -> usize {
                     .map(|(_, value)| expression_nodes(Some(value)))
                     .sum::<usize>()
         }
+        Expression::Member { base, .. } => expression_nodes(Some(base)),
         _ => 0,
     }
 }
@@ -1553,15 +1648,32 @@ fn collect_declaration_targets(
                 collect_declaration_targets(Some(value), output);
             }
         }
+        Expression::Member { base, target, .. } => {
+            if let NameTarget::Declaration {
+                module,
+                qualified_name,
+            } = target
+            {
+                output.insert((module.clone(), qualified_name.clone()));
+            }
+            collect_declaration_targets(Some(base), output);
+        }
         _ => {}
     }
 }
 
 fn expression_target(expression: &Expression) -> Option<&NameTarget> {
     match expression {
-        Expression::Name { target, .. } | Expression::Import { target, .. } => Some(target),
+        Expression::Name { target, .. }
+        | Expression::Import { target, .. }
+        | Expression::Member { target, .. } => Some(target),
+        Expression::Apply { function, .. } => terminal_target(function),
         _ => None,
     }
+}
+
+fn terminal_target(expression: &Expression) -> Option<&NameTarget> {
+    expression_target(expression)
 }
 
 fn collect_module_dependencies(module: &ResolvedModule, output: &mut BTreeSet<String>) {
@@ -1584,6 +1696,11 @@ fn collect_expression_imports(expression: Option<&Expression>, output: &mut BTre
         return;
     };
     match expression {
+        Expression::Name { path, .. }
+            if path.len() == 1 && path.first().is_some_and(|name| name == "stream") =>
+        {
+            output.insert("/capnp/stream.capnp".to_owned());
+        }
         Expression::Import { path, .. } => {
             output.insert(path.clone());
         }
@@ -1607,6 +1724,7 @@ fn collect_expression_imports(expression: Option<&Expression>, output: &mut BTre
                 collect_expression_imports(Some(value), output);
             }
         }
+        Expression::Member { base, .. } => collect_expression_imports(Some(base), output),
         Expression::Name { .. }
         | Expression::Embed { .. }
         | Expression::Integer { .. }

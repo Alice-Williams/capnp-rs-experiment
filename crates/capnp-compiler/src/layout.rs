@@ -183,23 +183,60 @@ impl UnionLayout {
         }
     }
 
-    fn begin_arm(&mut self, arm: &str, top: &mut TopLayout) {
-        if self.started_arms.insert(arm.to_owned()) {
-            let value = u16::try_from(self.started_arms.len() - 1).unwrap_or(u16::MAX);
-            self.discriminant_values.insert(arm.to_owned(), value);
-            if self.started_arms.len() == 2 {
-                self.add_discriminant(top);
-            }
-        }
+    fn max_data_size(&self) -> Option<u8> {
+        self.lanes
+            .iter()
+            .map(|lane| lane.log2_bits)
+            .chain(self.discriminant_offset.map(|_| 4))
+            .max()
     }
+}
 
-    fn add_data(&mut self, arm: &str, log2_bits: u8, top: &mut TopLayout) -> u32 {
-        self.begin_arm(arm, top);
-        let bits = 1u32 << log2_bits;
-        let usage = self.arms.entry(arm.to_owned()).or_default();
-        usage.data_masks.resize(self.lanes.len(), 0);
+fn begin_union_arm(
+    unions: &mut BTreeMap<String, UnionLayout>,
+    scopes: &[(String, String)],
+    depth: usize,
+    top: &mut TopLayout,
+) {
+    let (name, arm) = &scopes[depth];
+    let needs_discriminant = {
+        let union = unions.get_mut(name).expect("union scope exists");
+        if !union.started_arms.insert(arm.clone()) {
+            return;
+        }
+        let value = u16::try_from(union.started_arms.len() - 1).unwrap_or(u16::MAX);
+        union.discriminant_values.insert(arm.clone(), value);
+        union.started_arms.len() == 2 && union.discriminant_offset.is_none()
+    };
+    if needs_discriminant {
+        let offset = if depth == 0 {
+            top.add_data(4)
+        } else {
+            union_add_data(unions, scopes, depth - 1, 4, top)
+        };
+        unions
+            .get_mut(name)
+            .expect("union scope exists")
+            .discriminant_offset = Some(offset);
+    }
+}
+
+fn union_add_data(
+    unions: &mut BTreeMap<String, UnionLayout>,
+    scopes: &[(String, String)],
+    depth: usize,
+    log2_bits: u8,
+    top: &mut TopLayout,
+) -> u32 {
+    begin_union_arm(unions, scopes, depth, top);
+    let (name, arm) = &scopes[depth];
+    let bits = 1u32 << log2_bits;
+    {
+        let union = unions.get_mut(name).expect("union scope exists");
+        let usage = union.arms.entry(arm.clone()).or_default();
+        usage.data_masks.resize(union.lanes.len(), 0);
         let mut best = None;
-        for (index, lane) in self.lanes.iter().enumerate() {
+        for (index, lane) in union.lanes.iter().enumerate() {
             let lane_bits = 1u32 << lane.log2_bits;
             if lane_bits < bits {
                 continue;
@@ -207,8 +244,12 @@ impl UnionLayout {
             for local in (0..lane_bits).step_by(bits as usize) {
                 let mask = bit_mask(bits, local);
                 if usage.data_masks[index] & mask == 0 {
+                    if depth == 0 {
+                        usage.data_masks[index] |= mask;
+                        return (lane.offset << (lane.log2_bits - log2_bits)) + local / bits;
+                    }
                     let candidate = (lane.log2_bits, index, local, mask);
-                    if best.is_none_or(|current: (u8, usize, u32, u64)| candidate < current) {
+                    if best.is_none_or(|current| candidate < current) {
                         best = Some(candidate);
                     }
                 }
@@ -216,47 +257,85 @@ impl UnionLayout {
         }
         if let Some((_, index, local, mask)) = best {
             usage.data_masks[index] |= mask;
-            let lane = self.lanes[index];
+            let lane = union.lanes[index];
             return (lane.offset << (lane.log2_bits - log2_bits)) + local / bits;
         }
-
-        for index in 0..self.lanes.len() {
-            let lane = self.lanes[index];
-            if lane.log2_bits < log2_bits && top.try_expand(lane.log2_bits, lane.offset, log2_bits)
+    }
+    if depth == 0 {
+        let union = unions.get_mut(name).expect("union scope exists");
+        for index in 0..union.lanes.len() {
+            let lane = union.lanes[index];
+            let arm_already_uses_lane = union
+                .arms
+                .get(arm)
+                .and_then(|usage| usage.data_masks.get(index))
+                .is_some_and(|mask| *mask != 0);
+            if !arm_already_uses_lane
+                && lane.log2_bits < log2_bits
+                && top.try_expand(lane.log2_bits, lane.offset, log2_bits)
             {
-                self.lanes[index].offset >>= log2_bits - lane.log2_bits;
-                self.lanes[index].log2_bits = log2_bits;
-                for arm_usage in self.arms.values_mut() {
-                    arm_usage.data_masks.resize(self.lanes.len(), 0);
+                union.lanes[index].offset >>= log2_bits - lane.log2_bits;
+                union.lanes[index].log2_bits = log2_bits;
+                for arm_usage in union.arms.values_mut() {
+                    arm_usage.data_masks.resize(union.lanes.len(), 0);
                 }
-                self.arms.get_mut(arm).expect("arm exists").data_masks[index] = bit_mask(bits, 0);
-                return self.lanes[index].offset;
+                union.arms.get_mut(arm).expect("arm exists").data_masks[index] = bit_mask(bits, 0);
+                return union.lanes[index].offset;
             }
         }
-
-        let offset = top.add_data(log2_bits);
-        self.lanes.push(DataLane { log2_bits, offset });
-        for arm_usage in self.arms.values_mut() {
-            arm_usage.data_masks.resize(self.lanes.len(), 0);
-        }
-        self.arms.get_mut(arm).expect("arm exists").data_masks[self.lanes.len() - 1] =
-            bit_mask(bits, 0);
-        offset
     }
+    let offset = if depth == 0 {
+        top.add_data(log2_bits)
+    } else {
+        union_add_data(unions, scopes, depth - 1, log2_bits, top)
+    };
+    let union = unions.get_mut(name).expect("union scope exists");
+    union.lanes.push(DataLane { log2_bits, offset });
+    for arm_usage in union.arms.values_mut() {
+        arm_usage.data_masks.resize(union.lanes.len(), 0);
+    }
+    union.arms.get_mut(arm).expect("arm exists").data_masks[union.lanes.len() - 1] =
+        bit_mask(bits, 0);
+    offset
+}
 
-    fn add_pointer(&mut self, arm: &str, top: &mut TopLayout) -> u32 {
-        self.begin_arm(arm, top);
-        let usage = self.arms.entry(arm.to_owned()).or_default();
+fn union_add_pointer(
+    unions: &mut BTreeMap<String, UnionLayout>,
+    scopes: &[(String, String)],
+    depth: usize,
+    top: &mut TopLayout,
+) -> u32 {
+    begin_union_arm(unions, scopes, depth, top);
+    let (name, arm) = &scopes[depth];
+    let (index, existing) = {
+        let union = unions.get_mut(name).expect("union scope exists");
+        let usage = union.arms.entry(arm.clone()).or_default();
         let index = usage.pointers;
         usage.pointers += 1;
-        if index == self.pointer_lanes.len() {
-            self.pointer_lanes.push(top.add_pointer());
-        }
-        self.pointer_lanes[index]
+        (index, union.pointer_lanes.get(index).copied())
+    };
+    if let Some(offset) = existing {
+        return offset;
     }
+    let offset = if depth == 0 {
+        top.add_pointer()
+    } else {
+        union_add_pointer(unions, scopes, depth - 1, top)
+    };
+    let union = unions.get_mut(name).expect("union scope exists");
+    debug_assert_eq!(index, union.pointer_lanes.len());
+    union.pointer_lanes.push(offset);
+    offset
+}
 
-    fn add_void(&mut self, arm: &str, top: &mut TopLayout) {
-        self.begin_arm(arm, top);
+fn finish_union_padding(top: &mut TopLayout, max_size: Option<u8>, before: Holes) {
+    let Some(max_size) = max_size else {
+        return;
+    };
+    for size in 0..usize::from(max_size) {
+        if top.holes.offsets[size] != before.offsets[size] {
+            top.holes.offsets[size] = 0;
+        }
     }
 }
 
@@ -272,6 +351,53 @@ impl ResolvedProgram {
     pub fn compile_layouts(&self) -> CompiledLayouts {
         LayoutCompiler::new(self).compile()
     }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct CompiledTupleLayout {
+    pub data_word_count: u16,
+    pub pointer_count: u16,
+    pub fields: Vec<CompiledTupleField>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct CompiledTupleField {
+    pub name: String,
+    pub offset: u32,
+    pub size: SlotSize,
+    pub ty: Expression,
+}
+
+pub(crate) fn compile_tuple_layout(
+    program: &ResolvedProgram,
+    _module: &ResolvedModule,
+    expression: &Expression,
+) -> Option<CompiledTupleLayout> {
+    let Expression::Tuple { values, .. } = expression else {
+        return None;
+    };
+    let compiler = LayoutCompiler::new(program);
+    let mut top = TopLayout::default();
+    let mut fields = Vec::new();
+    for (index, (name, ty)) in values.iter().enumerate() {
+        let size = compiler.expression_size(ty, &mut BTreeSet::new())?;
+        let offset = match size {
+            SlotSize::Void => 0,
+            SlotSize::Data { log2_bits } => top.add_data(log2_bits),
+            SlotSize::Pointer => top.add_pointer(),
+        };
+        fields.push(CompiledTupleField {
+            name: name.clone().unwrap_or_else(|| format!("arg{index}")),
+            offset,
+            size,
+            ty: ty.clone(),
+        });
+    }
+    Some(CompiledTupleLayout {
+        data_word_count: u16::try_from(top.data_words).ok()?,
+        pointer_count: u16::try_from(top.pointers).ok()?,
+        fields,
+    })
 }
 
 struct LayoutCompiler<'a> {
@@ -330,7 +456,7 @@ impl<'a> LayoutCompiler<'a> {
         let descendants = module
             .declarations
             .iter()
-            .filter(|item| is_descendant(item, &root.qualified_name))
+            .filter(|item| belongs_to_struct_layout(module, item, root))
             .collect::<Vec<_>>();
         let mut ordinals = BTreeMap::new();
         for declaration in &descendants {
@@ -408,6 +534,7 @@ impl<'a> LayoutCompiler<'a> {
             .map(|item| (item.qualified_name.clone(), UnionLayout::default()))
             .collect::<BTreeMap<_, _>>();
         let mut compiled_fields = BTreeMap::<String, CompiledField>::new();
+        let mut active_union_region: Option<(Holes, BTreeSet<String>)> = None;
         for member in ordinals.values() {
             let OrdinalMember::Field(declaration) = member else {
                 let OrdinalMember::Union(declaration) = member else {
@@ -428,19 +555,41 @@ impl<'a> LayoutCompiler<'a> {
             let Some(size) = self.slot_size(module, declaration, &mut BTreeSet::new()) else {
                 continue;
             };
-            let union_scope = nearest_union(module, declaration, &root.qualified_name);
-            let (offset, discriminant_value) = if let Some((union_name, arm)) = union_scope {
-                let union = unions.get_mut(&union_name).expect("indexed union");
+            let union_scopes = union_scopes(module, declaration, &root.qualified_name);
+            if union_scopes.is_empty() {
+                if let Some((before, names)) = active_union_region.take() {
+                    let max_size = names
+                        .iter()
+                        .filter_map(|name| unions.get(name).and_then(UnionLayout::max_data_size))
+                        .max();
+                    finish_union_padding(&mut top, max_size, before);
+                }
+            } else {
+                let (_, names) =
+                    active_union_region.get_or_insert_with(|| (top.holes, BTreeSet::new()));
+                names.extend(union_scopes.iter().map(|(name, _)| name.clone()));
+            }
+            for depth in 0..union_scopes.len() {
+                begin_union_arm(&mut unions, &union_scopes, depth, &mut top);
+            }
+            let (offset, discriminant_value) = if let Some((union_name, arm)) = union_scopes.last()
+            {
+                let depth = union_scopes.len() - 1;
                 let offset = match size {
-                    SlotSize::Void => {
-                        union.add_void(&arm, &mut top);
-                        0
+                    SlotSize::Void => 0,
+                    SlotSize::Data { log2_bits } => {
+                        union_add_data(&mut unions, &union_scopes, depth, log2_bits, &mut top)
                     }
-                    SlotSize::Data { log2_bits } => union.add_data(&arm, log2_bits, &mut top),
-                    SlotSize::Pointer => union.add_pointer(&arm, &mut top),
+                    SlotSize::Pointer => {
+                        union_add_pointer(&mut unions, &union_scopes, depth, &mut top)
+                    }
                 };
                 let discriminant = (declaration.parent.as_deref() == Some(union_name.as_str()))
-                    .then(|| union.discriminant_values.get(&arm).copied())
+                    .then(|| {
+                        unions
+                            .get(union_name)
+                            .and_then(|union| union.discriminant_values.get(arm).copied())
+                    })
                     .flatten();
                 (offset, discriminant)
             } else {
@@ -465,6 +614,13 @@ impl<'a> LayoutCompiler<'a> {
                     kind: CompiledFieldKind::Slot { offset, size },
                 },
             );
+        }
+        if let Some((before, names)) = active_union_region.take() {
+            let max_size = names
+                .iter()
+                .filter_map(|name| unions.get(name).and_then(UnionLayout::max_data_size))
+                .max();
+            finish_union_padding(&mut top, max_size, before);
         }
 
         if top.data_words > u32::from(u16::MAX) {
@@ -559,17 +715,11 @@ impl<'a> LayoutCompiler<'a> {
                 self.error(module, declaration.range, "union has too many arms");
             }
             let id = if declaration.kind == DeclarationKind::Struct {
-                declaration.id.and_then(|id| match id {
-                    DeclarationId::Uid(value) => Some(value),
-                    DeclarationId::Ordinal(_) => None,
-                })
+                declaration_node_id(module, declaration)
             } else {
                 visible_parent(module, declaration).and_then(|parent_name| {
                     let parent_id = if parent_name == &root.qualified_name {
-                        root.id.and_then(|id| match id {
-                            DeclarationId::Uid(value) => Some(value),
-                            DeclarationId::Ordinal(_) => None,
-                        })
+                        declaration_node_id(module, root)
                     } else {
                         group_ids.get(parent_name).copied()
                     }?;
@@ -644,6 +794,14 @@ impl<'a> LayoutCompiler<'a> {
                     },
                 ..
             } => self.declaration_size(module, qualified_name, visiting),
+            Expression::Member {
+                target:
+                    NameTarget::Declaration {
+                        module,
+                        qualified_name,
+                    },
+                ..
+            } => self.declaration_size(module, qualified_name, visiting),
             Expression::Import { .. } => None,
             _ => None,
         }
@@ -709,20 +867,84 @@ fn is_descendant(declaration: &ResolvedDeclaration, root: &str) -> bool {
         .is_some_and(|parent| parent == root || parent.starts_with(&format!("{root}.")))
 }
 
+fn declaration_node_id(module: &ResolvedModule, declaration: &ResolvedDeclaration) -> Option<u64> {
+    if let Some(DeclarationId::Uid(id)) = declaration.id {
+        return Some(id);
+    }
+    let parent_id = match declaration.parent.as_deref() {
+        None => module.file_id?,
+        Some(parent) => {
+            let parent = module
+                .declarations
+                .iter()
+                .find(|item| item.qualified_name == parent)?;
+            declaration_node_id(module, parent)?
+        }
+    };
+    Some(generate_child_id(parent_id, &declaration.name))
+}
+
+fn belongs_to_struct_layout(
+    module: &ResolvedModule,
+    declaration: &ResolvedDeclaration,
+    root: &ResolvedDeclaration,
+) -> bool {
+    if !is_descendant(declaration, &root.qualified_name) {
+        return false;
+    }
+    let mut parent = declaration.parent.as_deref();
+    while let Some(name) = parent {
+        if name == root.qualified_name {
+            return true;
+        }
+        let Some(parent_declaration) = module
+            .declarations
+            .iter()
+            .find(|item| item.qualified_name == name)
+        else {
+            return false;
+        };
+        if matches!(
+            parent_declaration.kind,
+            DeclarationKind::Struct
+                | DeclarationKind::Enum
+                | DeclarationKind::Interface
+                | DeclarationKind::Const
+                | DeclarationKind::Annotation
+        ) {
+            return false;
+        }
+        parent = parent_declaration.parent.as_deref();
+    }
+    false
+}
+
 fn nearest_union(
     module: &ResolvedModule,
     declaration: &ResolvedDeclaration,
     root: &str,
 ) -> Option<(String, String)> {
+    union_scopes(module, declaration, root).pop()
+}
+
+fn union_scopes(
+    module: &ResolvedModule,
+    declaration: &ResolvedDeclaration,
+    root: &str,
+) -> Vec<(String, String)> {
+    let mut output = Vec::new();
     let mut child = declaration.qualified_name.as_str();
     let mut parent = declaration.parent.as_deref();
     while let Some(parent_name) = parent {
-        let parent_declaration = module
+        let Some(parent_declaration) = module
             .declarations
             .iter()
-            .find(|item| item.qualified_name == parent_name)?;
+            .find(|item| item.qualified_name == parent_name)
+        else {
+            break;
+        };
         if parent_declaration.kind == DeclarationKind::Union {
-            return Some((parent_name.to_owned(), child.to_owned()));
+            output.push((parent_name.to_owned(), child.to_owned()));
         }
         if parent_name == root {
             break;
@@ -730,7 +952,8 @@ fn nearest_union(
         child = parent_name;
         parent = parent_declaration.parent.as_deref();
     }
-    None
+    output.reverse();
+    output
 }
 
 fn visible_children<'a>(module: &'a ResolvedModule, parent: &str) -> Vec<&'a ResolvedDeclaration> {
@@ -815,7 +1038,27 @@ fn generate_group_id(parent_id: u64, group_index: u16) -> u64 {
     let mut input = [0u8; 10];
     input[..8].copy_from_slice(&parent_id.to_le_bytes());
     input[8..].copy_from_slice(&group_index.to_le_bytes());
-    let digest = md5(&input);
+    digest_id(&input)
+}
+
+/// Derives the stable ID for an implicitly-IDed nested declaration.
+pub fn generate_child_id(parent_id: u64, child_name: &str) -> u64 {
+    let mut input = parent_id.to_le_bytes().to_vec();
+    input.extend_from_slice(child_name.as_bytes());
+    digest_id(&input)
+}
+
+/// Derives the stable detached parameter or result struct ID for a method.
+pub fn generate_method_params_id(parent_id: u64, method_ordinal: u16, is_results: bool) -> u64 {
+    let mut input = [0u8; 11];
+    input[..8].copy_from_slice(&parent_id.to_le_bytes());
+    input[8..10].copy_from_slice(&method_ordinal.to_le_bytes());
+    input[10] = u8::from(is_results);
+    digest_id(&input)
+}
+
+fn digest_id(input: &[u8]) -> u64 {
+    let digest = md5(input);
     u64::from_be_bytes(digest[..8].try_into().expect("eight digest bytes")) | (1 << 63)
 }
 
@@ -1044,8 +1287,20 @@ mod tests {
     #[test]
     fn group_id_matches_the_pinned_type_id_vector() {
         assert_eq!(
+            generate_child_id(0xa93f_c509_624c_72d9, "Node"),
+            0xe682_ab4c_f923_a417
+        );
+        assert_eq!(
             generate_group_id(0xe682_ab4c_f923_a417, 7),
             0x9ea0_b19b_37fb_4435
+        );
+        assert_eq!(
+            generate_method_params_id(0x88eb_12a0_e0af_92b2, 0, false),
+            0xb874_edc0_d559_b391
+        );
+        assert_eq!(
+            generate_method_params_id(0x88eb_12a0_e0af_92b2, 0, true),
+            0xb04f_cadd_ab71_4ba4
         );
     }
 

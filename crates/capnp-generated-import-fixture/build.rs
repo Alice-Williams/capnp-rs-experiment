@@ -1,21 +1,36 @@
 use std::env;
 use std::error::Error;
 use std::fs;
+use std::io;
 use std::path::PathBuf;
 
 use capnp_codegen::{GenerateOptions, generate_requested_file_with_options};
-use capnp_schema::{CompiledSchema, LoadLimits};
-
-const ORACLE: &str = "e7c9cd96f1505b5ae486db7821006c2f5dce5b5b";
+use capnp_compiler::request::compile_program;
+use capnp_compiler::semantic::{ModuleSources, ResolveLimits};
+use capnp_schema::CapnpVersion;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let manifest = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").ok_or("missing manifest dir")?);
-    let request = manifest
-        .join("../../conformance/fixtures/cpp")
-        .join(ORACLE)
-        .join("compiler-request-import-fixture.bin");
-    let schema =
-        CompiledSchema::from_code_generator_request(&fs::read(&request)?, LoadLimits::default())?;
+    let schemas = manifest.join("../../conformance/schemas");
+    let mut sources = ModuleSources::default();
+    for name in ["import-fixture", "wire-fixture", "language-fixture"] {
+        sources.insert_explicit(
+            format!("/{name}.capnp"),
+            fs::read_to_string(schemas.join(format!("{name}.capnp")))?,
+        );
+    }
+    let program = sources.resolve("/import-fixture.capnp", ResolveLimits::default());
+    if !program.is_valid() {
+        return Err(io::Error::other(format!("{program:#?}")).into());
+    }
+    let schema = compile_program(
+        &program,
+        CapnpVersion {
+            major: 1,
+            minor: 0,
+            micro: 2,
+        },
+    )?;
     let file = schema
         .requested_files()
         .first()
@@ -32,6 +47,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     let generated = generate_requested_file_with_options(&schema, file.id, &options)?;
     let output = PathBuf::from(env::var_os("OUT_DIR").ok_or("missing output dir")?);
     fs::write(output.join("import_fixture.rs"), generated.source)?;
-    println!("cargo:rerun-if-changed={}", request.display());
+    println!("cargo:rerun-if-changed={}", schemas.display());
     Ok(())
 }

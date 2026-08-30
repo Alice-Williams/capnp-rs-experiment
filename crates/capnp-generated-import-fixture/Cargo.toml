@@ -19,4 +19,5 @@ capnp-schema = { path = "../capnp-schema" }
 
 [build-dependencies]
 capnp-codegen = { path = "../capnp-codegen" }
+capnp-compiler = { path = "../capnp-compiler" }
 capnp-schema = { path = "../capnp-schema" }

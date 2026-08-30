@@ -10,3 +10,4 @@ printf '%s  %s\n' 2ecc3049d4f7f2d48a3a368dbb9ef4b97b31c1365996d615bd19c267983a19
 printf '%s  %s\n' 22680f70c56e3c44dc73b52bf8dfd2838a5ea44249be01609be2d362d308b518 rpc-twoparty.capnp | sha256sum --check
 printf '%s  %s\n' d77d4d2e2c1e9c42ded13de54ed11b535b076ac210945b53ecf76fd7648a867a persistent.capnp | sha256sum --check
 printf '%s  %s\n' 5b0656ca3daca9ef28740c14813d5dd474fd0f9991ce99f652838f4cccf6fb30 stream.capnp | sha256sum --check
+printf '%s  %s\n' 52ead0eaa560b21e692d6f3d9966a52dfc99e19f53ae2d7c7bd2944a240d86de c++.capnp | sha256sum --check

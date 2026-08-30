@@ -5,11 +5,18 @@ rust_library(
     srcs = [
         "src/lib.rs",
         "src/layout.rs",
+        "src/request.rs",
         "src/semantic.rs",
     ],
     crate_name = "capnp_compiler",
+    compile_data = [
+        "//conformance:compiler_requests",
+        "//conformance:schema_source_corpus",
+    ],
     edition = "2024",
     deps = [
+        "//crates/capnp-io:capnp_io",
+        "//crates/capnp-message:capnp_message",
         "//crates/capnp-schema:capnp_schema",
     ],
     visibility = ["//visibility:public"],
@@ -22,4 +29,5 @@ rust_test(
         "//conformance:compiler_requests",
         "//conformance:schema_source_corpus",
     ],
+    deps = ["//crates/capnp-codegen:capnp_codegen"],
 )

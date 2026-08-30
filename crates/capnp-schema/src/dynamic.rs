@@ -10,15 +10,15 @@ use std::fmt::{self, Write};
 use std::sync::Arc;
 
 use capnp_message::{
-    ArenaError, DataListBuilder, DataSection, ExclusiveArena, ListObject, ListReadError, ObjectRef,
-    OwnedMessage, OwnedPointerRef, OwnedReadError, PointerListBuilder, PrimitiveError,
-    ReaderLimits, SharedTraversalBudget, StructBuilder, StructElementReader, StructListBuilder,
-    StructObject, StructReadError, StructReader,
+    ArenaError, DataListBuilder, DataSection, ExclusiveArena, GraphError, ListObject,
+    ListReadError, ObjectRef, OwnedMessage, OwnedPointerRef, OwnedReadError, PointerListBuilder,
+    PrimitiveError, ReaderLimits, SharedTraversalBudget, StructBuilder, StructElementReader,
+    StructListBuilder, StructObject, StructReadError, StructReader,
 };
 
 use crate::{
     AnyPointerKind, AnyPointerType, Brand, BrandBinding, CompiledSchema, Field, FieldKind, NodeId,
-    NodeKind, OpaquePointerKind, ScopeBinding, StructSchema, Type, Value,
+    NodeKind, OpaquePointer, OpaquePointerKind, ScopeBinding, StructSchema, Type, Value,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -28,6 +28,7 @@ pub enum DynamicError {
     List(ListReadError),
     Primitive(PrimitiveError),
     Arena(ArenaError),
+    Graph(GraphError),
     UnknownSchema(NodeId),
     ExpectedStructSchema(NodeId),
     UnknownField {
@@ -89,6 +90,11 @@ impl From<PrimitiveError> for DynamicError {
 impl From<ArenaError> for DynamicError {
     fn from(value: ArenaError) -> Self {
         Self::Arena(value)
+    }
+}
+impl From<GraphError> for DynamicError {
+    fn from(value: GraphError) -> Self {
+        Self::Graph(value)
     }
 }
 
@@ -829,6 +835,8 @@ pub enum DynamicInput<'a> {
     Data(&'a [u8]),
     Enum(u16),
     Capability(u32),
+    /// An already validated pointer graph to copy into the destination.
+    Pointer(&'a OpaquePointer),
 }
 
 /// An exclusive reflection-driven struct builder.
@@ -880,9 +888,18 @@ impl<'schema, 'arena> DynamicStructBuilder<'schema, 'arena> {
         self.type_id
     }
 
+    /// Resolves a field's runtime type through this builder's current brand.
+    pub fn field_type(&self, name: &str) -> Result<Type, DynamicError> {
+        let (field, _) = self.field_owned(name)?;
+        let FieldKind::Slot { ty, .. } = field.kind else {
+            return Err(type_mismatch("slot field"));
+        };
+        Ok(resolve_type_with_brand(&ty, &self.brand))
+    }
+
     pub fn set(&mut self, name: &str, value: DynamicInput<'_>) -> Result<(), DynamicError> {
         let (field, discriminant_offset) = self.field_owned(name)?;
-        self.activate(&field, discriminant_offset)?;
+        self.activate_field(&field, discriminant_offset)?;
         let FieldKind::Slot {
             offset,
             ty,
@@ -953,14 +970,35 @@ impl<'schema, 'arena> DynamicStructBuilder<'schema, 'arena> {
             | (Type::AnyPointer(_), DynamicInput::Capability(value)) => {
                 self.builder.set_capability(u16_offset(*offset)?, value)?;
             }
+            (
+                Type::Text
+                | Type::Data
+                | Type::List(_)
+                | Type::Struct { .. }
+                | Type::Interface { .. }
+                | Type::AnyPointer(_),
+                DynamicInput::Pointer(value),
+            ) => value
+                .open(ReaderLimits::default())?
+                .copy_to_struct(&mut self.builder, u16_offset(*offset)?)?,
             _ => return Err(type_mismatch("input matching field type")),
         }
         Ok(())
     }
 
+    /// Selects a union field while leaving its zero/default payload intact.
+    ///
+    /// This is useful for null pointer-valued schema unions, where selecting
+    /// the discriminant is semantically meaningful even though no pointer is
+    /// emitted.
+    pub fn activate(&mut self, name: &str) -> Result<(), DynamicError> {
+        let (field, discriminant_offset) = self.field_owned(name)?;
+        self.activate_field(&field, discriminant_offset)
+    }
+
     pub fn group(&mut self, name: &str) -> Result<DynamicStructBuilder<'schema, '_>, DynamicError> {
         let (field, discriminant_offset) = self.field_owned(name)?;
-        self.activate(&field, discriminant_offset)?;
+        self.activate_field(&field, discriminant_offset)?;
         let FieldKind::Group { type_id } = field.kind else {
             return Err(type_mismatch("group field"));
         };
@@ -977,7 +1015,7 @@ impl<'schema, 'arena> DynamicStructBuilder<'schema, 'arena> {
         name: &str,
     ) -> Result<DynamicStructBuilder<'schema, '_>, DynamicError> {
         let (field, discriminant_offset) = self.field_owned(name)?;
-        self.activate(&field, discriminant_offset)?;
+        self.activate_field(&field, discriminant_offset)?;
         let FieldKind::Slot { offset, ty, .. } = field.kind else {
             return Err(type_mismatch("struct field"));
         };
@@ -1003,7 +1041,7 @@ impl<'schema, 'arena> DynamicStructBuilder<'schema, 'arena> {
         element_count: u32,
     ) -> Result<DynamicListBuilder<'schema, '_>, DynamicError> {
         let (field, discriminant_offset) = self.field_owned(name)?;
-        self.activate(&field, discriminant_offset)?;
+        self.activate_field(&field, discriminant_offset)?;
         let FieldKind::Slot { offset, ty, .. } = field.kind else {
             return Err(type_mismatch("list field"));
         };
@@ -1031,7 +1069,11 @@ impl<'schema, 'arena> DynamicStructBuilder<'schema, 'arena> {
         Ok((field, structure.discriminant_offset))
     }
 
-    fn activate(&mut self, field: &Field, discriminant_offset: u32) -> Result<(), DynamicError> {
+    fn activate_field(
+        &mut self,
+        field: &Field,
+        discriminant_offset: u32,
+    ) -> Result<(), DynamicError> {
         if let Some(value) = field.discriminant_value {
             self.builder.set_u16(discriminant_offset, value, 0)?;
         }
@@ -1071,6 +1113,49 @@ enum DynamicListStorage<'schema, 'arena> {
 }
 
 impl<'schema, 'arena> DynamicListBuilder<'schema, 'arena> {
+    /// Initializes a root list with its element type selected at runtime.
+    pub fn root(
+        schema: &'schema CompiledSchema,
+        arena: &'arena mut ExclusiveArena,
+        element_type: Type,
+        count: u32,
+    ) -> Result<Self, DynamicError> {
+        let storage = match element_type {
+            Type::Void => DynamicListStorage::Void(arena.init_root_list::<()>(count)?),
+            Type::Bool => DynamicListStorage::Bool(arena.init_root_list::<bool>(count)?),
+            Type::Int8 => DynamicListStorage::Int8(arena.init_root_list::<i8>(count)?),
+            Type::Int16 => DynamicListStorage::Int16(arena.init_root_list::<i16>(count)?),
+            Type::Int32 => DynamicListStorage::Int32(arena.init_root_list::<i32>(count)?),
+            Type::Int64 => DynamicListStorage::Int64(arena.init_root_list::<i64>(count)?),
+            Type::UInt8 => DynamicListStorage::UInt8(arena.init_root_list::<u8>(count)?),
+            Type::UInt16 => DynamicListStorage::UInt16(arena.init_root_list::<u16>(count)?),
+            Type::UInt32 => DynamicListStorage::UInt32(arena.init_root_list::<u32>(count)?),
+            Type::UInt64 => DynamicListStorage::UInt64(arena.init_root_list::<u64>(count)?),
+            Type::Float32 => DynamicListStorage::Float32(arena.init_root_list::<f32>(count)?),
+            Type::Float64 => DynamicListStorage::Float64(arena.init_root_list::<f64>(count)?),
+            Type::Enum { .. } => DynamicListStorage::Enum(arena.init_root_list::<u16>(count)?),
+            Type::Struct { type_id, brand } => {
+                let structure = require_struct(schema, type_id)?;
+                DynamicListStorage::Struct {
+                    schema,
+                    type_id,
+                    brand,
+                    builder: arena.init_root_struct_list(
+                        count,
+                        structure.data_word_count,
+                        structure.pointer_count,
+                    )?,
+                }
+            }
+            element_type => DynamicListStorage::Pointer {
+                schema,
+                element_type,
+                builder: arena.init_root_pointer_list(count)?,
+            },
+        };
+        Ok(Self { storage })
+    }
+
     fn from_struct_field(
         schema: &'schema CompiledSchema,
         builder: &'arena mut StructBuilder<'_>,

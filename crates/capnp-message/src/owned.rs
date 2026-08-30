@@ -15,9 +15,9 @@ use core::fmt;
 use core::marker::PhantomData;
 
 use crate::{
-    ListReadError, ListReader, MessageSegments, NestingLimit, ResolvedPointer,
-    SharedTraversalBudget, StructReadError, StructReader, TraversalBudget, ValidationError,
-    WireLocation,
+    GraphError, ListReadError, ListReader, MessageSegments, NestingLimit, ResolvedPointer,
+    SharedTraversalBudget, StructBuilder, StructReadError, StructReader, TraversalBudget,
+    ValidationError, WireLocation,
 };
 
 /// Limits shared by every view and retained reference into an owned message.
@@ -272,6 +272,28 @@ pub enum OwnedPointerRef {
     Capability(u32),
 }
 
+impl OwnedPointerRef {
+    /// Copies this retained pointer into an exclusive struct builder.
+    ///
+    /// A null source is a no-op because dynamic builders only expose freshly
+    /// initialized destination slots. Non-null graph traversal is charged to
+    /// the source message's shared budget and retains the source nesting cap.
+    pub fn copy_to_struct(
+        &self,
+        target: &mut StructBuilder<'_>,
+        pointer_index: u16,
+    ) -> Result<(), GraphError> {
+        match self {
+            Self::Null => Ok(()),
+            Self::Capability(index) => target
+                .set_capability(pointer_index, *index)
+                .map_err(GraphError::from),
+            Self::Struct(value) => value.copy_to_struct(target, pointer_index),
+            Self::List(value) => value.copy_to_struct(target, pointer_index),
+        }
+    }
+}
+
 /// An owning, stable reference to a previously kind-checked wire location.
 ///
 /// Its private fields prevent unchecked coordinates or arbitrary marker types
@@ -341,6 +363,21 @@ impl<T: ObjectKind> ObjectRef<T> {
 
     pub fn same_object(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.message, &other.message) && self.location == other.location
+    }
+
+    fn copy_to_struct(
+        &self,
+        target: &mut StructBuilder<'_>,
+        pointer_index: u16,
+    ) -> Result<(), GraphError> {
+        let segments = self.message.borrowed_segments()?;
+        target.copy_pointer(
+            pointer_index,
+            &segments,
+            self.location,
+            &self.message.budget,
+            self.nesting,
+        )
     }
 }
 

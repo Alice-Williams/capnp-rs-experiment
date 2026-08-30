@@ -28,6 +28,17 @@ impl CompiledSchema {
         crate::loader::load(bytes, limits)
     }
 
+    /// Builds and validates an owned compiled-schema model produced by a
+    /// native compiler frontend.
+    pub fn from_parts(
+        version: CapnpVersion,
+        nodes: Vec<Node>,
+        source_info: Vec<SourceInfo>,
+        requested_files: Vec<RequestedFile>,
+    ) -> Result<Self, LoadError> {
+        Self::indexed(version, nodes, source_info, requested_files)
+    }
+
     pub(crate) fn indexed(
         version: CapnpVersion,
         nodes: Vec<Node>,
@@ -439,6 +450,48 @@ pub struct OpaquePointer {
 }
 
 impl OpaquePointer {
+    /// Creates a schema pointer value whose wire representation is null.
+    pub fn null() -> Self {
+        Self {
+            kind: OpaquePointerKind::Null,
+            backing: Arc::from([]),
+            location: WireLocation {
+                segment_id: 0,
+                word_offset: 0,
+            },
+            nesting: NestingLimit::new(0),
+        }
+    }
+
+    /// Retains and validates the root pointer of newly-built message segments.
+    pub fn from_root_segments(
+        segments: Vec<Box<[u8]>>,
+        limits: ReaderLimits,
+    ) -> Result<Self, OwnedReadError> {
+        let backing = segments
+            .into_iter()
+            .map(Arc::<[u8]>::from)
+            .collect::<Vec<_>>();
+        let message = OwnedMessage::new(backing.iter().cloned(), limits)?;
+        let location = WireLocation {
+            segment_id: 0,
+            word_offset: 0,
+        };
+        let nesting = NestingLimit::new(limits.nesting_levels);
+        let kind = match message.pointer_at(location, nesting)? {
+            OwnedPointerRef::Null => OpaquePointerKind::Null,
+            OwnedPointerRef::Struct(_) => OpaquePointerKind::Struct,
+            OwnedPointerRef::List(_) => OpaquePointerKind::List,
+            OwnedPointerRef::Capability(_) => OpaquePointerKind::Capability,
+        };
+        Ok(Self {
+            kind,
+            backing: Arc::from(backing),
+            location,
+            nesting,
+        })
+    }
+
     pub fn open(&self, limits: ReaderLimits) -> Result<OwnedPointerRef, OwnedReadError> {
         if self.kind == OpaquePointerKind::Null {
             return Ok(OwnedPointerRef::Null);

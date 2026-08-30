@@ -42,6 +42,7 @@ mod tests {
     const EVOLUTION_V3: &[u8] = fixture!("compiler-request-evolution-v3.bin");
     const IMPORT: &[u8] = fixture!("compiler-request-import-fixture.bin");
     const LANGUAGE: &[u8] = fixture!("compiler-request-language-fixture.bin");
+    const SCHEMA: &[u8] = fixture!("compiler-request-schema.bin");
     const STREAMING: &[u8] = fixture!("compiler-request-streaming-fixture.bin");
     const WIRE: &[u8] = fixture!("compiler-request-wire-fixture.bin");
 
@@ -58,6 +59,7 @@ mod tests {
             ("evolution-v3", EVOLUTION_V3),
             ("imports", IMPORT),
             ("language", LANGUAGE),
+            ("schema", SCHEMA),
             ("streaming", STREAMING),
             ("wire", WIRE),
         ] {
