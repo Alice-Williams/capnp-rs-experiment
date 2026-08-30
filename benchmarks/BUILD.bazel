@@ -1,0 +1,13 @@
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+sh_test(
+    name = "baseline_results_test",
+    srcs = ["verify-baseline-results.sh"],
+    data = glob(["results/**"]),
+)
+
+sh_test(
+    name = "runner_syntax_test",
+    srcs = ["run-oracle-baselines.sh"],
+    args = ["--syntax-check-only"],
+)

@@ -25,6 +25,11 @@ name = "persistent.capnp"
 url = "https://raw.githubusercontent.com/capnproto/capnproto/e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/c%2B%2B/src/capnp/persistent.capnp"
 sha256 = "d77d4d2e2c1e9c42ded13de54ed11b535b076ac210945b53ecf76fd7648a867a"
 
+[[upstream.capnproto.schemas]]
+name = "stream.capnp"
+url = "https://raw.githubusercontent.com/capnproto/capnproto/e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/c%2B%2B/src/capnp/stream.capnp"
+sha256 = "5b0656ca3daca9ef28740c14813d5dd474fd0f9991ce99f652838f4cccf6fb30"
+
 [upstream.capnproto_rust]
 role = "secondary regression and Rust ergonomics oracle"
 commit = "2228b71e55cee819c30450bb9bfd9c1f6a722429"
@@ -53,6 +58,13 @@ no_allocation = "planned"
 M00 = "in-progress"
 M01 = "in-progress"
 M02 = "complete"
+
+[evidence.M01]
+cpp_fixtures = "conformance/fixtures/cpp/e7c9cd96f1505b5ae486db7821006c2f5dce5b5b"
+rust_fixtures = "conformance/fixtures/capnproto-rust/2228b71e55cee819c30450bb9bfd9c1f6a722429"
+baseline = "benchmarks/results/2026-08-30-g-drive-docker"
+covered_baselines = ["build/read", "unpacked", "packed"]
+rpc_baseline = "pending common two-party transport workload"
 
 [parallel_gates]
 four_core_shared_read_ratio = 3.0

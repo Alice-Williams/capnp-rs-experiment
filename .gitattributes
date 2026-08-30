@@ -2,3 +2,5 @@
 *.bin binary
 # Preserve exact code-generator output, including upstream whitespace quirks.
 conformance/fixtures/capnproto-rust/**/*.rs -whitespace
+# Unified-diff blank context lines contain the required single prefix space.
+benchmarks/patches/*.patch -whitespace

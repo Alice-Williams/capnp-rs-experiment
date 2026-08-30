@@ -1,0 +1,11 @@
+#implementation	case	mode	scratch	compression	iterations	runs	mean_ns_per_iteration
+cpp	carsales	bytes	reuse	none	500	5	31081.95
+cpp	carsales	bytes	reuse	packed	500	5	42890.42
+cpp	carsales	object	no-reuse	none	500	5	30268.91
+cpp	catrank	bytes	no-reuse	none	100	5	401381.24
+cpp	eval	bytes	no-reuse	packed	10000	5	5126.98
+rust	carsales	bytes	reuse	none	500	5	43102.79
+rust	carsales	bytes	reuse	packed	500	5	57602.41
+rust	carsales	object	no-reuse	none	500	5	36643.11
+rust	catrank	bytes	no-reuse	none	100	5	509112.72
+rust	eval	bytes	no-reuse	packed	10000	5	5430.59
