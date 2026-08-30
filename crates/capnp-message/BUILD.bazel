@@ -14,4 +14,7 @@ rust_library(
 rust_test(
     name = "capnp_message_test",
     crate = ":capnp_message",
+    compile_data = [
+        "//conformance:cpp_wire_frames",
+    ],
 )

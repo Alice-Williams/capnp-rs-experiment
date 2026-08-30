@@ -47,7 +47,7 @@ rules_rust = "0.74.0"
 rules_shell = "0.8.0"
 
 [support]
-wire = "M06 exact traversal and nesting limits over bounded pointer validation"
+wire = "M07 default-aware primitive, enum, Text, and Data readers over exact traversal limits"
 generated_api = "not-started"
 native_compiler = "not-started"
 rpc_level = "none"
@@ -65,6 +65,14 @@ M03 = "complete"
 M04 = "complete"
 M05 = "complete"
 M06 = "complete"
+M07 = "complete"
+
+[evidence.M07]
+crate = "crates/capnp-message"
+oracle_fixture = "conformance/fixtures/cpp/e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/wire-unpacked.bin"
+coverage = ["all scalar kinds", "default XOR", "least-significant bool bits", "known and unknown enums", "null blobs", "Text terminal NUL", "deferred UTF-8", "interior NUL", "Data bytes", "zero-copy borrowing", "charged blob views"]
+property = "10,000 deterministic u64 wire/default pairs preserve exact XOR semantics"
+validation = "Rust 1.98 and 1.85 tests; public API doc tests; Clippy -D warnings; Bazel 18/18"
 
 [evidence.M06]
 crate = "crates/capnp-message"

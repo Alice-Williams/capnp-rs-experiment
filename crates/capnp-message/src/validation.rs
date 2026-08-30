@@ -39,6 +39,22 @@ pub enum ResolvedPointer {
     Capability(CapabilityRef),
 }
 
+impl ResolvedPointer {
+    pub const fn list(self) -> Option<ListRef> {
+        match self {
+            Self::List(list) => Some(list),
+            Self::Null | Self::Struct(_) | Self::Capability(_) => None,
+        }
+    }
+
+    pub const fn structure(self) -> Option<StructRef> {
+        match self {
+            Self::Struct(structure) => Some(structure),
+            Self::Null | Self::List(_) | Self::Capability(_) => None,
+        }
+    }
+}
+
 /// A validated target whose traversal charge has already been deducted.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BoundedPointer {

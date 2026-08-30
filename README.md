@@ -29,8 +29,9 @@ ranges, and raw pointer bitfields. `capnp-io` implements M04's bounded standard
 unpacked framing over immutable segment descriptors. `capnp-message` implements
 M05's coordinate-only, bounds-checked pointer validation and M06's exact local
 and concurrent traversal limits, copied nesting limits, amplification defense,
-and iterative hostile-depth traversal. The remaining crates are explicit
-ownership boundaries rather than claimed protocol features.
+and iterative hostile-depth traversal. M07 adds default-aware primitive and
+enum reads plus charged, zero-copy Text and Data views. The remaining crates
+are explicit ownership boundaries rather than claimed protocol features.
 
 ## Development
 

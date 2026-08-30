@@ -1,13 +1,20 @@
 #![doc = "Safe Cap'n Proto messages, readers, builders, and traversal budgets."]
 
+mod blob;
 mod budget;
+mod primitive;
 mod validation;
 
+#[cfg(test)]
+mod m07_oracle_tests;
+
+pub use blob::{BlobError, DataReader, TextReader};
 #[cfg(target_has_atomic = "64")]
 pub use budget::SharedTraversalBudget;
 pub use budget::{
     BudgetExhausted, LocalTraversalBudget, NestingLimit, NestingLimitExceeded, TraversalBudget,
 };
+pub use primitive::{DataSection, EnumValue, PrimitiveError, PrimitiveType, PrimitiveValue};
 pub use validation::{
     BoundedPointer, CapabilityRef, ListRef, MessageSegments, ResolvedPointer, StructRef,
     TraversalError, TraversalStats, ValidationError, WireLocation,
