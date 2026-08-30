@@ -105,6 +105,7 @@ pub struct ResolvedDeclaration {
     pub qualified_name: String,
     pub parent: Option<String>,
     pub kind: DeclarationKind,
+    pub is_unnamed_union: bool,
     pub id: Option<DeclarationId>,
     pub generic_parameters: Vec<String>,
     pub annotation_targets: Option<AnnotationTargets>,
@@ -981,9 +982,9 @@ fn parse_declaration(
             Some(DeclarationKind::Enum) => (DeclarationKind::Enumerant, 0),
             Some(DeclarationKind::Interface) => (DeclarationKind::Method, 0),
             Some(DeclarationKind::Struct | DeclarationKind::Union | DeclarationKind::Group) => {
-                if token_is_identifier(tokens.get(2), "group") {
+                if has_named_group_marker(tokens, "group") {
                     (DeclarationKind::Group, 0)
-                } else if token_is_identifier(tokens.get(2), "union") {
+                } else if has_named_group_marker(tokens, "union") {
                     (DeclarationKind::Union, 0)
                 } else {
                     (DeclarationKind::Field, 0)
@@ -1019,6 +1020,7 @@ fn parse_declaration(
         qualified_name,
         parent: parent.map(str::to_owned),
         kind,
+        is_unnamed_union: kind == DeclarationKind::Union && first == "union",
         id,
         generic_parameters,
         annotation_targets,
@@ -1287,7 +1289,10 @@ fn find_id(tokens: &[Token], kind: DeclarationKind) -> Option<DeclarationId> {
     };
     if matches!(
         kind,
-        DeclarationKind::Field | DeclarationKind::Enumerant | DeclarationKind::Method
+        DeclarationKind::Field
+            | DeclarationKind::Enumerant
+            | DeclarationKind::Method
+            | DeclarationKind::Union
     ) {
         u16::try_from(value).ok().map(DeclarationId::Ordinal)
     } else {
@@ -1405,6 +1410,12 @@ fn operator(token: &Token) -> Option<&str> {
 
 fn token_is_identifier(token: Option<&Token>, expected: &str) -> bool {
     token.and_then(identifier) == Some(expected)
+}
+
+fn has_named_group_marker(tokens: &[Token], marker: &str) -> bool {
+    tokens
+        .windows(2)
+        .any(|pair| operator(&pair[0]) == Some(":") && token_is_identifier(pair.get(1), marker))
 }
 
 fn merge(left: SourceRange, right: SourceRange) -> SourceRange {

@@ -16,6 +16,7 @@
 use std::fmt;
 use std::sync::Arc;
 
+pub mod layout;
 pub mod semantic;
 
 /// A half-open UTF-8 byte range in the original source.

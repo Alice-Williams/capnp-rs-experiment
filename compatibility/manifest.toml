@@ -49,7 +49,7 @@ rules_shell = "0.8.0"
 [support]
 wire = "M10 borrowed and Arc-owned typed readers with stable coordinate references"
 generated_api = "M21 typed data and thread-safe local interface APIs with exact pipelines"
-native_compiler = "M23 bounded deterministic module, name, import, ID, constant, annotation, generic, and type-reference resolution; layout and request emission remain M24-M25"
+native_compiler = "M24 deterministic semantic resolution and C++-compatible struct/group/union layout; CodeGeneratorRequest emission remains M25"
 rpc_level = "M21 in-memory local dispatch, inheritance, streaming completion, and capability pipelines; network protocol deferred to M32+"
 parallel_read = "not-started"
 parallel_build = "not-started"
@@ -84,6 +84,18 @@ M20 = "complete"
 M21 = "complete"
 M22 = "complete"
 M23 = "complete"
+M24 = "complete"
+
+[evidence.M24]
+crate = "crates/capnp-compiler"
+allocator = ["ordinal-order field allocation", "power-of-two aligned data slots", "smallest-hole-first padding reuse", "separate pointer section", "shared union data and pointer lanes", "16-bit discriminants", "normal groups sharing parent storage"]
+nodes = ["root and group struct sizes", "field offsets and code order", "explicit and implicit ordinals", "named and anonymous unions", "union group arms", "preferred inline-composite list encoding", "deterministic MD5-derived group IDs"]
+oracle = "every struct/group field count, ID, data-word count, pointer count, field offset, code order, ordinal, discriminant value/count/offset, and group flag agrees with pinned C++ compiler requests for wire-fixture and evolution-v1/v2/v3"
+evolution = "all field ordinals present in an earlier evolution fixture retain the same data or pointer offset in later fixtures, including fields moved into a union group"
+negative = ["missing and non-sequential field ordinals", "empty groups", "unions with fewer than two arms", "late explicit union ordinals", "unresolvable layout types", "data, pointer, and union-count schema limits"]
+additional = ["smallest power-of-two padding reuse", "anonymous union flattening", "group-arm lane sharing", "pinned deterministic group-ID vector"]
+scope = "compiled layout model only; CodeGeneratorRequest wire emission, native CLI integration, and self-hosted code generation remain M25-M28"
+validation = "Rust 1.98 and 1.85 workspace tests; public API docs; Clippy -D warnings; four pinned C++ compiler-request layout comparisons; Bazel 18/18"
 
 [evidence.M23]
 crate = "crates/capnp-compiler"

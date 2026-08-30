@@ -4,6 +4,7 @@ rust_library(
     name = "capnp_compiler",
     srcs = [
         "src/lib.rs",
+        "src/layout.rs",
         "src/semantic.rs",
     ],
     crate_name = "capnp_compiler",
