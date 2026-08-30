@@ -4,20 +4,30 @@
 //! commit `e7c9cd96f1505b5ae486db7821006c2f5dce5b5b`. Generated readers and
 //! builders are thin typed adapters over `capnp-schema`'s dynamic API, so they
 //! share its checked wire traversal, evolution defaults, and exclusive-builder
-//! invariants. M19 emits structs, groups, enums, unions, lists, imports, and
-//! documentation. Generic surface syntax, constants, annotations, interfaces,
-//! and pipelines are intentionally completed by M20 and M21.
+//! invariants. M19 emits core data declarations; M20 adds inherited generic
+//! scopes, concrete and unbound brands, scalar and aggregate constants, typed
+//! annotations, and configurable cross-crate imports. Interfaces, method
+//! surfaces, and pipelines remain intentionally deferred to M21.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Write};
 
-use capnp_schema::{CompiledSchema, Field, FieldKind, Node, NodeId, NodeKind, Type};
+use capnp_schema::{
+    AnyPointerType, Brand, BrandBinding, CompiledSchema, Field, FieldKind, Node, NodeId, NodeKind,
+    ScopeBinding, Type,
+};
 
 /// A generated Rust module and its stable source text.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GeneratedFile {
     pub module_name: String,
     pub source: String,
+}
+
+/// Controls how imported file IDs map to already-generated Rust modules.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct GenerateOptions {
+    pub import_paths: BTreeMap<NodeId, String>,
 }
 
 /// A failure to turn valid schema metadata into a Rust module.
@@ -58,11 +68,20 @@ pub fn generate_requested_file(
     schema: &CompiledSchema,
     file_id: NodeId,
 ) -> Result<GeneratedFile, GenerateError> {
+    generate_requested_file_with_options(schema, file_id, &GenerateOptions::default())
+}
+
+/// Generates one requested file while resolving selected imports externally.
+pub fn generate_requested_file_with_options(
+    schema: &CompiledSchema,
+    file_id: NodeId,
+    options: &GenerateOptions,
+) -> Result<GeneratedFile, GenerateError> {
     let file = schema
         .requested_file(file_id)
         .ok_or(GenerateError::UnknownRequestedFile(file_id))?;
     let module_name = module_name_from_filename(&file.filename)?;
-    let names = Names::build(schema)?;
+    let names = Names::build(schema, options)?;
     let mut source = String::new();
 
     writeln!(
@@ -85,6 +104,9 @@ pub fn generate_requested_file(
     writeln!(source, "];").map_err(|_| GenerateError::Format)?;
 
     for node in schema.nodes() {
+        if names.is_external(node.id) {
+            continue;
+        }
         match &node.kind {
             NodeKind::Enum(enumeration) => {
                 emit_enum(&mut source, schema, node, enumeration, &names)?;
@@ -92,10 +114,13 @@ pub fn generate_requested_file(
             NodeKind::Struct(structure) => {
                 emit_struct(&mut source, schema, node, structure, &names)?;
             }
-            NodeKind::File
-            | NodeKind::Interface(_)
-            | NodeKind::Const(_)
-            | NodeKind::Annotation(_) => {}
+            NodeKind::Const(constant) => {
+                emit_constant(&mut source, schema, node, constant, &names)?;
+            }
+            NodeKind::Annotation(annotation) => {
+                emit_annotation(&mut source, schema, node, annotation, &names)?;
+            }
+            NodeKind::File | NodeKind::Interface(_) => {}
         }
     }
 
@@ -107,13 +132,20 @@ pub fn generate_requested_file(
 
 struct Names {
     types: BTreeMap<NodeId, String>,
+    external: BTreeMap<NodeId, String>,
 }
 
 impl Names {
-    fn build(schema: &CompiledSchema) -> Result<Self, GenerateError> {
+    fn build(schema: &CompiledSchema, options: &GenerateOptions) -> Result<Self, GenerateError> {
         let mut types = BTreeMap::new();
         let mut used = BTreeSet::new();
+        let mut external = BTreeMap::new();
         for node in schema.nodes() {
+            if let Some(file_id) = owning_file(schema, node) {
+                if let Some(path) = options.import_paths.get(&file_id) {
+                    external.insert(node.id, path.clone());
+                }
+            }
             let candidate = match node.kind {
                 NodeKind::Struct(_) => rust_snake(node.short_name().unwrap_or(&node.display_name)),
                 NodeKind::Enum(_) => rust_pascal(node.short_name().unwrap_or(&node.display_name)),
@@ -133,7 +165,7 @@ impl Names {
             };
             types.insert(node.id, name);
         }
-        Ok(Self { types })
+        Ok(Self { types, external })
     }
 
     fn get(&self, id: NodeId) -> Result<&str, GenerateError> {
@@ -141,6 +173,32 @@ impl Names {
             .get(&id)
             .map(String::as_str)
             .ok_or(GenerateError::UnknownType(id))
+    }
+
+    fn is_external(&self, id: NodeId) -> bool {
+        self.external.contains_key(&id)
+    }
+
+    fn reference(&self, id: NodeId, inside_module: bool) -> Result<String, GenerateError> {
+        let name = self.get(id)?;
+        Ok(match self.external.get(&id) {
+            Some(path) => format!("{path}::{name}"),
+            None if inside_module => format!("super::{name}"),
+            None => name.to_owned(),
+        })
+    }
+}
+
+fn owning_file(schema: &CompiledSchema, node: &Node) -> Option<NodeId> {
+    let mut current = node;
+    loop {
+        if matches!(current.kind, NodeKind::File) {
+            return Some(current.id);
+        }
+        if current.scope_id == 0 {
+            return None;
+        }
+        current = schema.node(current.scope_id)?;
     }
 }
 
@@ -180,6 +238,20 @@ pub trait ListElement: Sized {
     fn from_dynamic(value: capnp_schema::DynamicValue) -> Result<Self, capnp_schema::DynamicError>;
 }
 
+/// Describes a Rust type's schema representation for generic brand binding.
+pub trait GeneratedType: ListElement {
+    fn schema_type() -> capnp_schema::Type;
+}
+
+/// Converts a typed generated setter argument into the dynamic builder input.
+pub trait FieldInput: Sized {
+    fn set_field(
+        self,
+        builder: &mut capnp_schema::DynamicStructBuilder<'_, '_>,
+        field: &str,
+    ) -> Result<(), capnp_schema::DynamicError>;
+}
+
 macro_rules! scalar_list_element {
     ($type:ty, $variant:ident, $expected:literal) => {
         impl ListElement for $type {
@@ -205,12 +277,47 @@ scalar_list_element!(u64, UInt64, "UInt64 list element");
 scalar_list_element!(f32, Float32, "Float32 list element");
 scalar_list_element!(f64, Float64, "Float64 list element");
 
+macro_rules! scalar_generated_type {
+    ($type:ty, $schema:ident, $input:ident) => {
+        impl GeneratedType for $type {
+            fn schema_type() -> capnp_schema::Type { capnp_schema::Type::$schema }
+        }
+        impl FieldInput for $type {
+            fn set_field(self, builder: &mut capnp_schema::DynamicStructBuilder<'_, '_>, field: &str) -> Result<(), capnp_schema::DynamicError> {
+                builder.set(field, capnp_schema::DynamicInput::$input(self))
+            }
+        }
+    };
+}
+
+scalar_generated_type!(bool, Bool, Bool);
+scalar_generated_type!(i8, Int8, Int8);
+scalar_generated_type!(i16, Int16, Int16);
+scalar_generated_type!(i32, Int32, Int32);
+scalar_generated_type!(i64, Int64, Int64);
+scalar_generated_type!(u8, UInt8, UInt8);
+scalar_generated_type!(u16, UInt16, UInt16);
+scalar_generated_type!(u32, UInt32, UInt32);
+scalar_generated_type!(u64, UInt64, UInt64);
+scalar_generated_type!(f32, Float32, Float32);
+scalar_generated_type!(f64, Float64, Float64);
+
 impl ListElement for () {
     fn from_dynamic(value: capnp_schema::DynamicValue) -> Result<Self, capnp_schema::DynamicError> {
         match value {
             capnp_schema::DynamicValue::Void => Ok(()),
             _ => Err(capnp_schema::DynamicError::TypeMismatch { expected: "Void list element" }),
         }
+    }
+}
+
+impl GeneratedType for () {
+    fn schema_type() -> capnp_schema::Type { capnp_schema::Type::Void }
+}
+
+impl FieldInput for () {
+    fn set_field(self, builder: &mut capnp_schema::DynamicStructBuilder<'_, '_>, field: &str) -> Result<(), capnp_schema::DynamicError> {
+        builder.set(field, capnp_schema::DynamicInput::Void)
     }
 }
 
@@ -223,6 +330,16 @@ impl ListElement for String {
     }
 }
 
+impl GeneratedType for String {
+    fn schema_type() -> capnp_schema::Type { capnp_schema::Type::Text }
+}
+
+impl FieldInput for String {
+    fn set_field(self, builder: &mut capnp_schema::DynamicStructBuilder<'_, '_>, field: &str) -> Result<(), capnp_schema::DynamicError> {
+        builder.set(field, capnp_schema::DynamicInput::Text(&self))
+    }
+}
+
 impl ListElement for Vec<u8> {
     fn from_dynamic(value: capnp_schema::DynamicValue) -> Result<Self, capnp_schema::DynamicError> {
         match value {
@@ -232,11 +349,63 @@ impl ListElement for Vec<u8> {
     }
 }
 
+impl GeneratedType for Vec<u8> {
+    fn schema_type() -> capnp_schema::Type { capnp_schema::Type::Data }
+}
+
+impl FieldInput for Vec<u8> {
+    fn set_field(self, builder: &mut capnp_schema::DynamicStructBuilder<'_, '_>, field: &str) -> Result<(), capnp_schema::DynamicError> {
+        builder.set(field, capnp_schema::DynamicInput::Data(&self))
+    }
+}
+
 impl<T: ListElement> ListElement for ListReader<T> {
     fn from_dynamic(value: capnp_schema::DynamicValue) -> Result<Self, capnp_schema::DynamicError> {
         match value {
             capnp_schema::DynamicValue::List(Some(value)) => Ok(Self::from_dynamic(value)),
             _ => Err(capnp_schema::DynamicError::TypeMismatch { expected: "non-null List element" }),
+        }
+    }
+}
+
+impl<T: GeneratedType> GeneratedType for ListReader<T> {
+    fn schema_type() -> capnp_schema::Type {
+        capnp_schema::Type::List(Box::new(T::schema_type()))
+    }
+}
+
+impl ListElement for capnp_schema::DynamicValue {
+    fn from_dynamic(value: capnp_schema::DynamicValue) -> Result<Self, capnp_schema::DynamicError> {
+        Ok(value)
+    }
+}
+
+impl GeneratedType for capnp_schema::DynamicValue {
+    fn schema_type() -> capnp_schema::Type {
+        capnp_schema::Type::AnyPointer(capnp_schema::AnyPointerType::Unconstrained(capnp_schema::AnyPointerKind::Any))
+    }
+}
+
+impl FieldInput for capnp_schema::DynamicValue {
+    fn set_field(self, builder: &mut capnp_schema::DynamicStructBuilder<'_, '_>, field: &str) -> Result<(), capnp_schema::DynamicError> {
+        match self {
+            capnp_schema::DynamicValue::Void => builder.set(field, capnp_schema::DynamicInput::Void),
+            capnp_schema::DynamicValue::Bool(value) => builder.set(field, capnp_schema::DynamicInput::Bool(value)),
+            capnp_schema::DynamicValue::Int8(value) => builder.set(field, capnp_schema::DynamicInput::Int8(value)),
+            capnp_schema::DynamicValue::Int16(value) => builder.set(field, capnp_schema::DynamicInput::Int16(value)),
+            capnp_schema::DynamicValue::Int32(value) => builder.set(field, capnp_schema::DynamicInput::Int32(value)),
+            capnp_schema::DynamicValue::Int64(value) => builder.set(field, capnp_schema::DynamicInput::Int64(value)),
+            capnp_schema::DynamicValue::UInt8(value) => builder.set(field, capnp_schema::DynamicInput::UInt8(value)),
+            capnp_schema::DynamicValue::UInt16(value) => builder.set(field, capnp_schema::DynamicInput::UInt16(value)),
+            capnp_schema::DynamicValue::UInt32(value) => builder.set(field, capnp_schema::DynamicInput::UInt32(value)),
+            capnp_schema::DynamicValue::UInt64(value) => builder.set(field, capnp_schema::DynamicInput::UInt64(value)),
+            capnp_schema::DynamicValue::Float32(value) => builder.set(field, capnp_schema::DynamicInput::Float32(value)),
+            capnp_schema::DynamicValue::Float64(value) => builder.set(field, capnp_schema::DynamicInput::Float64(value)),
+            capnp_schema::DynamicValue::Text(value) => builder.set(field, capnp_schema::DynamicInput::Text(&value)),
+            capnp_schema::DynamicValue::Data(value) => builder.set(field, capnp_schema::DynamicInput::Data(&value)),
+            capnp_schema::DynamicValue::Enum(value) => builder.set(field, capnp_schema::DynamicInput::Enum(value.ordinal)),
+            capnp_schema::DynamicValue::Capability(Some(value)) => builder.set(field, capnp_schema::DynamicInput::Capability(value)),
+            _ => Err(capnp_schema::DynamicError::TypeMismatch { expected: "settable generic scalar or pointer" }),
         }
     }
 }
@@ -335,7 +504,329 @@ fn emit_enum(
     writeln!(output, "        }}").map_err(|_| GenerateError::Format)?;
     writeln!(output, "    }}").map_err(|_| GenerateError::Format)?;
     writeln!(output, "}}").map_err(|_| GenerateError::Format)?;
+    writeln!(output, "impl GeneratedType for {name} {{").map_err(|_| GenerateError::Format)?;
+    writeln!(output, "    fn schema_type() -> capnp_schema::Type {{ capnp_schema::Type::Enum {{ type_id: Self::TYPE_ID, brand: capnp_schema::Brand::default() }} }}")
+        .map_err(|_| GenerateError::Format)?;
+    writeln!(output, "}}").map_err(|_| GenerateError::Format)?;
+    writeln!(output, "impl FieldInput for {name} {{").map_err(|_| GenerateError::Format)?;
+    writeln!(output, "    fn set_field(self, builder: &mut capnp_schema::DynamicStructBuilder<'_, '_>, field: &str) -> Result<(), capnp_schema::DynamicError> {{ builder.set(field, capnp_schema::DynamicInput::Enum(self.ordinal())) }}")
+        .map_err(|_| GenerateError::Format)?;
+    writeln!(output, "}}").map_err(|_| GenerateError::Format)?;
     Ok(())
+}
+
+fn emit_constant(
+    output: &mut String,
+    schema: &CompiledSchema,
+    node: &Node,
+    constant: &capnp_schema::ConstSchema,
+    names: &Names,
+) -> Result<(), GenerateError> {
+    let name = rust_snake(node.short_name().unwrap_or(&node.display_name));
+    let constant_name = name.to_ascii_uppercase();
+    writeln!(output).map_err(|_| GenerateError::Format)?;
+    emit_docs(output, schema, node, "Generated constant")?;
+    if let Some((rust_type, value)) = literal_constant(&constant.ty, &constant.value, names)? {
+        writeln!(output, "pub const {constant_name}: {rust_type} = {value};")
+            .map_err(|_| GenerateError::Format)?;
+        return Ok(());
+    }
+
+    match &constant.ty {
+        Type::List(element) => {
+            let element_type = rust_value_type(schema, element, names, &[])?
+                .trim_start_matches("super::")
+                .to_owned();
+            writeln!(output, "pub fn {name}(schema: Arc<capnp_schema::CompiledSchema>, limits: capnp_message::ReaderLimits) -> Result<Option<ListReader<{element_type}>>, capnp_schema::DynamicError> {{")
+                .map_err(|_| GenerateError::Format)?;
+            emit_constant_lookup(output, node.id)?;
+            writeln!(output, "    let capnp_schema::Type::List(element) = &constant.ty else {{ return Err(capnp_schema::DynamicError::TypeMismatch {{ expected: \"list constant\" }}); }};")
+                .map_err(|_| GenerateError::Format)?;
+            writeln!(output, "    Ok(capnp_schema::DynamicList::from_value(Arc::clone(&schema), (**element).clone(), &constant.value, limits)?.map(ListReader::from_dynamic))")
+                .map_err(|_| GenerateError::Format)?;
+            writeln!(output, "}}").map_err(|_| GenerateError::Format)?;
+        }
+        Type::Struct { type_id, brand } => {
+            let target = struct_reader_type(schema, *type_id, Some(brand), names, &[])?
+                .trim_start_matches("super::")
+                .to_owned();
+            writeln!(output, "pub fn {name}(schema: Arc<capnp_schema::CompiledSchema>, limits: capnp_message::ReaderLimits) -> Result<Option<{target}>, capnp_schema::DynamicError> {{")
+                .map_err(|_| GenerateError::Format)?;
+            emit_constant_lookup(output, node.id)?;
+            writeln!(output, "    let capnp_schema::Type::Struct {{ type_id, brand }} = &constant.ty else {{ return Err(capnp_schema::DynamicError::TypeMismatch {{ expected: \"struct constant\" }}); }};")
+                .map_err(|_| GenerateError::Format)?;
+            writeln!(output, "    Ok(capnp_schema::DynamicStruct::from_branded_value(Arc::clone(&schema), *type_id, brand.clone(), &constant.value, limits)?.map(<{target}>::from_dynamic_struct))")
+                .map_err(|_| GenerateError::Format)?;
+            writeln!(output, "}}").map_err(|_| GenerateError::Format)?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn emit_constant_lookup(output: &mut String, id: NodeId) -> Result<(), GenerateError> {
+    writeln!(output, "    let node = schema.node(0x{id:016x}).ok_or(capnp_schema::DynamicError::UnknownSchema(0x{id:016x}))?;")
+        .map_err(|_| GenerateError::Format)?;
+    writeln!(output, "    let capnp_schema::NodeKind::Const(constant) = &node.kind else {{ return Err(capnp_schema::DynamicError::TypeMismatch {{ expected: \"constant schema node\" }}); }};")
+        .map_err(|_| GenerateError::Format)
+}
+
+fn literal_constant(
+    ty: &Type,
+    value: &capnp_schema::Value,
+    names: &Names,
+) -> Result<Option<(String, String)>, GenerateError> {
+    use capnp_schema::Value;
+    Ok(match (ty, value) {
+        (Type::Void, Value::Void) => Some(("()".into(), "()".into())),
+        (Type::Bool, Value::Bool(value)) => Some(("bool".into(), value.to_string())),
+        (Type::Int8, Value::Int8(value)) => Some(("i8".into(), value.to_string())),
+        (Type::Int16, Value::Int16(value)) => Some(("i16".into(), value.to_string())),
+        (Type::Int32, Value::Int32(value)) => Some(("i32".into(), value.to_string())),
+        (Type::Int64, Value::Int64(value)) => Some(("i64".into(), value.to_string())),
+        (Type::UInt8, Value::UInt8(value)) => Some(("u8".into(), value.to_string())),
+        (Type::UInt16, Value::UInt16(value)) => Some(("u16".into(), value.to_string())),
+        (Type::UInt32, Value::UInt32(value)) => Some(("u32".into(), value.to_string())),
+        (Type::UInt64, Value::UInt64(value)) => Some(("u64".into(), value.to_string())),
+        (Type::Float32, Value::Float32(value)) => Some((
+            "f32".into(),
+            format!("f32::from_bits(0x{:08x})", value.to_bits()),
+        )),
+        (Type::Float64, Value::Float64(value)) => Some((
+            "f64".into(),
+            format!("f64::from_bits(0x{:016x})", value.to_bits()),
+        )),
+        (Type::Text, Value::Text(value)) => Some(("&str".into(), format!("{value:?}"))),
+        (Type::Data, Value::Data(value)) => Some(("&[u8]".into(), format!("&{value:?}"))),
+        (Type::Enum { type_id, .. }, Value::Enum(value)) => Some((
+            names.reference(*type_id, false)?,
+            format!(
+                "{}::from_ordinal({value})",
+                names.reference(*type_id, false)?
+            ),
+        )),
+        _ => None,
+    })
+}
+
+fn emit_annotation(
+    output: &mut String,
+    schema: &CompiledSchema,
+    node: &Node,
+    annotation: &capnp_schema::AnnotationSchema,
+    _names: &Names,
+) -> Result<(), GenerateError> {
+    let module = format!(
+        "{}_annotation",
+        rust_snake(node.short_name().unwrap_or(&node.display_name))
+    );
+    let (rust_type, value_pattern, value_expression) = annotation_value_shape(&annotation.ty);
+    let targets = annotation.targets;
+    writeln!(output).map_err(|_| GenerateError::Format)?;
+    emit_docs(output, schema, node, "Generated annotation")?;
+    writeln!(output, "pub mod {module} {{").map_err(|_| GenerateError::Format)?;
+    writeln!(output, "    pub const TYPE_ID: u64 = 0x{:016x};", node.id)
+        .map_err(|_| GenerateError::Format)?;
+    writeln!(output, "    pub type Value = {rust_type};").map_err(|_| GenerateError::Format)?;
+    writeln!(output, "    pub const TARGETS: capnp_schema::AnnotationTargets = capnp_schema::AnnotationTargets {{")
+        .map_err(|_| GenerateError::Format)?;
+    for (name, value) in [
+        ("file", targets.file),
+        ("constant", targets.constant),
+        ("enumeration", targets.enumeration),
+        ("enumerant", targets.enumerant),
+        ("structure", targets.structure),
+        ("field", targets.field),
+        ("union", targets.union),
+        ("group", targets.group),
+        ("interface", targets.interface),
+        ("method", targets.method),
+        ("parameter", targets.parameter),
+        ("annotation", targets.annotation),
+    ] {
+        writeln!(output, "        {name}: {value},").map_err(|_| GenerateError::Format)?;
+    }
+    writeln!(output, "    }};").map_err(|_| GenerateError::Format)?;
+    writeln!(output, "    pub fn find(values: &[capnp_schema::Annotation]) -> Option<&capnp_schema::Annotation> {{ values.iter().find(|value| value.id == TYPE_ID) }}")
+        .map_err(|_| GenerateError::Format)?;
+    writeln!(output, "    pub fn decode(annotation: &capnp_schema::Annotation) -> Result<Value, capnp_schema::DynamicError> {{")
+        .map_err(|_| GenerateError::Format)?;
+    writeln!(output, "        if annotation.id != TYPE_ID {{ return Err(capnp_schema::DynamicError::TypeMismatch {{ expected: \"matching annotation ID\" }}); }}")
+        .map_err(|_| GenerateError::Format)?;
+    if value_pattern == "value" {
+        writeln!(output, "        Ok(annotation.value.clone())")
+            .map_err(|_| GenerateError::Format)?;
+    } else {
+        writeln!(output, "        match &annotation.value {{")
+            .map_err(|_| GenerateError::Format)?;
+        writeln!(
+            output,
+            "            {value_pattern} => Ok({value_expression}),"
+        )
+        .map_err(|_| GenerateError::Format)?;
+        writeln!(output, "            _ => Err(capnp_schema::DynamicError::TypeMismatch {{ expected: \"matching annotation value\" }}),")
+            .map_err(|_| GenerateError::Format)?;
+        writeln!(output, "        }}").map_err(|_| GenerateError::Format)?;
+    }
+    writeln!(output, "    }}\n}}").map_err(|_| GenerateError::Format)?;
+    Ok(())
+}
+
+fn annotation_value_shape(ty: &Type) -> (&'static str, &'static str, &'static str) {
+    match ty {
+        Type::Void => ("()", "capnp_schema::Value::Void", "()"),
+        Type::Bool => ("bool", "capnp_schema::Value::Bool(value)", "*value"),
+        Type::Int8 => ("i8", "capnp_schema::Value::Int8(value)", "*value"),
+        Type::Int16 => ("i16", "capnp_schema::Value::Int16(value)", "*value"),
+        Type::Int32 => ("i32", "capnp_schema::Value::Int32(value)", "*value"),
+        Type::Int64 => ("i64", "capnp_schema::Value::Int64(value)", "*value"),
+        Type::UInt8 => ("u8", "capnp_schema::Value::UInt8(value)", "*value"),
+        Type::UInt16 => ("u16", "capnp_schema::Value::UInt16(value)", "*value"),
+        Type::UInt32 => ("u32", "capnp_schema::Value::UInt32(value)", "*value"),
+        Type::UInt64 => ("u64", "capnp_schema::Value::UInt64(value)", "*value"),
+        Type::Float32 => ("f32", "capnp_schema::Value::Float32(value)", "*value"),
+        Type::Float64 => ("f64", "capnp_schema::Value::Float64(value)", "*value"),
+        Type::Text => (
+            "String",
+            "capnp_schema::Value::Text(value)",
+            "value.clone()",
+        ),
+        Type::Data => (
+            "Vec<u8>",
+            "capnp_schema::Value::Data(value)",
+            "value.clone()",
+        ),
+        Type::Enum { .. } => ("u16", "capnp_schema::Value::Enum(value)", "*value"),
+        _ => ("capnp_schema::Value", "value", "value.clone()"),
+    }
+}
+
+#[derive(Clone, Debug)]
+struct GenericParameter {
+    scope_id: NodeId,
+    index: u16,
+    name: String,
+}
+
+fn generic_parameters(schema: &CompiledSchema, node: &Node) -> Vec<GenericParameter> {
+    let mut scopes = Vec::new();
+    let mut current = Some(node);
+    while let Some(value) = current {
+        scopes.push(value);
+        current = (value.scope_id != 0)
+            .then(|| schema.node(value.scope_id))
+            .flatten();
+    }
+    scopes.reverse();
+    let mut used = BTreeSet::new();
+    let mut output = Vec::new();
+    for scope in scopes {
+        for (index, parameter) in scope.parameters.iter().enumerate() {
+            let base = rust_pascal(&parameter.name);
+            let mut name = base.clone();
+            let mut suffix = 2usize;
+            while !used.insert(name.clone()) {
+                name = format!("{base}{suffix}");
+                suffix += 1;
+            }
+            if let Ok(index) = u16::try_from(index) {
+                output.push(GenericParameter {
+                    scope_id: scope.id,
+                    index,
+                    name,
+                });
+            }
+        }
+    }
+    output
+}
+
+fn generic_declaration(parameters: &[GenericParameter], defaults: bool) -> String {
+    if parameters.is_empty() {
+        return String::new();
+    }
+    let values = parameters
+        .iter()
+        .map(|parameter| {
+            if defaults {
+                format!("{} = capnp_schema::DynamicValue", parameter.name)
+            } else {
+                parameter.name.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("<{values}>")
+}
+
+fn generic_arguments(parameters: &[GenericParameter]) -> String {
+    if parameters.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "<{}>",
+            parameters
+                .iter()
+                .map(|parameter| parameter.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    }
+}
+
+fn marker_type(parameters: &[GenericParameter]) -> String {
+    match parameters {
+        [] => "()".to_owned(),
+        [parameter] => parameter.name.clone(),
+        _ => {
+            format!(
+                "({})",
+                parameters
+                    .iter()
+                    .map(|parameter| parameter.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        }
+    }
+}
+
+fn parameter_name(parameters: &[GenericParameter], scope_id: NodeId, index: u16) -> Option<&str> {
+    parameters
+        .iter()
+        .find(|parameter| parameter.scope_id == scope_id && parameter.index == index)
+        .map(|parameter| parameter.name.as_str())
+}
+
+fn generated_brand_expression(parameters: &[GenericParameter]) -> String {
+    if parameters.is_empty() {
+        return "capnp_schema::Brand::default()".to_owned();
+    }
+    let mut scopes: BTreeMap<NodeId, Vec<&GenericParameter>> = BTreeMap::new();
+    for parameter in parameters {
+        scopes
+            .entry(parameter.scope_id)
+            .or_default()
+            .push(parameter);
+    }
+    let scopes = scopes
+        .into_iter()
+        .map(|(scope_id, values)| {
+            let bindings = values
+                .into_iter()
+                .map(|parameter| {
+                    format!(
+                        "capnp_schema::BrandBinding::Type({}::schema_type())",
+                        parameter.name
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("capnp_schema::BrandScope {{ scope_id: 0x{scope_id:016x}, binding: capnp_schema::ScopeBinding::Bind(vec![{bindings}]) }}")
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("capnp_schema::Brand {{ scopes: vec![{scopes}] }}")
 }
 
 fn emit_struct(
@@ -347,6 +838,17 @@ fn emit_struct(
 ) -> Result<(), GenerateError> {
     let module = names.get(node.id)?;
     let unrecognized = unique_variant(structure.fields.iter().map(|field| field.name.as_str()));
+    let parameters = generic_parameters(schema, node);
+    let declaration = generic_declaration(&parameters, true);
+    let implementation = generic_declaration(&parameters, false);
+    let arguments = generic_arguments(&parameters);
+    let marker = marker_type(&parameters);
+    let brand = generated_brand_expression(&parameters);
+    let generated_bounds = parameters
+        .iter()
+        .map(|parameter| format!("{}: GeneratedType", parameter.name))
+        .collect::<Vec<_>>()
+        .join(", ");
     writeln!(output).map_err(|_| GenerateError::Format)?;
     emit_docs(output, schema, node, "Generated struct module")?;
     writeln!(output, "pub mod {module} {{").map_err(|_| GenerateError::Format)?;
@@ -356,25 +858,37 @@ fn emit_struct(
     writeln!(output, "    #[derive(Clone, Debug)]").map_err(|_| GenerateError::Format)?;
     writeln!(
         output,
-        "    pub struct Reader {{ inner: capnp_schema::DynamicStruct }}"
+        "    pub struct Reader{declaration} {{ inner: capnp_schema::DynamicStruct, marker: PhantomData<fn() -> {marker}> }}"
     )
     .map_err(|_| GenerateError::Format)?;
     writeln!(
         output,
-        "    impl capnp_schema::FromDynamicStruct for Reader {{"
+        "    impl{implementation} capnp_schema::FromDynamicStruct for Reader{arguments} {{"
     )
     .map_err(|_| GenerateError::Format)?;
     writeln!(output, "        const TYPE_ID: u64 = TYPE_ID;").map_err(|_| GenerateError::Format)?;
-    writeln!(output, "        fn from_dynamic(value: capnp_schema::DynamicStruct) -> Result<Self, capnp_schema::DynamicError> {{ Ok(Self {{ inner: value }}) }}")
+    writeln!(output, "        fn from_dynamic(value: capnp_schema::DynamicStruct) -> Result<Self, capnp_schema::DynamicError> {{ Ok(Self {{ inner: value, marker: PhantomData }}) }}")
         .map_err(|_| GenerateError::Format)?;
     writeln!(output, "    }}").map_err(|_| GenerateError::Format)?;
-    writeln!(output, "    impl Reader {{").map_err(|_| GenerateError::Format)?;
-    writeln!(output, "        pub fn from_root(schema: Arc<capnp_schema::CompiledSchema>, message: Arc<capnp_message::OwnedMessage>) -> Result<Self, capnp_schema::DynamicError> {{")
+    writeln!(output, "    impl{implementation} Reader{arguments} {{")
         .map_err(|_| GenerateError::Format)?;
-    writeln!(output, "            Ok(Self::from_dynamic_struct(capnp_schema::DynamicStruct::root(schema, message, TYPE_ID)?))")
+    writeln!(output, "        pub fn from_root(schema: Arc<capnp_schema::CompiledSchema>, message: Arc<capnp_message::OwnedMessage>) -> Result<Self, capnp_schema::DynamicError>")
         .map_err(|_| GenerateError::Format)?;
+    if generated_bounds.is_empty() {
+        writeln!(output, "        {{").map_err(|_| GenerateError::Format)?;
+    } else {
+        writeln!(output, "        where {generated_bounds}\n        {{")
+            .map_err(|_| GenerateError::Format)?;
+    }
+    if generated_bounds.is_empty() {
+        writeln!(output, "            Ok(Self::from_dynamic_struct(capnp_schema::DynamicStruct::root(schema, message, TYPE_ID)?))")
+            .map_err(|_| GenerateError::Format)?;
+    } else {
+        writeln!(output, "            Ok(Self::from_dynamic_struct(capnp_schema::DynamicStruct::root_branded(schema, message, TYPE_ID, {brand})?))")
+            .map_err(|_| GenerateError::Format)?;
+    }
     writeln!(output, "        }}").map_err(|_| GenerateError::Format)?;
-    writeln!(output, "        pub(super) fn from_dynamic_struct(value: capnp_schema::DynamicStruct) -> Self {{ Self {{ inner: value }} }}")
+    writeln!(output, "        #[doc(hidden)]\n        pub fn from_dynamic_struct(value: capnp_schema::DynamicStruct) -> Self {{ Self {{ inner: value, marker: PhantomData }} }}")
         .map_err(|_| GenerateError::Format)?;
     writeln!(
         output,
@@ -384,7 +898,7 @@ fn emit_struct(
 
     for (index, field) in structure.fields.iter().enumerate() {
         emit_field_docs(output, schema, node.id, index, field)?;
-        emit_reader_field(output, field, names)?;
+        emit_reader_field(output, schema, field, names, &parameters)?;
     }
     if structure.discriminant_count > 0 {
         writeln!(
@@ -416,7 +930,11 @@ fn emit_struct(
         writeln!(output, "        }}").map_err(|_| GenerateError::Format)?;
     }
     writeln!(output, "    }}").map_err(|_| GenerateError::Format)?;
-    writeln!(output, "    impl ListElement for Reader {{").map_err(|_| GenerateError::Format)?;
+    writeln!(
+        output,
+        "    impl{implementation} ListElement for Reader{arguments} {{"
+    )
+    .map_err(|_| GenerateError::Format)?;
     writeln!(output, "        fn from_dynamic(value: capnp_schema::DynamicValue) -> Result<Self, capnp_schema::DynamicError> {{")
         .map_err(|_| GenerateError::Format)?;
     writeln!(output, "            match value {{").map_err(|_| GenerateError::Format)?;
@@ -428,24 +946,62 @@ fn emit_struct(
     writeln!(output, "        }}").map_err(|_| GenerateError::Format)?;
     writeln!(output, "    }}").map_err(|_| GenerateError::Format)?;
 
+    writeln!(
+        output,
+        "    impl{implementation} GeneratedType for Reader{arguments}"
+    )
+    .map_err(|_| GenerateError::Format)?;
+    if generated_bounds.is_empty() {
+        writeln!(output, "    {{").map_err(|_| GenerateError::Format)?;
+    } else {
+        writeln!(output, "    where {generated_bounds} {{").map_err(|_| GenerateError::Format)?;
+    }
+    writeln!(output, "        fn schema_type() -> capnp_schema::Type {{ capnp_schema::Type::Struct {{ type_id: TYPE_ID, brand: {brand} }} }}")
+        .map_err(|_| GenerateError::Format)?;
+    writeln!(output, "    }}").map_err(|_| GenerateError::Format)?;
+
     writeln!(output, "    #[allow(dead_code)]").map_err(|_| GenerateError::Format)?;
-    writeln!(output, "    pub struct Builder<'schema, 'arena> {{ inner: capnp_schema::DynamicStructBuilder<'schema, 'arena> }}")
+    writeln!(output, "    pub struct Builder<'schema, 'arena{comma}{params}> {{ inner: capnp_schema::DynamicStructBuilder<'schema, 'arena>, marker: PhantomData<fn() -> {marker}> }}",
+        comma = if parameters.is_empty() { "" } else { ", " },
+        params = parameters.iter().map(|parameter| format!("{} = capnp_schema::DynamicValue", parameter.name)).collect::<Vec<_>>().join(", "))
         .map_err(|_| GenerateError::Format)?;
     writeln!(output, "    #[allow(dead_code)]").map_err(|_| GenerateError::Format)?;
     writeln!(
         output,
-        "    impl<'schema, 'arena> Builder<'schema, 'arena> {{"
+        "    impl<'schema, 'arena{comma}{params}> Builder<'schema, 'arena{comma}{args}> {{",
+        comma = if parameters.is_empty() { "" } else { ", " },
+        params = parameters
+            .iter()
+            .map(|parameter| parameter.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", "),
+        args = parameters
+            .iter()
+            .map(|parameter| parameter.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
     )
     .map_err(|_| GenerateError::Format)?;
-    writeln!(output, "        pub fn init_root(schema: &'schema capnp_schema::CompiledSchema, arena: &'arena mut capnp_message::ExclusiveArena) -> Result<Self, capnp_schema::DynamicError> {{")
+    writeln!(output, "        pub fn init_root(schema: &'schema capnp_schema::CompiledSchema, arena: &'arena mut capnp_message::ExclusiveArena) -> Result<Self, capnp_schema::DynamicError>")
         .map_err(|_| GenerateError::Format)?;
-    writeln!(output, "            Ok(Self {{ inner: capnp_schema::DynamicStructBuilder::root(schema, arena, TYPE_ID)? }})")
-        .map_err(|_| GenerateError::Format)?;
+    if generated_bounds.is_empty() {
+        writeln!(output, "        {{").map_err(|_| GenerateError::Format)?;
+    } else {
+        writeln!(output, "        where {generated_bounds}\n        {{")
+            .map_err(|_| GenerateError::Format)?;
+    }
+    if generated_bounds.is_empty() {
+        writeln!(output, "            Ok(Self {{ inner: capnp_schema::DynamicStructBuilder::root(schema, arena, TYPE_ID)?, marker: PhantomData }})")
+            .map_err(|_| GenerateError::Format)?;
+    } else {
+        writeln!(output, "            Ok(Self {{ inner: capnp_schema::DynamicStructBuilder::root_branded(schema, arena, TYPE_ID, {brand})?, marker: PhantomData }})")
+            .map_err(|_| GenerateError::Format)?;
+    }
     writeln!(output, "        }}").map_err(|_| GenerateError::Format)?;
-    writeln!(output, "        pub(super) fn from_dynamic(inner: capnp_schema::DynamicStructBuilder<'schema, 'arena>) -> Self {{ Self {{ inner }} }}")
+    writeln!(output, "        #[doc(hidden)]\n        pub fn from_dynamic(inner: capnp_schema::DynamicStructBuilder<'schema, 'arena>) -> Self {{ Self {{ inner, marker: PhantomData }} }}")
         .map_err(|_| GenerateError::Format)?;
     for field in &structure.fields {
-        emit_builder_field(output, field, names)?;
+        emit_builder_field(output, schema, field, names, &parameters)?;
     }
     writeln!(output, "    }}").map_err(|_| GenerateError::Format)?;
 
@@ -469,112 +1025,86 @@ fn emit_struct(
     Ok(())
 }
 
-fn emit_reader_field(
-    output: &mut String,
-    field: &Field,
+fn struct_reader_type(
+    schema: &CompiledSchema,
+    type_id: NodeId,
+    brand: Option<&Brand>,
     names: &Names,
-) -> Result<(), GenerateError> {
-    let method = rust_snake(&field.name);
-    match &field.kind {
-        FieldKind::Group { type_id } => {
-            let target = names.get(*type_id)?;
-            writeln!(output, "        pub fn {method}(&self) -> Result<super::{target}::Reader, capnp_schema::DynamicError> {{")
-                .map_err(|_| GenerateError::Format)?;
-            writeln!(
-                output,
-                "            match self.inner.get({:?})? {{",
-                field.name
-            )
-            .map_err(|_| GenerateError::Format)?;
-            writeln!(output, "                capnp_schema::DynamicValue::Struct(Some(value)) => Ok(super::{target}::Reader::from_dynamic_struct(value)),")
-                .map_err(|_| GenerateError::Format)?;
-            emit_mismatch(output, "group field", 16)?;
-            writeln!(output, "            }}\n        }}").map_err(|_| GenerateError::Format)?;
-        }
-        FieldKind::Slot { ty, .. } => emit_typed_getter(output, &method, &field.name, ty, names)?,
-    }
-    Ok(())
+    context: &[GenericParameter],
+) -> Result<String, GenerateError> {
+    let arguments = branded_arguments(schema, type_id, brand, names, context)?;
+    let suffix = if arguments.is_empty() {
+        String::new()
+    } else {
+        format!("<{}>", arguments.join(", "))
+    };
+    Ok(format!(
+        "{}::Reader{suffix}",
+        names.reference(type_id, true)?
+    ))
 }
 
-fn emit_typed_getter(
-    output: &mut String,
-    method: &str,
-    wire_name: &str,
+fn branded_arguments(
+    schema: &CompiledSchema,
+    type_id: NodeId,
+    brand: Option<&Brand>,
+    names: &Names,
+    context: &[GenericParameter],
+) -> Result<Vec<String>, GenerateError> {
+    let node = schema
+        .node(type_id)
+        .ok_or(GenerateError::UnknownType(type_id))?;
+    let target_parameters = generic_parameters(schema, node);
+    let mut arguments = Vec::new();
+    for parameter in &target_parameters {
+        let binding = brand
+            .and_then(|brand| {
+                brand
+                    .scopes
+                    .iter()
+                    .find(|scope| scope.scope_id == parameter.scope_id)
+            })
+            .and_then(|scope| match &scope.binding {
+                ScopeBinding::Bind(bindings) => bindings.get(usize::from(parameter.index)),
+                ScopeBinding::Inherit => None,
+            });
+        let argument = match binding {
+            Some(BrandBinding::Type(ty)) => rust_value_type(schema, ty, names, context)?,
+            Some(BrandBinding::Unbound) => "capnp_schema::DynamicValue".to_owned(),
+            None => parameter_name(context, parameter.scope_id, parameter.index)
+                .unwrap_or("capnp_schema::DynamicValue")
+                .to_owned(),
+        };
+        arguments.push(argument);
+    }
+    Ok(arguments)
+}
+
+fn struct_builder_type(
+    schema: &CompiledSchema,
+    type_id: NodeId,
+    brand: Option<&Brand>,
+    names: &Names,
+    context: &[GenericParameter],
+) -> Result<String, GenerateError> {
+    let arguments = branded_arguments(schema, type_id, brand, names, context)?;
+    let suffix = if arguments.is_empty() {
+        String::new()
+    } else {
+        format!(", {}", arguments.join(", "))
+    };
+    Ok(format!(
+        "{}::Builder<'schema, '_{suffix}>",
+        names.reference(type_id, true)?
+    ))
+}
+
+fn rust_value_type(
+    schema: &CompiledSchema,
     ty: &Type,
     names: &Names,
-) -> Result<(), GenerateError> {
-    let (rust_type, pattern, value) = reader_shape(ty, names)?;
-    writeln!(
-        output,
-        "        pub fn {method}(&self) -> Result<{rust_type}, capnp_schema::DynamicError> {{"
-    )
-    .map_err(|_| GenerateError::Format)?;
-    writeln!(
-        output,
-        "            match self.inner.get({wire_name:?})? {{"
-    )
-    .map_err(|_| GenerateError::Format)?;
-    writeln!(output, "                {pattern} => Ok({value}),")
-        .map_err(|_| GenerateError::Format)?;
-    emit_mismatch(output, "field value matching generated type", 16)?;
-    writeln!(output, "            }}\n        }}").map_err(|_| GenerateError::Format)?;
-    Ok(())
-}
-
-fn reader_shape(ty: &Type, names: &Names) -> Result<(String, String, String), GenerateError> {
-    let scalar = |rust_type: &str, variant: &str| {
-        (
-            rust_type.to_owned(),
-            format!("capnp_schema::DynamicValue::{variant}(value)"),
-            "value".to_owned(),
-        )
-    };
-    Ok(match ty {
-        Type::Void => (
-            "()".into(),
-            "capnp_schema::DynamicValue::Void".into(),
-            "()".into(),
-        ),
-        Type::Bool => scalar("bool", "Bool"),
-        Type::Int8 => scalar("i8", "Int8"),
-        Type::Int16 => scalar("i16", "Int16"),
-        Type::Int32 => scalar("i32", "Int32"),
-        Type::Int64 => scalar("i64", "Int64"),
-        Type::UInt8 => scalar("u8", "UInt8"),
-        Type::UInt16 => scalar("u16", "UInt16"),
-        Type::UInt32 => scalar("u32", "UInt32"),
-        Type::UInt64 => scalar("u64", "UInt64"),
-        Type::Float32 => scalar("f32", "Float32"),
-        Type::Float64 => scalar("f64", "Float64"),
-        Type::Text => scalar("String", "Text"),
-        Type::Data => scalar("Vec<u8>", "Data"),
-        Type::List(element) => (
-            format!("Option<ListReader<{}>>", list_type(element, names)?),
-            "capnp_schema::DynamicValue::List(value)".into(),
-            "value.map(ListReader::from_dynamic)".into(),
-        ),
-        Type::Enum { type_id, .. } => {
-            let name = names.get(*type_id)?;
-            (
-                format!("super::{name}"),
-                "capnp_schema::DynamicValue::Enum(value)".into(),
-                format!("super::{name}::from_ordinal(value.ordinal)"),
-            )
-        }
-        Type::Struct { type_id, .. } => {
-            let name = names.get(*type_id)?;
-            (
-                format!("Option<super::{name}::Reader>"),
-                "capnp_schema::DynamicValue::Struct(value)".into(),
-                format!("value.map(super::{name}::Reader::from_dynamic_struct)"),
-            )
-        }
-        Type::Interface { .. } => scalar("Option<u32>", "Capability"),
-        Type::AnyPointer(_) => scalar("capnp_schema::DynamicAnyPointer", "AnyPointer"),
-    })
-}
-
-fn list_type(ty: &Type, names: &Names) -> Result<String, GenerateError> {
+    context: &[GenericParameter],
+) -> Result<String, GenerateError> {
     Ok(match ty {
         Type::Void => "()".into(),
         Type::Bool => "bool".into(),
@@ -590,40 +1120,208 @@ fn list_type(ty: &Type, names: &Names) -> Result<String, GenerateError> {
         Type::Float64 => "f64".into(),
         Type::Text => "String".into(),
         Type::Data => "Vec<u8>".into(),
-        Type::List(element) => format!("ListReader<{}>", list_type(element, names)?),
-        Type::Enum { type_id, .. } => format!("super::{}", names.get(*type_id)?),
-        Type::Struct { type_id, .. } => format!("super::{}::Reader", names.get(*type_id)?),
+        Type::List(element) => format!(
+            "ListReader<{}>",
+            rust_value_type(schema, element, names, context)?
+        ),
+        Type::Enum { type_id, .. } => names.reference(*type_id, true)?,
+        Type::Struct { type_id, brand } => {
+            struct_reader_type(schema, *type_id, Some(brand), names, context)?
+        }
         Type::Interface { .. } => "Option<u32>".into(),
+        Type::AnyPointer(AnyPointerType::Parameter { scope_id, index }) => {
+            parameter_name(context, *scope_id, *index)
+                .unwrap_or("capnp_schema::DynamicValue")
+                .to_owned()
+        }
         Type::AnyPointer(_) => "capnp_schema::DynamicAnyPointer".into(),
+    })
+}
+
+fn emit_reader_field(
+    output: &mut String,
+    schema: &CompiledSchema,
+    field: &Field,
+    names: &Names,
+    context: &[GenericParameter],
+) -> Result<(), GenerateError> {
+    let method = rust_snake(&field.name);
+    match &field.kind {
+        FieldKind::Group { type_id } => {
+            let target = struct_reader_type(schema, *type_id, None, names, context)?;
+            writeln!(
+                output,
+                "        pub fn {method}(&self) -> Result<{target}, capnp_schema::DynamicError> {{"
+            )
+            .map_err(|_| GenerateError::Format)?;
+            writeln!(
+                output,
+                "            match self.inner.get({:?})? {{",
+                field.name
+            )
+            .map_err(|_| GenerateError::Format)?;
+            writeln!(output, "                capnp_schema::DynamicValue::Struct(Some(value)) => Ok(<{target}>::from_dynamic_struct(value)),")
+                .map_err(|_| GenerateError::Format)?;
+            emit_mismatch(output, "group field", 16)?;
+            writeln!(output, "            }}\n        }}").map_err(|_| GenerateError::Format)?;
+        }
+        FieldKind::Slot { ty, .. } => {
+            emit_typed_getter(output, schema, &method, &field.name, ty, names, context)?;
+        }
+    }
+    Ok(())
+}
+
+fn emit_typed_getter(
+    output: &mut String,
+    schema: &CompiledSchema,
+    method: &str,
+    wire_name: &str,
+    ty: &Type,
+    names: &Names,
+    context: &[GenericParameter],
+) -> Result<(), GenerateError> {
+    let (rust_type, pattern, value, bound) = reader_shape(schema, ty, names, context)?;
+    writeln!(
+        output,
+        "        pub fn {method}(&self) -> Result<{rust_type}, capnp_schema::DynamicError>"
+    )
+    .map_err(|_| GenerateError::Format)?;
+    if let Some(bound) = bound {
+        writeln!(output, "        where {bound}\n        {{").map_err(|_| GenerateError::Format)?;
+    } else {
+        writeln!(output, "        {{").map_err(|_| GenerateError::Format)?;
+    }
+    if pattern == "value" {
+        writeln!(
+            output,
+            "            let value = self.inner.get({wire_name:?})?;"
+        )
+        .map_err(|_| GenerateError::Format)?;
+        writeln!(output, "            {value}").map_err(|_| GenerateError::Format)?;
+    } else {
+        writeln!(
+            output,
+            "            match self.inner.get({wire_name:?})? {{"
+        )
+        .map_err(|_| GenerateError::Format)?;
+        writeln!(output, "                {pattern} => Ok({value}),")
+            .map_err(|_| GenerateError::Format)?;
+        emit_mismatch(output, "field value matching generated type", 16)?;
+        writeln!(output, "            }}").map_err(|_| GenerateError::Format)?;
+    }
+    writeln!(output, "        }}").map_err(|_| GenerateError::Format)?;
+    Ok(())
+}
+
+fn reader_shape(
+    schema: &CompiledSchema,
+    ty: &Type,
+    names: &Names,
+    context: &[GenericParameter],
+) -> Result<(String, String, String, Option<String>), GenerateError> {
+    let scalar = |rust_type: &str, variant: &str| {
+        (
+            rust_type.to_owned(),
+            format!("capnp_schema::DynamicValue::{variant}(value)"),
+            "value".to_owned(),
+            None,
+        )
+    };
+    Ok(match ty {
+        Type::Void => (
+            "()".into(),
+            "capnp_schema::DynamicValue::Void".into(),
+            "()".into(),
+            None,
+        ),
+        Type::Bool => scalar("bool", "Bool"),
+        Type::Int8 => scalar("i8", "Int8"),
+        Type::Int16 => scalar("i16", "Int16"),
+        Type::Int32 => scalar("i32", "Int32"),
+        Type::Int64 => scalar("i64", "Int64"),
+        Type::UInt8 => scalar("u8", "UInt8"),
+        Type::UInt16 => scalar("u16", "UInt16"),
+        Type::UInt32 => scalar("u32", "UInt32"),
+        Type::UInt64 => scalar("u64", "UInt64"),
+        Type::Float32 => scalar("f32", "Float32"),
+        Type::Float64 => scalar("f64", "Float64"),
+        Type::Text => scalar("String", "Text"),
+        Type::Data => scalar("Vec<u8>", "Data"),
+        Type::List(element) => (
+            format!(
+                "Option<ListReader<{}>>",
+                rust_value_type(schema, element, names, context)?
+            ),
+            "capnp_schema::DynamicValue::List(value)".into(),
+            "value.map(ListReader::from_dynamic)".into(),
+            None,
+        ),
+        Type::Enum { type_id, .. } => {
+            let name = names.reference(*type_id, true)?;
+            (
+                name.clone(),
+                "capnp_schema::DynamicValue::Enum(value)".into(),
+                format!("{name}::from_ordinal(value.ordinal)"),
+                None,
+            )
+        }
+        Type::Struct { type_id, brand } => {
+            let target = struct_reader_type(schema, *type_id, Some(brand), names, context)?;
+            (
+                format!("Option<{target}>"),
+                "capnp_schema::DynamicValue::Struct(value)".into(),
+                format!("value.map(<{target}>::from_dynamic_struct)"),
+                None,
+            )
+        }
+        Type::Interface { .. } => scalar("Option<u32>", "Capability"),
+        Type::AnyPointer(AnyPointerType::Parameter { scope_id, index }) => {
+            let parameter =
+                parameter_name(context, *scope_id, *index).unwrap_or("capnp_schema::DynamicValue");
+            (
+                parameter.to_owned(),
+                "value".into(),
+                format!("{parameter}::from_dynamic(value)"),
+                Some(format!("{parameter}: ListElement")),
+            )
+        }
+        Type::AnyPointer(_) => scalar("capnp_schema::DynamicAnyPointer", "AnyPointer"),
     })
 }
 
 fn emit_builder_field(
     output: &mut String,
+    schema: &CompiledSchema,
     field: &Field,
     names: &Names,
+    context: &[GenericParameter],
 ) -> Result<(), GenerateError> {
     let method = rust_snake(&field.name);
     match &field.kind {
         FieldKind::Group { type_id } => {
-            let target = names.get(*type_id)?;
-            writeln!(output, "        pub fn {method}(&mut self) -> Result<super::{target}::Builder<'schema, '_>, capnp_schema::DynamicError> {{")
+            let target = struct_builder_type(schema, *type_id, None, names, context)?;
+            writeln!(output, "        pub fn {method}(&mut self) -> Result<{target}, capnp_schema::DynamicError> {{")
                 .map_err(|_| GenerateError::Format)?;
             writeln!(
                 output,
-                "            Ok(super::{target}::Builder::from_dynamic(self.inner.group({:?})?))",
+                "            Ok(<{target}>::from_dynamic(self.inner.group({:?})?))",
                 field.name
             )
             .map_err(|_| GenerateError::Format)?;
             writeln!(output, "        }}").map_err(|_| GenerateError::Format)?;
         }
         FieldKind::Slot { ty, .. } => match ty {
-            Type::Struct { type_id, .. } => {
-                let target = names.get(*type_id)?;
-                writeln!(output, "        pub fn init_{method}(&mut self) -> Result<super::{target}::Builder<'schema, '_>, capnp_schema::DynamicError> {{")
+            Type::Struct { type_id, brand } => {
+                let target = struct_builder_type(schema, *type_id, Some(brand), names, context)?;
+                writeln!(output, "        pub fn init_{method}(&mut self) -> Result<{target}, capnp_schema::DynamicError> {{")
                     .map_err(|_| GenerateError::Format)?;
-                writeln!(output, "            Ok(super::{target}::Builder::from_dynamic(self.inner.init_struct({:?})?))", field.name)
-                    .map_err(|_| GenerateError::Format)?;
+                writeln!(
+                    output,
+                    "            Ok(<{target}>::from_dynamic(self.inner.init_struct({:?})?))",
+                    field.name
+                )
+                .map_err(|_| GenerateError::Format)?;
                 writeln!(output, "        }}").map_err(|_| GenerateError::Format)?;
             }
             Type::List(_) => {
@@ -632,6 +1330,21 @@ fn emit_builder_field(
                 writeln!(
                     output,
                     "            self.inner.init_list({:?}, element_count)",
+                    field.name
+                )
+                .map_err(|_| GenerateError::Format)?;
+                writeln!(output, "        }}").map_err(|_| GenerateError::Format)?;
+            }
+            Type::AnyPointer(AnyPointerType::Parameter { scope_id, index }) => {
+                let parameter = parameter_name(context, *scope_id, *index)
+                    .unwrap_or("capnp_schema::DynamicValue");
+                writeln!(output, "        pub fn set_{method}(&mut self, value: {parameter}) -> Result<(), capnp_schema::DynamicError>")
+                    .map_err(|_| GenerateError::Format)?;
+                writeln!(output, "        where {parameter}: FieldInput\n        {{")
+                    .map_err(|_| GenerateError::Format)?;
+                writeln!(
+                    output,
+                    "            value.set_field(&mut self.inner, {:?})",
                     field.name
                 )
                 .map_err(|_| GenerateError::Format)?;
@@ -684,9 +1397,9 @@ fn builder_shape(ty: &Type, names: &Names) -> Result<Option<(String, String)>, G
         Type::Text => scalar("&str", "Text"),
         Type::Data => scalar("&[u8]", "Data"),
         Type::Enum { type_id, .. } => {
-            let name = names.get(*type_id)?;
+            let name = names.reference(*type_id, true)?;
             Some((
-                format!("super::{name}"),
+                name,
                 "capnp_schema::DynamicInput::Enum(value.ordinal())".into(),
             ))
         }
@@ -944,6 +1657,36 @@ mod tests {
         assert!(source.contains("pub mod import_fixture"));
         assert!(source.contains("pub mod wire_fixture"));
         assert!(source.contains("pub mod language_fixture"));
+    }
+
+    #[test]
+    fn imported_file_ids_can_resolve_to_external_rust_modules() {
+        let schema = CompiledSchema::from_code_generator_request(IMPORT, LoadLimits::default())
+            .expect("pinned import request");
+        let file = &schema.requested_files()[0];
+        let mut options = GenerateOptions::default();
+        for import in &file.imports {
+            let path = if import.name.contains("wire") {
+                "wire_crate::wire"
+            } else {
+                "language_crate::language"
+            };
+            options.import_paths.insert(import.id, path.to_owned());
+        }
+        let generated = generate_requested_file_with_options(&schema, file.id, &options)
+            .expect("external import generation");
+        assert!(
+            generated
+                .source
+                .contains("wire_crate::wire::wire_fixture::Reader")
+        );
+        assert!(
+            generated
+                .source
+                .contains("language_crate::language::language_fixture::Reader")
+        );
+        assert!(!generated.source.contains("pub mod wire_fixture"));
+        assert!(!generated.source.contains("pub mod language_fixture"));
     }
 
     #[test]

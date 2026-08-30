@@ -61,6 +61,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "capnp-generated-import-fixture"
+version = "0.1.0"
+dependencies = [
+ "capnp-codegen",
+ "capnp-generated-fixture",
+ "capnp-message",
+ "capnp-schema",
+]
+
+[[package]]
 name = "capnp-io"
 version = "0.1.0"
 dependencies = [

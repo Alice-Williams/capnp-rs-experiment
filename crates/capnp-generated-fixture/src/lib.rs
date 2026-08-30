@@ -12,6 +12,10 @@ pub mod imports {
     include!(concat!(env!("OUT_DIR"), "/import_fixture.rs"));
 }
 
+pub mod language {
+    include!(concat!(env!("OUT_DIR"), "/language_fixture.rs"));
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -35,6 +39,24 @@ mod tests {
         "e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/",
         "wire-unpacked.bin"
     ));
+    const IMPORT_REQUEST: &[u8] = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../conformance/fixtures/cpp/",
+        "e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/",
+        "compiler-request-import-fixture.bin"
+    ));
+    const LANGUAGE_REQUEST: &[u8] = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../conformance/fixtures/cpp/",
+        "e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/",
+        "compiler-request-language-fixture.bin"
+    ));
+    const LANGUAGE_FRAME: &[u8] = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../conformance/fixtures/cpp/",
+        "e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/",
+        "language-unpacked.bin"
+    ));
 
     fn schema() -> Arc<CompiledSchema> {
         Arc::new(
@@ -44,8 +66,12 @@ mod tests {
     }
 
     fn cpp_message() -> Arc<OwnedMessage> {
+        owned_frame(CPP_FRAME)
+    }
+
+    fn owned_frame(bytes: &[u8]) -> Arc<OwnedMessage> {
         let FrameRead::Message { frame, remaining } =
-            parse_frame(CPP_FRAME, FrameLimits::default()).expect("C++ frame parses")
+            parse_frame(bytes, FrameLimits::default()).expect("C++ frame parses")
         else {
             unreachable!("fixture is not empty")
         };
@@ -55,6 +81,110 @@ mod tests {
             ReaderLimits::default(),
         )
         .expect("C++ segments validate")
+    }
+
+    #[test]
+    fn generated_generic_brands_are_typed_and_unbound_access_remains_lossless() {
+        let schema = Arc::new(
+            CompiledSchema::from_code_generator_request(IMPORT_REQUEST, LoadLimits::default())
+                .expect("import request loads"),
+        );
+        let message = owned_frame(LANGUAGE_FRAME);
+        let fixture = super::imports::language_fixture::Reader::from_root(
+            Arc::clone(&schema),
+            Arc::clone(&message),
+        )
+        .expect("language fixture opens");
+        assert_eq!(
+            fixture
+                .boxed_text()
+                .expect("Box(Text)")
+                .expect("non-null")
+                .value()
+                .expect("T resolves to Text"),
+            "generic text"
+        );
+        assert_eq!(
+            fixture
+                .boxed_data()
+                .expect("Box(Data)")
+                .expect("non-null")
+                .value()
+                .expect("T resolves to Data"),
+            vec![0, 1, 2, 0xff]
+        );
+        let pair = fixture.nested_generic().expect("Pair").expect("non-null");
+        assert_eq!(pair.first().expect("outer T"), "nested");
+        assert_eq!(pair.second().expect("inner U"), vec![0xca, 0xfe]);
+
+        let unbound = super::imports::box_::Reader::from_root(schema, message)
+            .expect("unbound generic reader");
+        assert!(matches!(
+            unbound.value(),
+            Ok(capnp_schema::DynamicValue::AnyPointer(
+                capnp_schema::DynamicAnyPointer::Struct(_)
+            ))
+        ));
+    }
+
+    #[test]
+    fn generated_generic_builder_binds_text_at_the_wire_boundary() {
+        let schema = Arc::new(
+            CompiledSchema::from_code_generator_request(IMPORT_REQUEST, LoadLimits::default())
+                .expect("import request loads"),
+        );
+        let mut arena = ExclusiveArena::new(8, 128).expect("arena");
+        super::imports::box_::Builder::<String>::init_root(&schema, &mut arena)
+            .expect("Box(Text) builder")
+            .set_value("typed generic".to_owned())
+            .expect("generic setter");
+        let message = OwnedMessage::new(arena.into_segments(), ReaderLimits::default())
+            .expect("message validates");
+        assert_eq!(
+            super::imports::box_::Reader::<String>::from_root(schema, message)
+                .expect("Box(Text) reader")
+                .value()
+                .expect("typed value"),
+            "typed generic"
+        );
+    }
+
+    #[test]
+    fn generated_constants_and_typed_annotations_run_without_static_backing() {
+        assert_eq!(super::language::ANSWER, 42);
+        assert_eq!(super::language::GREETING, "hello");
+        assert_eq!(super::language::SIGNATURE, &[0, 0xca, 0xfe, 0xff]);
+
+        let schema = Arc::new(
+            CompiledSchema::from_code_generator_request(LANGUAGE_REQUEST, LoadLimits::default())
+                .expect("language request loads"),
+        );
+        let primes = super::language::primes(Arc::clone(&schema), ReaderLimits::default())
+            .expect("list constant opens")
+            .expect("list constant is non-null");
+        assert_eq!(primes.len().expect("constant length"), 5);
+        assert_eq!(primes.get(4).expect("constant element"), 11);
+        let sample = super::language::sample_box(Arc::clone(&schema), ReaderLimits::default())
+            .expect("struct constant opens")
+            .expect("struct constant is non-null");
+        assert_eq!(
+            sample.value().expect("branded constant field"),
+            "constant generic struct"
+        );
+
+        let generic_box = schema
+            .node(super::language::box_::TYPE_ID)
+            .expect("Box schema");
+        let annotation = super::language::fixture_tag_annotation::find(&generic_box.annotations)
+            .expect("typed annotation is present");
+        assert_eq!(
+            super::language::fixture_tag_annotation::decode(annotation)
+                .expect("annotation value type matches"),
+            "generic-box"
+        );
+        let targets = std::hint::black_box(super::language::fixture_tag_annotation::TARGETS);
+        assert!(targets.structure);
+        assert!(targets.field);
     }
 
     #[test]

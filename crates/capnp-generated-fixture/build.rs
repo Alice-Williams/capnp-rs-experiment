@@ -16,6 +16,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         ("compiler-request-wire-fixture.bin", "wire_fixture.rs"),
         ("compiler-request-evolution-v2.bin", "evolution_v2.rs"),
         ("compiler-request-import-fixture.bin", "import_fixture.rs"),
+        (
+            "compiler-request-language-fixture.bin",
+            "language_fixture.rs",
+        ),
     ] {
         generate(&fixtures.join(fixture), &output.join(destination))?;
     }
