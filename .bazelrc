@@ -1,3 +1,6 @@
 common --enable_bzlmod
 build --verbose_failures
+# rules_rust defaults to GNU gold on Linux, but Debian Trixie no longer ships
+# that linker. Use the installed GNU BFD linker explicitly in every environment.
+build --@rules_rust//rust/settings:extra_rustc_flags=-Clink-arg=-fuse-ld=bfd
 test --test_output=errors
