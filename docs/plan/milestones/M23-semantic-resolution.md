@@ -1,6 +1,6 @@
 # M23 — Names, imports, IDs, constants, and type resolution
 
-- Status: planned
+- Status: complete
 - Phase: 4
 - Depends on: M22
 
@@ -10,11 +10,11 @@ Resolve modules, names, aliases, imports, IDs, constants, annotations, cycles, a
 
 ## Implementation checklist
 
-- [ ] Restate the compatibility sources, invariants, and explicit non-goals in module or design documentation.
-- [ ] Implement only this milestone's deliverable behind the narrowest crate boundary that owns the invariant.
-- [ ] Add the independent fixtures and positive, negative, property, compile, concurrency, fuzz, or benchmark coverage appropriate to this boundary.
-- [ ] Run Cargo and Bazel validation in the Linux development container.
-- [ ] Record evidence and update compatibility/manifest.toml.
+- [x] Restate the compatibility sources, invariants, and explicit non-goals in module or design documentation.
+- [x] Implement only this milestone's deliverable behind the narrowest crate boundary that owns the invariant.
+- [x] Add the independent fixtures and positive, negative, property, compile, concurrency, fuzz, or benchmark coverage appropriate to this boundary.
+- [x] Run Cargo and Bazel validation in the Linux development container.
+- [x] Record evidence and update compatibility/manifest.toml.
 
 ## Required exit evidence
 
@@ -23,4 +23,3 @@ Reference corpus semantics match; standard schemas are overridable by explicit p
 ## Scope boundary
 
 Later milestone behavior may be anticipated in types only where required to avoid a known compatibility dead end. It must not be implemented or claimed here.
-

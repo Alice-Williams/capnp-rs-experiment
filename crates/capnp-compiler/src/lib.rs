@@ -16,6 +16,8 @@
 use std::fmt;
 use std::sync::Arc;
 
+pub mod semantic;
+
 /// A half-open UTF-8 byte range in the original source.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub struct SourceRange {

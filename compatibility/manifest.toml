@@ -49,7 +49,7 @@ rules_shell = "0.8.0"
 [support]
 wire = "M10 borrowed and Arc-owned typed readers with stable coordinate references"
 generated_api = "M21 typed data and thread-safe local interface APIs with exact pipelines"
-native_compiler = "M22 bounded lossless lexer and statement syntax tree; semantic compilation remains M23-M25"
+native_compiler = "M23 bounded deterministic module, name, import, ID, constant, annotation, generic, and type-reference resolution; layout and request emission remain M24-M25"
 rpc_level = "M21 in-memory local dispatch, inheritance, streaming completion, and capability pipelines; network protocol deferred to M32+"
 parallel_read = "not-started"
 parallel_build = "not-started"
@@ -83,6 +83,17 @@ M19 = "complete"
 M20 = "complete"
 M21 = "complete"
 M22 = "complete"
+M23 = "complete"
+
+[evidence.M23]
+crate = "crates/capnp-compiler"
+model = ["explicit and overridable standard module sources", "normalized relative and absolute imports", "lexically scoped import and declaration aliases", "file and declaration IDs", "field, enumerant, and method ordinals", "generic declaration and method scopes", "resolved type and value expressions", "annotation declarations, targets, and applications"]
+determinism = "BTreeMap/BTreeSet module discovery, symbol indexes, diagnostics, and duplicate checks produce identical output for reversed source insertion order"
+oracle = "native language/import fixture file IDs, explicit node IDs, declaration names and kinds, generic parameters, import IDs, and constant values agree with pinned C++ CodeGeneratorRequest fixtures at e7c9cd96f1505b5ae486db7821006c2f5dce5b5b"
+overrides = "an explicit /capnp/base.capnp source wins over the standard source with identical results in either insertion order"
+negative = ["missing modules and names", "duplicate names, ordinals, imports, and global IDs", "invalid high-bit IDs", "constant and alias cycles", "invalid annotation targets", "module, declaration, and expression work limits"]
+scope = "semantic resolution only; field layout, discriminants, evolution layout, and CodeGeneratorRequest emission remain M24-M25"
+validation = "Rust 1.98 and 1.85 workspace tests; public API docs; Clippy -D warnings; pinned C++ compiler-request comparisons; Bazel 18/18"
 
 [evidence.M22]
 crate = "crates/capnp-compiler"

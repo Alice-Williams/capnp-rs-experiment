@@ -2,7 +2,10 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 rust_library(
     name = "capnp_compiler",
-    srcs = ["src/lib.rs"],
+    srcs = [
+        "src/lib.rs",
+        "src/semantic.rs",
+    ],
     crate_name = "capnp_compiler",
     edition = "2024",
     deps = [
@@ -14,5 +17,8 @@ rust_library(
 rust_test(
     name = "capnp_compiler_test",
     crate = ":capnp_compiler",
-    compile_data = ["//conformance:schema_source_corpus"],
+    compile_data = [
+        "//conformance:compiler_requests",
+        "//conformance:schema_source_corpus",
+    ],
 )
