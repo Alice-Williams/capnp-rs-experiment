@@ -1,4 +1,9 @@
+#![no_std]
 #![doc = "Safe Cap'n Proto messages, readers, builders, and traversal budgets."]
+
+extern crate alloc;
+#[cfg(test)]
+extern crate std;
 
 mod blob;
 mod budget;
@@ -53,8 +58,8 @@ pub use validation::{
 #[cfg(test)]
 #[allow(dead_code)]
 mod m02_design_prototype {
+    use alloc::sync::Arc;
     use core::marker::PhantomData;
-    use std::sync::Arc;
 
     struct OwnedMessage {
         segments: Arc<[Arc<[u8]>]>,

@@ -11,6 +11,11 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = ["std"]
+alloc = ["dep:capnp-message"]
+std = ["alloc", "capnp-message/std"]
+
 [dependencies]
 capnp-wire = { path = "../capnp-wire" }
-capnp-message = { path = "../capnp-message" }
+capnp-message = { path = "../capnp-message", default-features = false, optional = true }

@@ -29,7 +29,7 @@ impl fmt::Display for PrimitiveError {
     }
 }
 
-impl std::error::Error for PrimitiveError {}
+impl core::error::Error for PrimitiveError {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PrimitiveType {

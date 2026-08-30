@@ -1,5 +1,7 @@
 use core::fmt;
 
+use alloc::{boxed::Box, vec};
+
 use capnp_wire::{ElementSize, PointerKind, WirePointer};
 
 use crate::{BudgetExhausted, NestingLimit, NestingLimitExceeded, TraversalBudget};
@@ -86,8 +88,8 @@ impl fmt::Display for TraversalError {
     }
 }
 
-impl std::error::Error for TraversalError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+impl core::error::Error for TraversalError {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         match self {
             Self::Validation(error) => Some(error),
             Self::Budget(error) => Some(error),
@@ -156,7 +158,7 @@ impl fmt::Display for ValidationError {
     }
 }
 
-impl std::error::Error for ValidationError {}
+impl core::error::Error for ValidationError {}
 
 /// Immutable borrowed segments addressed only by stable coordinates.
 #[derive(Debug)]
@@ -702,6 +704,7 @@ fn list_word_count(element_size: ElementSize, count: u32) -> Result<u64, Validat
 mod tests {
     use super::*;
     use crate::{LocalTraversalBudget, TraversalBudget};
+    use alloc::vec::Vec;
 
     fn with_pointer(pointer: WirePointer, trailing_words: usize) -> Vec<u8> {
         let mut bytes = vec![0u8; (trailing_words + 1) * 8];

@@ -1,0 +1,400 @@
+//! Partial-I/O-safe standard-library adapters and generic mapped backing.
+//!
+//! The frame reader validates the segment table and configured limits before
+//! allocating the body. The bounded writer rejects an over-limit operation
+//! before its first write. `MappedFrame<B>` accepts any stable byte backing
+//! (including an mmap type supplied by an application) and returns segment
+//! slices that point directly into that backing; this crate performs no unsafe
+//! OS mapping itself.
+
+use core::fmt;
+
+use alloc::vec::Vec;
+use capnp_wire::read_u32_le;
+use std::io::{self, Read, Write};
+
+use crate::{
+    BorrowedFrameRead, FrameError, FrameLimits, MAX_SEGMENTS, Segment, encode_frame, parse_frame,
+    parse_frame_into,
+};
+
+#[derive(Debug)]
+pub enum IoFrameError {
+    Io(io::Error),
+    Frame(FrameError),
+    OutputLimit { requested: usize, limit: usize },
+}
+
+impl fmt::Display for IoFrameError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io(error) => error.fmt(formatter),
+            Self::Frame(error) => error.fmt(formatter),
+            Self::OutputLimit { requested, limit } => {
+                write!(
+                    formatter,
+                    "write requires {requested} bytes; limit is {limit}"
+                )
+            }
+        }
+    }
+}
+
+impl core::error::Error for IoFrameError {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        match self {
+            Self::Io(error) => Some(error),
+            Self::Frame(error) => Some(error),
+            Self::OutputLimit { .. } => None,
+        }
+    }
+}
+
+impl From<io::Error> for IoFrameError {
+    fn from(value: io::Error) -> Self {
+        Self::Io(value)
+    }
+}
+
+impl From<FrameError> for IoFrameError {
+    fn from(value: FrameError) -> Self {
+        Self::Frame(value)
+    }
+}
+
+/// Reads one bounded standard frame, distinguishing clean EOF from truncation.
+///
+/// ```
+/// use std::io::Cursor;
+/// use capnp_io::{FrameLimits, read_frame, write_frame};
+/// let segment = [0_u8; 8];
+/// let encoded = write_frame(Vec::new(), &[&segment], FrameLimits::default(), 16)?;
+/// let mut input = Cursor::new(encoded.clone());
+/// assert_eq!(read_frame(&mut input, FrameLimits::default())?, Some(encoded));
+/// assert_eq!(read_frame(&mut input, FrameLimits::default())?, None);
+/// # Ok::<(), capnp_io::IoFrameError>(())
+/// ```
+pub fn read_frame<R: Read>(
+    reader: &mut R,
+    limits: FrameLimits,
+) -> Result<Option<Vec<u8>>, IoFrameError> {
+    let mut header = [0_u8; 4];
+    let read = read_until_full(reader, &mut header)?;
+    if read == 0 {
+        return Ok(None);
+    }
+    if read != header.len() {
+        return Err(FrameError::TruncatedHeader { available: read }.into());
+    }
+    let count = read_u32_le(&header, 0)
+        .expect("complete header")
+        .checked_add(1)
+        .ok_or(FrameError::SegmentCountOverflow)?;
+    let segment_limit = limits.max_segments.min(MAX_SEGMENTS);
+    if count > segment_limit {
+        return Err(FrameError::TooManySegments {
+            count,
+            limit: segment_limit,
+        }
+        .into());
+    }
+    let count_usize = usize::try_from(count).map_err(|_| FrameError::BodyLengthOverflow)?;
+    let table_len = (count_usize / 2 + 1)
+        .checked_mul(8)
+        .ok_or(FrameError::BodyLengthOverflow)?;
+    let mut frame = Vec::new();
+    frame
+        .try_reserve_exact(table_len)
+        .map_err(|_| io::Error::other("frame table allocation failed"))?;
+    frame.extend_from_slice(&header);
+    frame.resize(table_len, 0);
+    let table_read = read_until_full(reader, &mut frame[4..table_len])?;
+    if table_read != table_len - 4 {
+        return Err(FrameError::TruncatedSegmentTable {
+            expected: table_len,
+            available: table_read + 4,
+        }
+        .into());
+    }
+
+    let mut total_words = 0_u64;
+    for index in 0..count_usize {
+        let offset = 4 * (index + 1);
+        let words = read_u32_le(&frame, offset).expect("complete table");
+        total_words = total_words
+            .checked_add(u64::from(words))
+            .ok_or(FrameError::TotalWordsOverflow)?;
+        if total_words > limits.max_total_words {
+            return Err(FrameError::MessageTooLarge {
+                words: total_words,
+                limit: limits.max_total_words,
+            }
+            .into());
+        }
+    }
+    let body_len = usize::try_from(
+        total_words
+            .checked_mul(8)
+            .ok_or(FrameError::BodyLengthOverflow)?,
+    )
+    .map_err(|_| FrameError::BodyLengthOverflow)?;
+    let encoded_len = table_len
+        .checked_add(body_len)
+        .ok_or(FrameError::BodyLengthOverflow)?;
+    frame
+        .try_reserve_exact(body_len)
+        .map_err(|_| io::Error::other("frame body allocation failed"))?;
+    frame.resize(encoded_len, 0);
+    let body_read = read_until_full(reader, &mut frame[table_len..])?;
+    if body_read != body_len {
+        return Err(FrameError::TruncatedBody {
+            expected: body_len,
+            available: body_read,
+        }
+        .into());
+    }
+    Ok(Some(frame))
+}
+
+fn read_until_full<R: Read>(reader: &mut R, mut output: &mut [u8]) -> io::Result<usize> {
+    let original = output.len();
+    while !output.is_empty() {
+        match reader.read(output) {
+            Ok(0) => break,
+            Ok(read) => output = &mut output[read..],
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(original - output.len())
+}
+
+#[derive(Debug)]
+pub struct BoundedWriter<W> {
+    inner: W,
+    limit: usize,
+    written: usize,
+}
+
+impl<W> BoundedWriter<W> {
+    pub const fn new(inner: W, limit: usize) -> Self {
+        Self {
+            inner,
+            limit,
+            written: 0,
+        }
+    }
+
+    pub const fn written(&self) -> usize {
+        self.written
+    }
+
+    pub fn into_inner(self) -> W {
+        self.inner
+    }
+}
+
+impl<W: Write> BoundedWriter<W> {
+    pub fn write_all(&mut self, bytes: &[u8]) -> Result<(), IoFrameError> {
+        let requested = self
+            .written
+            .checked_add(bytes.len())
+            .ok_or(IoFrameError::OutputLimit {
+                requested: usize::MAX,
+                limit: self.limit,
+            })?;
+        if requested > self.limit {
+            return Err(IoFrameError::OutputLimit {
+                requested,
+                limit: self.limit,
+            });
+        }
+        let mut remaining = bytes;
+        while !remaining.is_empty() {
+            match self.inner.write(remaining) {
+                Ok(0) => return Err(io::Error::from(io::ErrorKind::WriteZero).into()),
+                Ok(written) => {
+                    self.written += written;
+                    remaining = &remaining[written..];
+                }
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok(())
+    }
+
+    pub fn flush(&mut self) -> Result<(), IoFrameError> {
+        self.inner.flush().map_err(IoFrameError::from)
+    }
+}
+
+pub fn write_frame<W: Write>(
+    writer: W,
+    segments: &[&[u8]],
+    frame_limits: FrameLimits,
+    output_limit: usize,
+) -> Result<W, IoFrameError> {
+    let frame = encode_frame(segments, frame_limits)?;
+    let mut bounded = BoundedWriter::new(writer, output_limit);
+    bounded.write_all(&frame)?;
+    bounded.flush()?;
+    Ok(bounded.into_inner())
+}
+
+/// Stable byte backing suitable for memory-mapped files and similar storage.
+///
+/// The backing can be an application-owned mmap type implementing
+/// `AsRef<[u8]>`; returned segment bytes are subslices of that same mapping.
+#[derive(Debug)]
+pub struct MappedFrame<B> {
+    backing: B,
+    limits: FrameLimits,
+}
+
+impl<B: AsRef<[u8]>> MappedFrame<B> {
+    pub fn new(backing: B, limits: FrameLimits) -> Result<Self, FrameError> {
+        let read = parse_frame(backing.as_ref(), limits)?;
+        let crate::FrameRead::Message { remaining, .. } = read else {
+            return Err(FrameError::TruncatedHeader { available: 0 });
+        };
+        if !remaining.is_empty() {
+            return Err(FrameError::TrailingData {
+                bytes: remaining.len(),
+            });
+        }
+        Ok(Self { backing, limits })
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        self.backing.as_ref()
+    }
+
+    pub fn parse_into<'input, 'storage>(
+        &'input self,
+        storage: &'storage mut [Segment<'input>],
+    ) -> Result<BorrowedFrameRead<'input, 'storage>, FrameError> {
+        parse_frame_into(self.backing.as_ref(), self.limits, storage)
+    }
+
+    pub fn into_inner(self) -> B {
+        self.backing
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    const FRAME: &[u8] = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../conformance/fixtures/cpp/",
+        "e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/wire-unpacked.bin"
+    ));
+
+    struct PartialReader {
+        bytes: Cursor<Vec<u8>>,
+        max: usize,
+        interrupt: bool,
+    }
+
+    impl Read for PartialReader {
+        fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+            if self.interrupt {
+                self.interrupt = false;
+                return Err(io::ErrorKind::Interrupted.into());
+            }
+            self.interrupt = true;
+            let max = self.max.min(output.len());
+            self.bytes.read(&mut output[..max])
+        }
+    }
+
+    struct PartialWriter {
+        bytes: Vec<u8>,
+        max: usize,
+        interrupt: bool,
+    }
+
+    impl Write for PartialWriter {
+        fn write(&mut self, input: &[u8]) -> io::Result<usize> {
+            if self.interrupt {
+                self.interrupt = false;
+                return Err(io::ErrorKind::Interrupted.into());
+            }
+            self.interrupt = true;
+            let written = self.max.min(input.len());
+            self.bytes.extend_from_slice(&input[..written]);
+            Ok(written)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn every_partial_read_size_and_interruption_reconstructs_the_frame() {
+        for max in 1..=FRAME.len() + 1 {
+            let mut reader = PartialReader {
+                bytes: Cursor::new(FRAME.to_vec()),
+                max,
+                interrupt: true,
+            };
+            assert_eq!(
+                read_frame(&mut reader, FrameLimits::default()).expect("frame reads"),
+                Some(FRAME.to_vec())
+            );
+            assert_eq!(
+                read_frame(&mut reader, FrameLimits::default()).expect("clean EOF"),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn bounded_partial_writer_preserves_bytes_and_rejects_before_writing() {
+        for max in 1..=17 {
+            let writer = PartialWriter {
+                bytes: Vec::new(),
+                max,
+                interrupt: true,
+            };
+            let mut bounded = BoundedWriter::new(writer, FRAME.len());
+            bounded.write_all(FRAME).expect("frame writes");
+            assert_eq!(bounded.written(), FRAME.len());
+            assert_eq!(bounded.into_inner().bytes, FRAME);
+        }
+        let writer = PartialWriter {
+            bytes: Vec::new(),
+            max: 1,
+            interrupt: false,
+        };
+        let mut bounded = BoundedWriter::new(writer, FRAME.len() - 1);
+        assert!(matches!(
+            bounded.write_all(FRAME),
+            Err(IoFrameError::OutputLimit { .. })
+        ));
+        assert!(bounded.into_inner().bytes.is_empty());
+    }
+
+    #[test]
+    fn mapped_backing_segments_are_exact_subslices_of_the_original() {
+        let mapped = MappedFrame::new(FRAME.to_vec(), FrameLimits::default())
+            .expect("mapped frame validates");
+        let mut storage = [Segment::EMPTY; MAX_SEGMENTS as usize];
+        let BorrowedFrameRead::Message { frame, remaining } = mapped
+            .parse_into(&mut storage)
+            .expect("mapped frame parses")
+        else {
+            unreachable!("validated backing has a message");
+        };
+        assert!(remaining.is_empty());
+        let segment = frame.segment(0).expect("segment exists");
+        assert_eq!(
+            segment.bytes().as_ptr(),
+            mapped.bytes()[frame.table_len()..].as_ptr()
+        );
+    }
+}

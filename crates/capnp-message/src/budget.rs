@@ -34,7 +34,7 @@ impl fmt::Display for BudgetExhausted {
     }
 }
 
-impl std::error::Error for BudgetExhausted {}
+impl core::error::Error for BudgetExhausted {}
 
 mod sealed {
     pub trait Sealed {}
@@ -179,11 +179,12 @@ impl fmt::Display for NestingLimitExceeded {
     }
 }
 
-impl std::error::Error for NestingLimitExceeded {}
+impl core::error::Error for NestingLimitExceeded {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec::Vec;
 
     #[test]
     fn local_charge_is_complete_or_unchanged() {

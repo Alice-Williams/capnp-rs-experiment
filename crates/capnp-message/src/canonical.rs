@@ -14,6 +14,8 @@
 
 use core::fmt;
 
+use alloc::boxed::Box;
+
 use crate::{ExclusiveArena, GraphError, MessageSegments, NestingLimit, TraversalBudget};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -29,8 +31,8 @@ impl fmt::Display for CanonicalError {
     }
 }
 
-impl std::error::Error for CanonicalError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+impl core::error::Error for CanonicalError {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         match self {
             Self::Graph(error) => Some(error),
         }

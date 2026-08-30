@@ -18,6 +18,8 @@ use core::fmt;
 use core::marker::PhantomData;
 use core::sync::atomic::{AtomicU64, Ordering};
 
+use alloc::{boxed::Box, vec, vec::Vec};
+
 use capnp_wire::{
     ElementSize, WireError, WirePointer, write_f32_le, write_f64_le, write_i8, write_i16_le,
     write_i32_le, write_i64_le, write_u8, write_u16_le, write_u32_le, write_u64_le,
@@ -124,8 +126,8 @@ impl fmt::Display for ArenaError {
     }
 }
 
-impl std::error::Error for ArenaError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+impl core::error::Error for ArenaError {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         match self {
             Self::Wire(error) => Some(error),
             Self::InvalidWordLimit { .. }
@@ -165,8 +167,8 @@ impl fmt::Display for GraphError {
     }
 }
 
-impl std::error::Error for GraphError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+impl core::error::Error for GraphError {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         match self {
             Self::Arena(error) => Some(error),
             Self::Traversal(error) => Some(error),

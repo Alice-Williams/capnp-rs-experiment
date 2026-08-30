@@ -55,7 +55,7 @@ impl fmt::Display for ListReadError {
     }
 }
 
-impl std::error::Error for ListReadError {}
+impl core::error::Error for ListReadError {}
 
 macro_rules! error_from {
     ($source:ty, $variant:ident) => {

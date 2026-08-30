@@ -1,3 +1,5 @@
+use alloc::{vec, vec::Vec};
+
 use capnp_wire::{ElementSize, WirePointer};
 
 use crate::{

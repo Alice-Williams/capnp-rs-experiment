@@ -39,7 +39,7 @@ impl fmt::Display for BlobError {
     }
 }
 
-impl std::error::Error for BlobError {}
+impl core::error::Error for BlobError {}
 
 impl From<TraversalError> for BlobError {
     fn from(value: TraversalError) -> Self {
@@ -205,6 +205,7 @@ impl<'a> MessageSegments<'a> {
 mod tests {
     use super::*;
     use crate::{BudgetExhausted, LocalTraversalBudget};
+    use alloc::vec;
     use capnp_wire::WirePointer;
 
     #[test]

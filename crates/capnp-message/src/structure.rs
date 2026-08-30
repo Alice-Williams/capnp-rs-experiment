@@ -41,7 +41,7 @@ impl fmt::Display for StructReadError {
     }
 }
 
-impl std::error::Error for StructReadError {}
+impl core::error::Error for StructReadError {}
 
 impl From<TraversalError> for StructReadError {
     fn from(value: TraversalError) -> Self {
@@ -352,6 +352,7 @@ impl<'context, 'data, B: TraversalBudget> StructReader<'context, 'data, B> {
 mod tests {
     use super::*;
     use crate::{BudgetExhausted, LocalTraversalBudget};
+    use alloc::vec;
     use capnp_wire::{ElementSize, WirePointer};
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -53,9 +53,9 @@ native_compiler = "not-started"
 rpc_level = "none"
 parallel_read = "not-started"
 parallel_build = "not-started"
-std = "workspace-skeleton"
-no_std_alloc = "planned"
-no_allocation = "planned"
+std = "M16 sync partial-I/O and executor-neutral async framing adapters"
+no_std_alloc = "M16 capnp-message and capnp-io alloc feature matrix"
+no_allocation = "M16 capnp-wire plus caller-segment-buffer frame parsing"
 construction = "M14 bounded schema-independent canonicalization and exact canonical checking"
 packed = "M15 bounded incremental encoder and decoder with pinned C++ byte parity"
 
@@ -76,6 +76,16 @@ M12 = "complete"
 M13 = "complete"
 M14 = "complete"
 M15 = "complete"
+M16 = "complete"
+
+[evidence.M16]
+crates = ["crates/capnp-wire", "crates/capnp-message", "crates/capnp-io", "crates/capnp-async"]
+sync = ["clean EOF distinct from truncation", "every partial read size with injected interruptions", "partial bounded writes", "over-limit writes rejected before mutation"]
+async = ["executor-neutral Poll traits", "reader state retained across every injected Pending boundary", "ordered concatenated frames without overread", "exact unsent-byte backpressure", "ordered partial writes retained across cancellation"]
+storage = ["caller-provided segment descriptor buffer with no allocation", "segment bytes borrow the original frame", "generic stable mmap-compatible backing with pointer-identical segment slices"]
+matrix = ["capnp-wire no_std no allocation", "capnp-message no_std+alloc", "capnp-io no features", "capnp-io alloc", "capnp-io std", "capnp-async std"]
+matrix_check = "tools/verify-m16-feature-matrix.sh"
+validation = "Rust 1.98 and 1.85 workspace tests and feature checks; public API docs; Clippy -D warnings; Bazel 18/18"
 
 [evidence.M15]
 crate = "crates/capnp-io"

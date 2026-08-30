@@ -9,7 +9,10 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-loom-tests = ["dep:loom"]
+default = ["std"]
+alloc = []
+std = ["alloc"]
+loom-tests = ["std", "dep:loom"]
 
 [lints]
 workspace = true

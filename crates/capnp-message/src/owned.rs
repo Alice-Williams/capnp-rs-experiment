@@ -10,9 +10,9 @@
 //! These types deliberately do not provide mutation, schema-generated types,
 //! capabilities, or per-object copies. Those belong to later milestones.
 
+use alloc::{sync::Arc, vec::Vec};
 use core::fmt;
 use core::marker::PhantomData;
-use std::sync::Arc;
 
 use crate::{
     ListReadError, ListReader, MessageSegments, NestingLimit, ResolvedPointer,
@@ -51,8 +51,8 @@ impl fmt::Display for OwnedReadError {
     }
 }
 
-impl std::error::Error for OwnedReadError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+impl core::error::Error for OwnedReadError {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         match self {
             Self::Validation(error) => Some(error),
             Self::Struct(error) => Some(error),
@@ -408,6 +408,7 @@ impl<T: ObjectKind> TypedMessage<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec;
     use capnp_wire::WirePointer;
 
     fn nested_struct_message(limits: ReaderLimits) -> Arc<OwnedMessage> {

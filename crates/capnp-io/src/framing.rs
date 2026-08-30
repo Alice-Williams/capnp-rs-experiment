@@ -1,6 +1,9 @@
 use core::fmt;
 
-use capnp_wire::read_u32_le;
+#[cfg(feature = "alloc")]
+use alloc::{boxed::Box, vec::Vec};
+
+use capnp_wire::{WORD_BYTES, read_u32_le};
 
 /// The reference implementation's hard segment-count limit.
 pub const MAX_SEGMENTS: u32 = 512;
@@ -34,6 +37,8 @@ pub enum FrameError {
     NoSegments,
     SegmentNotWordAligned { index: usize, bytes: usize },
     SegmentTooLarge { index: usize, words: u64 },
+    SegmentBufferTooSmall { required: usize, available: usize },
+    TrailingData { bytes: usize },
 }
 
 impl fmt::Display for FrameError {
@@ -78,11 +83,21 @@ impl fmt::Display for FrameError {
                     "segment {index} has {words} words; maximum is u32::MAX"
                 )
             }
+            Self::SegmentBufferTooSmall {
+                required,
+                available,
+            } => write!(
+                formatter,
+                "frame needs {required} segment slots but only {available} were provided"
+            ),
+            Self::TrailingData { bytes } => {
+                write!(formatter, "{bytes} trailing bytes follow the frame")
+            }
         }
     }
 }
 
-impl std::error::Error for FrameError {}
+impl core::error::Error for FrameError {}
 
 /// Immutable location and contents of one segment within a parsed frame.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -93,6 +108,12 @@ pub struct Segment<'a> {
 }
 
 impl<'a> Segment<'a> {
+    pub const EMPTY: Self = Self {
+        id: 0,
+        word_count: 0,
+        bytes: &[],
+    };
+
     pub const fn id(self) -> u32 {
         self.id
     }
@@ -106,7 +127,153 @@ impl<'a> Segment<'a> {
     }
 }
 
+/// A standard frame whose segment descriptors occupy caller-provided storage.
+#[derive(Debug, Eq, PartialEq)]
+pub struct BorrowedFrame<'input, 'storage> {
+    segments: &'storage [Segment<'input>],
+    table_len: usize,
+    encoded_len: usize,
+}
+
+impl<'input, 'storage> BorrowedFrame<'input, 'storage> {
+    pub const fn segments(&self) -> &'storage [Segment<'input>] {
+        self.segments
+    }
+
+    pub fn segment(&self, id: u32) -> Option<Segment<'input>> {
+        usize::try_from(id)
+            .ok()
+            .and_then(|index| self.segments.get(index).copied())
+    }
+
+    pub const fn table_len(&self) -> usize {
+        self.table_len
+    }
+
+    pub const fn encoded_len(&self) -> usize {
+        self.encoded_len
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum BorrowedFrameRead<'input, 'storage> {
+    EndOfInput,
+    Message {
+        frame: BorrowedFrame<'input, 'storage>,
+        remaining: &'input [u8],
+    },
+}
+
+/// Parses one standard frame without allocation, writing only segment
+/// descriptors into `storage`; every segment continues to borrow `input`.
+///
+/// ```
+/// use capnp_io::{BorrowedFrameRead, FrameLimits, Segment, parse_frame_into};
+/// let bytes = [0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+/// let mut slots = [Segment::EMPTY; 1];
+/// let BorrowedFrameRead::Message { frame, remaining } =
+///     parse_frame_into(&bytes, FrameLimits::default(), &mut slots)? else {
+///         unreachable!();
+///     };
+/// assert_eq!(frame.segments()[0].bytes().as_ptr(), bytes[8..].as_ptr());
+/// assert!(remaining.is_empty());
+/// # Ok::<(), capnp_io::FrameError>(())
+/// ```
+pub fn parse_frame_into<'input, 'storage>(
+    input: &'input [u8],
+    limits: FrameLimits,
+    storage: &'storage mut [Segment<'input>],
+) -> Result<BorrowedFrameRead<'input, 'storage>, FrameError> {
+    if input.is_empty() {
+        return Ok(BorrowedFrameRead::EndOfInput);
+    }
+    if input.len() < 4 {
+        return Err(FrameError::TruncatedHeader {
+            available: input.len(),
+        });
+    }
+    let encoded_count = read_u32_le(input, 0).expect("four-byte header was checked");
+    let segment_count = encoded_count
+        .checked_add(1)
+        .ok_or(FrameError::SegmentCountOverflow)?;
+    check_segment_count(segment_count, limits)?;
+    let count = usize::try_from(segment_count).map_err(|_| FrameError::BodyLengthOverflow)?;
+    if count > storage.len() {
+        return Err(FrameError::SegmentBufferTooSmall {
+            required: count,
+            available: storage.len(),
+        });
+    }
+    let table_len = (count / 2 + 1)
+        .checked_mul(8)
+        .ok_or(FrameError::BodyLengthOverflow)?;
+    if input.len() < table_len {
+        return Err(FrameError::TruncatedSegmentTable {
+            expected: table_len,
+            available: input.len(),
+        });
+    }
+
+    let mut total_words = 0_u64;
+    for index in 0..count {
+        let table_offset = 4_usize
+            .checked_mul(index + 1)
+            .ok_or(FrameError::BodyLengthOverflow)?;
+        let words = read_u32_le(input, table_offset).expect("complete table was checked");
+        total_words = total_words
+            .checked_add(u64::from(words))
+            .ok_or(FrameError::TotalWordsOverflow)?;
+        if total_words > limits.max_total_words {
+            return Err(FrameError::MessageTooLarge {
+                words: total_words,
+                limit: limits.max_total_words,
+            });
+        }
+    }
+    let body_len = usize::try_from(
+        total_words
+            .checked_mul(WORD_BYTES as u64)
+            .ok_or(FrameError::BodyLengthOverflow)?,
+    )
+    .map_err(|_| FrameError::BodyLengthOverflow)?;
+    let encoded_len = table_len
+        .checked_add(body_len)
+        .ok_or(FrameError::BodyLengthOverflow)?;
+    if input.len() < encoded_len {
+        return Err(FrameError::TruncatedBody {
+            expected: body_len,
+            available: input.len() - table_len,
+        });
+    }
+
+    let mut body_offset = table_len;
+    for (index, slot) in storage[..count].iter_mut().enumerate() {
+        let table_offset = 4 * (index + 1);
+        let word_count = read_u32_le(input, table_offset).expect("complete table was checked");
+        let byte_len = usize::try_from(u64::from(word_count) * WORD_BYTES as u64)
+            .map_err(|_| FrameError::BodyLengthOverflow)?;
+        let end = body_offset
+            .checked_add(byte_len)
+            .ok_or(FrameError::BodyLengthOverflow)?;
+        *slot = Segment {
+            id: u32::try_from(index).map_err(|_| FrameError::BodyLengthOverflow)?,
+            word_count,
+            bytes: &input[body_offset..end],
+        };
+        body_offset = end;
+    }
+    Ok(BorrowedFrameRead::Message {
+        frame: BorrowedFrame {
+            segments: &storage[..count],
+            table_len,
+            encoded_len,
+        },
+        remaining: &input[encoded_len..],
+    })
+}
+
 /// A complete standard frame borrowing immutable segment bodies from its input.
+#[cfg(feature = "alloc")]
 #[derive(Debug, Eq, PartialEq)]
 pub struct Frame<'a> {
     segments: Box<[Segment<'a>]>,
@@ -114,6 +281,7 @@ pub struct Frame<'a> {
     encoded_len: usize,
 }
 
+#[cfg(feature = "alloc")]
 impl<'a> Frame<'a> {
     pub fn segments(&self) -> &[Segment<'a>] {
         &self.segments
@@ -135,6 +303,7 @@ impl<'a> Frame<'a> {
 }
 
 /// Distinguishes a clean stream boundary from a malformed partial frame.
+#[cfg(feature = "alloc")]
 #[derive(Debug, Eq, PartialEq)]
 pub enum FrameRead<'a> {
     EndOfInput,
@@ -144,6 +313,7 @@ pub enum FrameRead<'a> {
     },
 }
 
+#[cfg(feature = "alloc")]
 pub fn parse_frame(input: &[u8], limits: FrameLimits) -> Result<FrameRead<'_>, FrameError> {
     if input.is_empty() {
         return Ok(FrameRead::EndOfInput);
@@ -231,6 +401,7 @@ pub fn parse_frame(input: &[u8], limits: FrameLimits) -> Result<FrameRead<'_>, F
     })
 }
 
+#[cfg(feature = "alloc")]
 pub fn encode_frame(segments: &[&[u8]], limits: FrameLimits) -> Result<Vec<u8>, FrameError> {
     if segments.is_empty() {
         return Err(FrameError::NoSegments);
@@ -331,6 +502,31 @@ mod tests {
             FrameRead::Message { frame, remaining } => Some((frame, remaining)),
             FrameRead::EndOfInput => None,
         }
+    }
+
+    #[test]
+    fn caller_segment_storage_parses_without_copying_or_allocation() {
+        let mut storage = [Segment::EMPTY; MAX_SEGMENTS as usize];
+        let (frame, remaining) = match parse_frame_into(MANY, FrameLimits::default(), &mut storage)
+            .expect("many-segment frame parses")
+        {
+            BorrowedFrameRead::Message { frame, remaining } => Some((frame, remaining)),
+            BorrowedFrameRead::EndOfInput => None,
+        }
+        .expect("fixture contains a message");
+        assert!(remaining.is_empty());
+        assert_eq!(frame.segments().len(), 33);
+        let first = frame.segment(0).expect("segment zero exists");
+        assert_eq!(first.bytes().as_ptr(), MANY[frame.table_len()..].as_ptr());
+
+        let mut too_small = [Segment::EMPTY; 1];
+        assert_eq!(
+            parse_frame_into(TWO, FrameLimits::default(), &mut too_small),
+            Err(FrameError::SegmentBufferTooSmall {
+                required: 2,
+                available: 1,
+            })
+        );
     }
 
     fn parse_message(bytes: &[u8]) -> (Frame<'_>, &[u8]) {

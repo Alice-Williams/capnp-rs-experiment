@@ -1,3 +1,4 @@
+#![no_std]
 #![doc = "Synchronous Cap'n Proto framing, packing, and I/O adapters."]
 //!
 //! Standard unpacked framing follows `capnp/serialize.h` and
@@ -11,9 +12,23 @@
 //! chunks. I/O adapters, pointer traversal, and schema checks are separate.
 
 mod framing;
+#[cfg(feature = "alloc")]
 mod packed;
+#[cfg(feature = "std")]
+mod std_io;
+
+#[cfg(feature = "alloc")]
+extern crate alloc;
+#[cfg(any(feature = "std", test))]
+extern crate std;
 
 pub use framing::{
-    Frame, FrameError, FrameLimits, FrameRead, MAX_SEGMENTS, Segment, encode_frame, parse_frame,
+    BorrowedFrame, BorrowedFrameRead, FrameError, FrameLimits, MAX_SEGMENTS, Segment,
+    parse_frame_into,
 };
+#[cfg(feature = "alloc")]
+pub use framing::{Frame, FrameRead, encode_frame, parse_frame};
+#[cfg(feature = "alloc")]
 pub use packed::{PackedDecoder, PackedEncoder, PackedError, pack, unpack};
+#[cfg(feature = "std")]
+pub use std_io::{BoundedWriter, IoFrameError, MappedFrame, read_frame, write_frame};

@@ -59,7 +59,7 @@ wire safety or protocol ordering.
 - [M13 — Deep copy, clear, orphan/disown/adopt](milestones/M13-deep-copy-clear-orphan-disown-adopt.md) — complete
 - [M14 — Canonicalization and canonical checker](milestones/M14-canonicalization-and-canonical-checker.md) — complete
 - [M15 — Packed codec](milestones/M15-packed-codec.md) — complete
-- [M16 — Sync, async, mmap, and no-allocation adapters](milestones/M16-io-and-storage-adapters.md)
+- [M16 — Sync, async, mmap, and no-allocation adapters](milestones/M16-io-and-storage-adapters.md) — complete
 
 ### Phase 3 — Reflection and generated Rust APIs
 

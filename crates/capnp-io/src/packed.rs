@@ -13,6 +13,8 @@
 
 use core::fmt;
 
+use alloc::vec::Vec;
+
 const WORD_BYTES: usize = 8;
 const MAX_RUN_WORDS: usize = u8::MAX as usize;
 
@@ -32,7 +34,7 @@ impl fmt::Display for PackedError {
     }
 }
 
-impl std::error::Error for PackedError {}
+impl core::error::Error for PackedError {}
 
 #[derive(Debug)]
 enum EncodeRun {
@@ -444,6 +446,7 @@ fn check_output_limit(current: usize, additional: usize, limit: usize) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec;
 
     const CPP_UNPACKED: &[u8] = include_bytes!(concat!(
         env!("CARGO_MANIFEST_DIR"),
