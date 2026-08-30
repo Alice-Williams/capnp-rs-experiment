@@ -32,7 +32,9 @@ and concurrent traversal limits, copied nesting limits, amplification defense,
 and iterative hostile-depth traversal. M07 adds default-aware primitive and
 enum reads plus charged, zero-copy Text and Data views. M08 adds coordinate-
 based struct/group readers, union-tag preservation, short-section evolution,
-and limited pointer defaults. The remaining crates are explicit ownership
+and limited pointer defaults. M09 adds typed primitive, enum, pointer, nested,
+and struct-list readers with the reference implementation's legal list-upgrade
+semantics. The remaining crates are explicit ownership
 boundaries rather than claimed protocol features.
 
 ## Development

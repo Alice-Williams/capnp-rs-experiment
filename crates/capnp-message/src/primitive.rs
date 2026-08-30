@@ -113,6 +113,10 @@ impl<'a> DataSection<'a> {
         Ok(Self { bytes })
     }
 
+    pub(crate) const fn from_validated_bytes(bytes: &'a [u8]) -> Self {
+        Self { bytes }
+    }
+
     pub const fn as_bytes(self) -> &'a [u8] {
         self.bytes
     }

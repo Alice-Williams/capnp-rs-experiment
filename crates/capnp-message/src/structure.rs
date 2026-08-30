@@ -149,6 +149,31 @@ impl<'data> MessageSegments<'data> {
 }
 
 impl<'context, 'data, B: TraversalBudget> StructReader<'context, 'data, B> {
+    pub(crate) const fn empty_from_context(
+        segments: &'context MessageSegments<'data>,
+        budget: &'context B,
+        nesting: NestingLimit,
+    ) -> Self {
+        Self {
+            segments,
+            budget,
+            reference: None,
+            nesting,
+        }
+    }
+
+    pub(crate) const fn segments(self) -> &'context MessageSegments<'data> {
+        self.segments
+    }
+
+    pub(crate) const fn budget(self) -> &'context B {
+        self.budget
+    }
+
+    pub(crate) const fn nesting(self) -> NestingLimit {
+        self.nesting
+    }
+
     pub const fn reference(self) -> Option<StructRef> {
         self.reference
     }
@@ -303,7 +328,7 @@ impl<'context, 'data, B: TraversalBudget> StructReader<'context, 'data, B> {
         }
     }
 
-    fn select_pointer<'reader>(
+    pub(crate) fn select_pointer<'reader>(
         &'reader self,
         index: u16,
         default: Option<PointerDefault<'reader, 'data>>,

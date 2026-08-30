@@ -47,7 +47,7 @@ rules_rust = "0.74.0"
 rules_shell = "0.8.0"
 
 [support]
-wire = "M08 coordinate struct/group readers and evolution semantics over exact traversal limits"
+wire = "M09 typed list readers and legal upgrade semantics over exact traversal limits"
 generated_api = "not-started"
 native_compiler = "not-started"
 rpc_level = "none"
@@ -67,6 +67,14 @@ M05 = "complete"
 M06 = "complete"
 M07 = "complete"
 M08 = "complete"
+M09 = "complete"
+
+[evidence.M09]
+crate = "crates/capnp-message"
+oracle_fixtures = ["wire-unpacked.bin", "evolution-v1-unpacked.bin", "evolution-v2-unpacked.bin"]
+coverage = ["Void, Bit, Byte, TwoBytes, FourBytes, EightBytes, Pointer, and InlineComposite encodings", "all primitive widths and floating-point payloads", "known and unknown enum ordinals", "text and data pointer lists", "nested lists", "inline and zero-sized structs", "pointer-list to struct upgrade", "primitive and pointer views of struct lists", "null lists", "bounds and incompatible upgrades"]
+accounting = "indexing and iteration produce identical traversal charges"
+validation = "Rust 1.98 and 1.85 tests; public API doc tests; Loom shared-budget model; Clippy -D warnings; Bazel 18/18"
 
 [evidence.M08]
 crate = "crates/capnp-message"

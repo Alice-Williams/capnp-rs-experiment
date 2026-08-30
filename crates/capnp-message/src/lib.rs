@@ -2,6 +2,7 @@
 
 mod blob;
 mod budget;
+mod list;
 mod primitive;
 mod structure;
 mod validation;
@@ -10,12 +11,19 @@ mod validation;
 mod m07_oracle_tests;
 #[cfg(test)]
 mod m08_evolution_tests;
+#[cfg(test)]
+mod m09_list_tests;
 
 pub use blob::{BlobError, DataReader, TextReader};
 #[cfg(target_has_atomic = "64")]
 pub use budget::SharedTraversalBudget;
 pub use budget::{
     BudgetExhausted, LocalTraversalBudget, NestingLimit, NestingLimitExceeded, TraversalBudget,
+};
+pub use list::{
+    EnumListIter, EnumListReader, ListReadError, ListReader, PointerListIter, PointerListReader,
+    PrimitiveListElement, PrimitiveListIter, PrimitiveListReader, StructElementReader,
+    StructListIter, StructListReader,
 };
 pub use primitive::{DataSection, EnumValue, PrimitiveError, PrimitiveType, PrimitiveValue};
 pub use structure::{

@@ -49,7 +49,7 @@ wire safety or protocol ordering.
 - [M06 — Exact traversal and nesting limits](milestones/M06-exact-traversal-and-nesting-limits.md) — complete
 - [M07 — Primitive, enum, text, and data readers](milestones/M07-primitive-enum-text-and-data-readers.md) — complete
 - [M08 — Struct readers and evolution semantics](milestones/M08-struct-readers-and-evolution-semantics.md) — complete
-- [M09 — List readers and upgrade semantics](milestones/M09-list-readers-and-upgrade-semantics.md)
+- [M09 — List readers and upgrade semantics](milestones/M09-list-readers-and-upgrade-semantics.md) — complete
 - [M10 — Owned shared messages and stable object references](milestones/M10-owned-shared-messages-and-stable-object-references.md)
 
 ### Phase 2 — Construction, copying, canonicalization, and I/O
