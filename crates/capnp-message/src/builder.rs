@@ -8,19 +8,29 @@
 //! representation across deterministic segments and emits direct, single-far,
 //! or double-far pointers according to the actual placement.
 //!
-//! Deep copying, orphans, canonicalization, generated setters, and parallel
-//! construction are later milestones.
+//! M13 adds iterative schema-independent copy/clear and typed same-arena
+//! orphans. Copy failures roll allocations back, bounded clear failures are
+//! non-mutating, and dropped orphans recursively zero abandoned storage.
+//! Canonicalization, generated setters, and parallel construction are later
+//! milestones.
 
 use core::fmt;
 use core::marker::PhantomData;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use capnp_wire::{
     ElementSize, WireError, WirePointer, write_f32_le, write_f64_le, write_i8, write_i16_le,
     write_i32_le, write_i64_le, write_u8, write_u16_le, write_u32_le, write_u64_le,
 };
 
+use crate::{
+    ListRef, MessageSegments, NestingLimit, ResolvedPointer, TraversalBudget, TraversalError,
+    ValidationError, WireLocation,
+};
+
 /// One segment cannot exceed the span addressable by every signed positional pointer.
 pub const MAX_SINGLE_SEGMENT_WORDS: u32 = 1 << 29;
+static NEXT_ARENA_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct WordOffset {
@@ -40,6 +50,7 @@ impl WordOffset {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StructOffset {
+    arena_id: u64,
     content: WordOffset,
     data_words: u16,
     pointer_count: u16,
@@ -61,6 +72,7 @@ impl StructOffset {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ListOffset {
+    arena_id: u64,
     pointer_target: WordOffset,
     content: WordOffset,
     element_size: ElementSize,
@@ -136,6 +148,53 @@ impl From<WireError> for ArenaError {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum GraphError {
+    Arena(ArenaError),
+    Traversal(TraversalError),
+    DestinationNotNull { location: WireLocation },
+    WrongArena,
+    ExpectedStruct,
+    ExpectedList,
+}
+
+impl fmt::Display for GraphError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{self:?}")
+    }
+}
+
+impl std::error::Error for GraphError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Arena(error) => Some(error),
+            Self::Traversal(error) => Some(error),
+            Self::DestinationNotNull { .. }
+            | Self::WrongArena
+            | Self::ExpectedStruct
+            | Self::ExpectedList => None,
+        }
+    }
+}
+
+impl From<ArenaError> for GraphError {
+    fn from(value: ArenaError) -> Self {
+        Self::Arena(value)
+    }
+}
+
+impl From<TraversalError> for GraphError {
+    fn from(value: TraversalError) -> Self {
+        Self::Traversal(value)
+    }
+}
+
+impl From<ValidationError> for GraphError {
+    fn from(value: ValidationError) -> Self {
+        Self::Traversal(TraversalError::Validation(value))
+    }
+}
+
 #[derive(Debug)]
 struct SegmentStorage {
     bytes: Vec<u8>,
@@ -149,6 +208,7 @@ struct SegmentStorage {
 /// landing-pad placement without depending on allocator capacity.
 #[derive(Debug)]
 pub struct ExclusiveArena {
+    arena_id: u64,
     segments: Vec<SegmentStorage>,
     next_segment_words: u32,
     max_segments: u32,
@@ -200,12 +260,17 @@ impl ExclusiveArena {
         max_segments: u32,
         max_total_words: u64,
     ) -> Result<Self, ArenaError> {
+        let arena_id = NEXT_ARENA_ID.fetch_add(1, Ordering::Relaxed);
+        if arena_id == u64::MAX {
+            return Err(ArenaError::AllocationOverflow);
+        }
         let mut bytes = Vec::new();
         bytes
             .try_reserve_exact(word_bytes(initial_capacity_words)?)
             .map_err(|_| ArenaError::AllocationFailed)?;
         bytes.resize(8, 0);
         Ok(Self {
+            arena_id,
             segments: vec![SegmentStorage {
                 bytes,
                 word_limit: first_word_limit,
@@ -432,6 +497,7 @@ impl ExclusiveArena {
         let words = u64::from(data_words) + u64::from(pointer_count);
         let content = self.allocate_words(words)?;
         Ok(StructOffset {
+            arena_id: self.arena_id,
             content,
             data_words,
             pointer_count,
@@ -450,6 +516,7 @@ impl ExclusiveArena {
         let words = list_words(element_size, element_count)?;
         let content = self.allocate_words(u64::from(words))?;
         Ok(ListOffset {
+            arena_id: self.arena_id,
             pointer_target: content,
             content,
             element_size,
@@ -481,6 +548,7 @@ impl ExclusiveArena {
         self.write_pointer(pointer_target, tag)?;
         let content = add_words(pointer_target, 1)?;
         Ok(ListOffset {
+            arena_id: self.arena_id,
             pointer_target,
             content,
             element_size: ElementSize::InlineComposite,
@@ -581,12 +649,629 @@ impl ExclusiveArena {
         Ok(())
     }
 
+    /// Copies an arbitrary validated source root without schema knowledge.
+    pub fn copy_root<B: TraversalBudget>(
+        &mut self,
+        source: &MessageSegments<'_>,
+        source_location: WireLocation,
+        budget: &B,
+        nesting: NestingLimit,
+    ) -> Result<(), GraphError> {
+        self.require_uninitialized_root()?;
+        self.copy_pointer_at(root_offset(), source, source_location, budget, nesting)?;
+        self.root_initialized = true;
+        Ok(())
+    }
+
+    /// Clears the complete root graph only after a bounded traversal succeeds.
+    pub fn clear_root<B: TraversalBudget>(
+        &mut self,
+        budget: &B,
+        nesting: NestingLimit,
+    ) -> Result<(), GraphError> {
+        self.clear_pointer_at(root_offset(), budget, nesting)?;
+        self.root_initialized = false;
+        Ok(())
+    }
+
+    fn copy_pointer_at<B: TraversalBudget>(
+        &mut self,
+        destination: WordOffset,
+        source: &MessageSegments<'_>,
+        source_location: WireLocation,
+        budget: &B,
+        nesting: NestingLimit,
+    ) -> Result<(), GraphError> {
+        if !self.read_pointer(destination)?.is_null() {
+            return Err(GraphError::DestinationNotNull {
+                location: wire_location(destination),
+            });
+        }
+        let checkpoint = self.checkpoint();
+        let result = self.copy_tasks(
+            vec![CopyTask {
+                destination,
+                source: source_location,
+                nesting,
+            }],
+            source,
+            budget,
+        );
+        if let Err(error) = result {
+            self.rollback(checkpoint);
+            self.write_pointer(destination, WirePointer::NULL)?;
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn copy_tasks<B: TraversalBudget>(
+        &mut self,
+        mut tasks: Vec<CopyTask>,
+        source: &MessageSegments<'_>,
+        budget: &B,
+    ) -> Result<(), GraphError> {
+        while let Some(task) = tasks.pop() {
+            let bounded = source.validate_pointer_with_limits(task.source, budget, task.nesting)?;
+            match bounded.pointer {
+                ResolvedPointer::Null => self.write_pointer(task.destination, WirePointer::NULL)?,
+                ResolvedPointer::Capability(capability) => self.write_pointer(
+                    task.destination,
+                    WirePointer::new_capability(capability.index),
+                )?,
+                ResolvedPointer::Struct(reference) => {
+                    let target =
+                        self.allocate_struct(reference.data_words, reference.pointer_count)?;
+                    self.emit_struct(task.destination, target)?;
+                    self.copy_words_from(
+                        target.content,
+                        source,
+                        reference.content,
+                        u64::from(reference.data_words),
+                    )?;
+                    for index in (0..reference.pointer_count).rev() {
+                        tasks.push(CopyTask {
+                            destination: add_words(
+                                target.content,
+                                u64::from(reference.data_words) + u64::from(index),
+                            )?,
+                            source: add_wire_words(
+                                reference.content,
+                                u64::from(reference.data_words) + u64::from(index),
+                            )?,
+                            nesting: bounded.child_nesting,
+                        });
+                    }
+                }
+                ResolvedPointer::List(reference) => {
+                    self.copy_list(
+                        task.destination,
+                        reference,
+                        bounded.child_nesting,
+                        source,
+                        &mut tasks,
+                    )?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn copy_list(
+        &mut self,
+        destination: WordOffset,
+        reference: ListRef,
+        nesting: NestingLimit,
+        source: &MessageSegments<'_>,
+        tasks: &mut Vec<CopyTask>,
+    ) -> Result<(), GraphError> {
+        if reference.element_size != ElementSize::InlineComposite {
+            let target =
+                self.allocate_data_list(reference.element_size, reference.element_count)?;
+            self.emit_list(destination, target)?;
+            if reference.element_size == ElementSize::Pointer {
+                for index in (0..reference.element_count).rev() {
+                    tasks.push(CopyTask {
+                        destination: add_words(target.content, u64::from(index))?,
+                        source: add_wire_words(reference.content, u64::from(index))?,
+                        nesting,
+                    });
+                }
+            } else {
+                self.copy_words_from(
+                    target.content,
+                    source,
+                    reference.content,
+                    u64::from(reference.content_words),
+                )?;
+            }
+            return Ok(());
+        }
+
+        let (data_words, pointer_count) = reference
+            .inline_struct_size
+            .ok_or(ArenaError::AllocationOverflow)?;
+        let target =
+            self.allocate_struct_list(reference.element_count, data_words, pointer_count)?;
+        self.emit_list(destination, target)?;
+        let step = u64::from(data_words) + u64::from(pointer_count);
+        let child_nesting = nesting.descend().map_err(TraversalError::from)?;
+        for element in 0..reference.element_count {
+            let element_offset = u64::from(element)
+                .checked_mul(step)
+                .ok_or(ArenaError::AllocationOverflow)?;
+            self.copy_words_from(
+                add_words(target.content, element_offset)?,
+                source,
+                add_wire_words(reference.content, element_offset)?,
+                u64::from(data_words),
+            )?;
+            for pointer in (0..pointer_count).rev() {
+                let pointer_offset = element_offset
+                    .checked_add(u64::from(data_words))
+                    .and_then(|value| value.checked_add(u64::from(pointer)))
+                    .ok_or(ArenaError::AllocationOverflow)?;
+                tasks.push(CopyTask {
+                    destination: add_words(target.content, pointer_offset)?,
+                    source: add_wire_words(reference.content, pointer_offset)?,
+                    nesting: child_nesting,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn copy_words_from(
+        &mut self,
+        destination: WordOffset,
+        source: &MessageSegments<'_>,
+        source_location: WireLocation,
+        words: u64,
+    ) -> Result<(), GraphError> {
+        if words == 0 {
+            return Ok(());
+        }
+        let source_segment =
+            source
+                .segment(source_location.segment_id)
+                .ok_or(ValidationError::UnknownSegment {
+                    segment_id: source_location.segment_id,
+                })?;
+        let source_start = wire_byte_offset(source_location)?;
+        let len = usize::try_from(words)
+            .ok()
+            .and_then(|words| words.checked_mul(8))
+            .ok_or(ArenaError::AllocationOverflow)?;
+        let source_end = source_start
+            .checked_add(len)
+            .ok_or(ArenaError::AllocationOverflow)?;
+        let copied = source_segment
+            .get(source_start..source_end)
+            .ok_or(ValidationError::ObjectOutOfBounds {
+                location: source_location,
+                words,
+                segment_words: u64::try_from(source_segment.len() / 8)
+                    .map_err(|_| ArenaError::AllocationOverflow)?,
+            })?
+            .to_vec();
+        let destination_start = byte_offset(destination)?;
+        let destination_end = destination_start
+            .checked_add(len)
+            .ok_or(ArenaError::AllocationOverflow)?;
+        self.segment_mut(destination.segment_id)?[destination_start..destination_end]
+            .copy_from_slice(&copied);
+        Ok(())
+    }
+
+    fn clear_pointer_at<B: TraversalBudget>(
+        &mut self,
+        root: WordOffset,
+        budget: &B,
+        nesting: NestingLimit,
+    ) -> Result<(), GraphError> {
+        let borrowed = self.segments().collect::<Vec<_>>();
+        let message = MessageSegments::new(&borrowed)?;
+        let mut tasks = vec![(wire_location(root), nesting)];
+        let mut ranges = Vec::new();
+        while let Some((location, nesting)) = tasks.pop() {
+            let raw = read_message_pointer(&message, location)?;
+            ranges.push((location, 1));
+            if let Some(far) = raw.far_fields() {
+                ranges.push((
+                    WireLocation {
+                        segment_id: far.segment_id,
+                        word_offset: far.landing_pad_word,
+                    },
+                    if far.double_far { 2 } else { 1 },
+                ));
+            }
+            let bounded = message.validate_pointer_with_limits(location, budget, nesting)?;
+            match bounded.pointer {
+                ResolvedPointer::Null | ResolvedPointer::Capability(_) => {}
+                ResolvedPointer::Struct(reference) => {
+                    ranges.push((
+                        reference.content,
+                        u64::from(reference.data_words) + u64::from(reference.pointer_count),
+                    ));
+                    for index in 0..reference.pointer_count {
+                        tasks.push((
+                            add_wire_words(
+                                reference.content,
+                                u64::from(reference.data_words) + u64::from(index),
+                            )?,
+                            bounded.child_nesting,
+                        ));
+                    }
+                }
+                ResolvedPointer::List(reference) => {
+                    if reference.element_size == ElementSize::InlineComposite {
+                        let tag = sub_wire_word(reference.content)?;
+                        ranges.push((tag, u64::from(reference.content_words) + 1));
+                        let (data_words, pointer_count) = reference
+                            .inline_struct_size
+                            .ok_or(ArenaError::AllocationOverflow)?;
+                        let step = u64::from(data_words) + u64::from(pointer_count);
+                        let child_nesting = bounded
+                            .child_nesting
+                            .descend()
+                            .map_err(TraversalError::from)?;
+                        for element in 0..reference.element_count {
+                            let base = u64::from(element)
+                                .checked_mul(step)
+                                .and_then(|value| value.checked_add(u64::from(data_words)))
+                                .ok_or(ArenaError::AllocationOverflow)?;
+                            for pointer in 0..pointer_count {
+                                tasks.push((
+                                    add_wire_words(reference.content, base + u64::from(pointer))?,
+                                    child_nesting,
+                                ));
+                            }
+                        }
+                    } else {
+                        ranges.push((reference.content, u64::from(reference.content_words)));
+                        if reference.element_size == ElementSize::Pointer {
+                            for index in 0..reference.element_count {
+                                tasks.push((
+                                    add_wire_words(reference.content, u64::from(index))?,
+                                    bounded.child_nesting,
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        drop(message);
+        drop(borrowed);
+        for (location, words) in ranges {
+            self.zero_range(location, words)?;
+        }
+        Ok(())
+    }
+
+    fn read_pointer(&self, location: WordOffset) -> Result<WirePointer, ArenaError> {
+        let segment = self
+            .segment(location.segment_id)
+            .ok_or(ArenaError::AllocationOverflow)?;
+        Ok(WirePointer::read_from(segment, byte_offset(location)?)?)
+    }
+
+    fn zero_range(&mut self, location: WireLocation, words: u64) -> Result<(), ArenaError> {
+        let start = wire_byte_offset(location)?;
+        let len = usize::try_from(words)
+            .ok()
+            .and_then(|words| words.checked_mul(8))
+            .ok_or(ArenaError::AllocationOverflow)?;
+        let end = start
+            .checked_add(len)
+            .ok_or(ArenaError::AllocationOverflow)?;
+        self.segment_mut(location.segment_id)?[start..end].fill(0);
+        Ok(())
+    }
+
+    fn checkpoint(&self) -> ArenaCheckpoint {
+        ArenaCheckpoint {
+            lengths: self
+                .segments
+                .iter()
+                .map(|segment| segment.bytes.len())
+                .collect(),
+        }
+    }
+
+    fn rollback(&mut self, checkpoint: ArenaCheckpoint) {
+        for (segment, length) in self.segments.iter_mut().zip(&checkpoint.lengths) {
+            segment.bytes[*length..].fill(0);
+            segment.bytes.truncate(*length);
+        }
+        for segment in self.segments.iter_mut().skip(checkpoint.lengths.len()) {
+            segment.bytes.fill(0);
+        }
+        self.segments.truncate(checkpoint.lengths.len());
+    }
+
     fn segment_mut(&mut self, segment_id: u32) -> Result<&mut [u8], ArenaError> {
         usize::try_from(segment_id)
             .ok()
             .and_then(|index| self.segments.get_mut(index))
             .map(|segment| segment.bytes.as_mut_slice())
             .ok_or(ArenaError::AllocationOverflow)
+    }
+
+    fn detach_pointer(&mut self, location: WordOffset) -> Result<Detached, GraphError> {
+        let borrowed = self.segments().collect::<Vec<_>>();
+        let message = MessageSegments::new(&borrowed)?;
+        let raw = read_message_pointer(&message, wire_location(location))?;
+        let resolved = message.validate_pointer(wire_location(location))?;
+        let detached = self.detached_from_resolved(resolved)?;
+        drop(message);
+        drop(borrowed);
+        self.zero_pointer_and_pads(location, raw)?;
+        Ok(detached)
+    }
+
+    fn resolved_pointer(&self, location: WordOffset) -> Result<ResolvedPointer, GraphError> {
+        let borrowed = self.segments().collect::<Vec<_>>();
+        let message = MessageSegments::new(&borrowed)?;
+        Ok(message.validate_pointer(wire_location(location))?)
+    }
+
+    fn detached_from_resolved(&self, resolved: ResolvedPointer) -> Result<Detached, GraphError> {
+        Ok(match resolved {
+            ResolvedPointer::Null => Detached::Null,
+            ResolvedPointer::Struct(reference) => Detached::Struct(StructOffset {
+                arena_id: self.arena_id,
+                content: word_offset(reference.content),
+                data_words: reference.data_words,
+                pointer_count: reference.pointer_count,
+            }),
+            ResolvedPointer::List(reference) => {
+                let pointer_target = if reference.element_size == ElementSize::InlineComposite {
+                    sub_word(word_offset(reference.content))?
+                } else {
+                    word_offset(reference.content)
+                };
+                Detached::List(ListOffset {
+                    arena_id: self.arena_id,
+                    pointer_target,
+                    content: word_offset(reference.content),
+                    element_size: reference.element_size,
+                    element_count: reference.element_count,
+                    content_words: reference.content_words,
+                    inline_struct_size: reference.inline_struct_size,
+                })
+            }
+            ResolvedPointer::Capability(_) => Detached::Null,
+        })
+    }
+
+    fn zero_pointer_and_pads(
+        &mut self,
+        location: WordOffset,
+        raw: WirePointer,
+    ) -> Result<(), ArenaError> {
+        self.write_pointer(location, WirePointer::NULL)?;
+        if let Some(far) = raw.far_fields() {
+            self.zero_range(
+                WireLocation {
+                    segment_id: far.segment_id,
+                    word_offset: far.landing_pad_word,
+                },
+                if far.double_far { 2 } else { 1 },
+            )?;
+        }
+        Ok(())
+    }
+
+    fn abandon_detached(&mut self, detached: Detached) -> Result<(), GraphError> {
+        let mut tasks = vec![AbandonTask::Object(detached)];
+        while let Some(task) = tasks.pop() {
+            match task {
+                AbandonTask::Pointer(location) => {
+                    let borrowed = self.segments().collect::<Vec<_>>();
+                    let message = MessageSegments::new(&borrowed)?;
+                    let raw = read_message_pointer(&message, wire_location(location))?;
+                    let resolved = message.validate_pointer(wire_location(location))?;
+                    let detached = self.detached_from_resolved(resolved)?;
+                    drop(message);
+                    drop(borrowed);
+                    self.zero_pointer_and_pads(location, raw)?;
+                    tasks.push(AbandonTask::Object(detached));
+                }
+                AbandonTask::Object(Detached::Null) => {}
+                AbandonTask::Object(Detached::Struct(reference)) => {
+                    let words =
+                        u64::from(reference.data_words) + u64::from(reference.pointer_count);
+                    tasks.push(AbandonTask::Zero(reference.content, words));
+                    for index in 0..reference.pointer_count {
+                        tasks.push(AbandonTask::Pointer(add_words(
+                            reference.content,
+                            u64::from(reference.data_words) + u64::from(index),
+                        )?));
+                    }
+                }
+                AbandonTask::Object(Detached::List(reference)) => {
+                    if reference.element_size == ElementSize::InlineComposite {
+                        tasks.push(AbandonTask::Zero(
+                            reference.pointer_target,
+                            u64::from(reference.content_words) + 1,
+                        ));
+                        let (data_words, pointer_count) = reference
+                            .inline_struct_size
+                            .ok_or(ArenaError::AllocationOverflow)?;
+                        let step = u64::from(data_words) + u64::from(pointer_count);
+                        for element in 0..reference.element_count {
+                            let base = u64::from(element)
+                                .checked_mul(step)
+                                .and_then(|value| value.checked_add(u64::from(data_words)))
+                                .ok_or(ArenaError::AllocationOverflow)?;
+                            for pointer in 0..pointer_count {
+                                tasks.push(AbandonTask::Pointer(add_words(
+                                    reference.content,
+                                    base + u64::from(pointer),
+                                )?));
+                            }
+                        }
+                    } else {
+                        tasks.push(AbandonTask::Zero(
+                            reference.content,
+                            u64::from(reference.content_words),
+                        ));
+                        if reference.element_size == ElementSize::Pointer {
+                            for index in 0..reference.element_count {
+                                tasks.push(AbandonTask::Pointer(add_words(
+                                    reference.content,
+                                    u64::from(index),
+                                )?));
+                            }
+                        }
+                    }
+                }
+                AbandonTask::Zero(location, words) => {
+                    self.zero_range(wire_location(location), words)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+struct ArenaCheckpoint {
+    lengths: Vec<usize>,
+}
+
+struct CopyTask {
+    destination: WordOffset,
+    source: WireLocation,
+    nesting: NestingLimit,
+}
+
+#[derive(Clone, Copy)]
+enum Detached {
+    Null,
+    Struct(StructOffset),
+    List(ListOffset),
+}
+
+enum AbandonTask {
+    Pointer(WordOffset),
+    Object(Detached),
+    Zero(WordOffset, u64),
+}
+
+mod orphan_sealed {
+    pub trait Sealed {}
+}
+
+pub trait OrphanKind: orphan_sealed::Sealed {}
+
+#[derive(Debug)]
+pub struct StructOrphan;
+impl orphan_sealed::Sealed for StructOrphan {}
+impl OrphanKind for StructOrphan {}
+
+#[derive(Debug)]
+pub struct ListOrphan;
+impl orphan_sealed::Sealed for ListOrphan {}
+impl OrphanKind for ListOrphan {}
+
+/// A detached object that exclusively borrows its arena until adopted or dropped.
+///
+/// Dropping an orphan recursively zeroes its unreachable storage. While it is
+/// live, the original builder cannot be aliased:
+///
+/// ```compile_fail
+/// use capnp_message::ExclusiveArena;
+/// let mut arena = ExclusiveArena::new(1, 16).unwrap();
+/// let mut root = arena.init_root_struct(0, 2).unwrap();
+/// root.init_struct(0, 1, 0).unwrap();
+/// let orphan = root.disown_struct(0).unwrap();
+/// root.init_struct(1, 1, 0).unwrap();
+/// drop(orphan);
+/// ```
+#[must_use = "dropping an orphan safely clears its detached object"]
+pub struct Orphan<'arena, T: OrphanKind> {
+    arena: &'arena mut ExclusiveArena,
+    detached: Detached,
+    adopted: bool,
+    marker: PhantomData<fn() -> T>,
+}
+
+impl<T: OrphanKind> fmt::Debug for Orphan<'_, T> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Orphan")
+            .field("adopted", &self.adopted)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<T: OrphanKind> Orphan<'_, T> {
+    pub const fn is_null(&self) -> bool {
+        matches!(self.detached, Detached::Null)
+    }
+
+    fn destination_slot(
+        &self,
+        parent: StructOffset,
+        pointer_index: u16,
+    ) -> Result<WordOffset, GraphError> {
+        if parent.arena_id != self.arena.arena_id {
+            return Err(GraphError::WrongArena);
+        }
+        Ok(struct_pointer_slot(parent, pointer_index)?)
+    }
+}
+
+impl Orphan<'_, StructOrphan> {
+    pub fn adopt_into_struct(
+        mut self,
+        parent: StructOffset,
+        pointer_index: u16,
+    ) -> Result<(), GraphError> {
+        let slot = self.destination_slot(parent, pointer_index)?;
+        if !self.arena.read_pointer(slot)?.is_null() {
+            return Err(GraphError::DestinationNotNull {
+                location: wire_location(slot),
+            });
+        }
+        match self.detached {
+            Detached::Null => self.arena.write_pointer(slot, WirePointer::NULL)?,
+            Detached::Struct(reference) => self.arena.emit_struct(slot, reference)?,
+            Detached::List(_) => return Err(GraphError::ExpectedStruct),
+        }
+        self.adopted = true;
+        Ok(())
+    }
+}
+
+impl Orphan<'_, ListOrphan> {
+    pub fn adopt_into_struct(
+        mut self,
+        parent: StructOffset,
+        pointer_index: u16,
+    ) -> Result<(), GraphError> {
+        let slot = self.destination_slot(parent, pointer_index)?;
+        if !self.arena.read_pointer(slot)?.is_null() {
+            return Err(GraphError::DestinationNotNull {
+                location: wire_location(slot),
+            });
+        }
+        match self.detached {
+            Detached::Null => self.arena.write_pointer(slot, WirePointer::NULL)?,
+            Detached::List(reference) => self.arena.emit_list(slot, reference)?,
+            Detached::Struct(_) => return Err(GraphError::ExpectedList),
+        }
+        self.adopted = true;
+        Ok(())
+    }
+}
+
+impl<T: OrphanKind> Drop for Orphan<'_, T> {
+    fn drop(&mut self) {
+        if !self.adopted {
+            let _ = self.arena.abandon_detached(self.detached);
+        }
     }
 }
 
@@ -879,9 +1564,67 @@ impl StructBuilder<'_> {
             .write_pointer(slot, WirePointer::new_capability(index))
     }
 
-    pub fn clear_pointer(&mut self, pointer_index: u16) -> Result<(), ArenaError> {
+    pub fn copy_pointer<B: TraversalBudget>(
+        &mut self,
+        pointer_index: u16,
+        source: &MessageSegments<'_>,
+        source_location: WireLocation,
+        budget: &B,
+        nesting: NestingLimit,
+    ) -> Result<(), GraphError> {
         let slot = self.pointer_slot(pointer_index)?;
-        self.arena.write_pointer(slot, WirePointer::NULL)
+        self.arena
+            .copy_pointer_at(slot, source, source_location, budget, nesting)
+    }
+
+    pub fn clear_pointer<B: TraversalBudget>(
+        &mut self,
+        pointer_index: u16,
+        budget: &B,
+        nesting: NestingLimit,
+    ) -> Result<(), GraphError> {
+        let slot = self.pointer_slot(pointer_index)?;
+        self.arena.clear_pointer_at(slot, budget, nesting)
+    }
+
+    pub fn disown_struct(
+        &mut self,
+        pointer_index: u16,
+    ) -> Result<Orphan<'_, StructOrphan>, GraphError> {
+        let slot = self.pointer_slot(pointer_index)?;
+        match self.arena.resolved_pointer(slot)? {
+            ResolvedPointer::Null | ResolvedPointer::Struct(_) => {}
+            ResolvedPointer::List(_) | ResolvedPointer::Capability(_) => {
+                return Err(GraphError::ExpectedStruct);
+            }
+        }
+        let detached = self.arena.detach_pointer(slot)?;
+        Ok(Orphan {
+            arena: self.arena,
+            detached,
+            adopted: false,
+            marker: PhantomData,
+        })
+    }
+
+    pub fn disown_list(
+        &mut self,
+        pointer_index: u16,
+    ) -> Result<Orphan<'_, ListOrphan>, GraphError> {
+        let slot = self.pointer_slot(pointer_index)?;
+        match self.arena.resolved_pointer(slot)? {
+            ResolvedPointer::Null | ResolvedPointer::List(_) => {}
+            ResolvedPointer::Struct(_) | ResolvedPointer::Capability(_) => {
+                return Err(GraphError::ExpectedList);
+            }
+        }
+        let detached = self.arena.detach_pointer(slot)?;
+        Ok(Orphan {
+            arena: self.arena,
+            detached,
+            adopted: false,
+            marker: PhantomData,
+        })
     }
 
     fn data_bit_offset(&self, bit_offset: u32) -> Result<u64, ArenaError> {
@@ -918,16 +1661,7 @@ impl StructBuilder<'_> {
     }
 
     fn pointer_slot(&self, index: u16) -> Result<WordOffset, ArenaError> {
-        if index >= self.reference.pointer_count {
-            return Err(ArenaError::PointerIndexOutOfBounds {
-                index,
-                len: self.reference.pointer_count,
-            });
-        }
-        add_words(
-            self.reference.content,
-            u64::from(self.reference.data_words) + u64::from(index),
-        )
+        struct_pointer_slot(self.reference, index)
     }
 }
 
@@ -1111,6 +1845,29 @@ impl PointerListBuilder<'_> {
         Ok(())
     }
 
+    pub fn copy_pointer<B: TraversalBudget>(
+        &mut self,
+        index: u32,
+        source: &MessageSegments<'_>,
+        source_location: WireLocation,
+        budget: &B,
+        nesting: NestingLimit,
+    ) -> Result<(), GraphError> {
+        let slot = self.slot(index)?;
+        self.arena
+            .copy_pointer_at(slot, source, source_location, budget, nesting)
+    }
+
+    pub fn clear_pointer<B: TraversalBudget>(
+        &mut self,
+        index: u32,
+        budget: &B,
+        nesting: NestingLimit,
+    ) -> Result<(), GraphError> {
+        let slot = self.slot(index)?;
+        self.arena.clear_pointer_at(slot, budget, nesting)
+    }
+
     fn slot(&self, index: u32) -> Result<WordOffset, ArenaError> {
         check_index(index, self.len())?;
         add_words(self.reference.content, u64::from(index))
@@ -1151,6 +1908,7 @@ impl StructListBuilder<'_> {
         Ok(StructBuilder {
             arena: self.arena,
             reference: StructOffset {
+                arena_id: self.reference.arena_id,
                 content,
                 data_words,
                 pointer_count,
@@ -1175,6 +1933,19 @@ fn relative_offset(pointer: WordOffset, target: WordOffset) -> Result<i32, Arena
     i32::try_from(value).map_err(|_| ArenaError::AllocationOverflow)
 }
 
+fn struct_pointer_slot(reference: StructOffset, index: u16) -> Result<WordOffset, ArenaError> {
+    if index >= reference.pointer_count {
+        return Err(ArenaError::PointerIndexOutOfBounds {
+            index,
+            len: reference.pointer_count,
+        });
+    }
+    add_words(
+        reference.content,
+        u64::from(reference.data_words) + u64::from(index),
+    )
+}
+
 fn add_words(offset: WordOffset, words: u64) -> Result<WordOffset, ArenaError> {
     let value = u64::from(offset.word_offset)
         .checked_add(words)
@@ -1186,11 +1957,76 @@ fn add_words(offset: WordOffset, words: u64) -> Result<WordOffset, ArenaError> {
     })
 }
 
+const fn word_offset(location: WireLocation) -> WordOffset {
+    WordOffset {
+        segment_id: location.segment_id,
+        word_offset: location.word_offset,
+    }
+}
+
+fn sub_word(offset: WordOffset) -> Result<WordOffset, ArenaError> {
+    Ok(WordOffset {
+        segment_id: offset.segment_id,
+        word_offset: offset
+            .word_offset
+            .checked_sub(1)
+            .ok_or(ArenaError::AllocationOverflow)?,
+    })
+}
+
 fn byte_offset(offset: WordOffset) -> Result<usize, ArenaError> {
     usize::try_from(offset.word_offset)
         .ok()
         .and_then(|word| word.checked_mul(8))
         .ok_or(ArenaError::AllocationOverflow)
+}
+
+const fn wire_location(offset: WordOffset) -> WireLocation {
+    WireLocation {
+        segment_id: offset.segment_id,
+        word_offset: offset.word_offset,
+    }
+}
+
+fn wire_byte_offset(location: WireLocation) -> Result<usize, ArenaError> {
+    usize::try_from(location.word_offset)
+        .ok()
+        .and_then(|word| word.checked_mul(8))
+        .ok_or(ArenaError::AllocationOverflow)
+}
+
+fn add_wire_words(location: WireLocation, words: u64) -> Result<WireLocation, ArenaError> {
+    let word_offset = u64::from(location.word_offset)
+        .checked_add(words)
+        .and_then(|value| u32::try_from(value).ok())
+        .ok_or(ArenaError::AllocationOverflow)?;
+    Ok(WireLocation {
+        segment_id: location.segment_id,
+        word_offset,
+    })
+}
+
+fn sub_wire_word(location: WireLocation) -> Result<WireLocation, ArenaError> {
+    Ok(WireLocation {
+        segment_id: location.segment_id,
+        word_offset: location
+            .word_offset
+            .checked_sub(1)
+            .ok_or(ArenaError::AllocationOverflow)?,
+    })
+}
+
+fn read_message_pointer(
+    message: &MessageSegments<'_>,
+    location: WireLocation,
+) -> Result<WirePointer, GraphError> {
+    let segment = message
+        .segment(location.segment_id)
+        .ok_or(ValidationError::UnknownSegment {
+            segment_id: location.segment_id,
+        })?;
+    WirePointer::read_from(segment, wire_byte_offset(location)?)
+        .map_err(|_| ValidationError::PointerOutOfBounds { location }.into())
 }
 
 const fn root_offset() -> WordOffset {
@@ -1677,6 +2513,330 @@ mod tests {
                 requested: 5,
                 limit: 4,
             })
+        );
+    }
+
+    #[test]
+    fn schema_independent_copy_rebuilds_and_clear_zeroes_a_multisegment_graph() {
+        let mut source_arena =
+            ExclusiveArena::new_segmented(2, 2, 16, 64).expect("source arena initializes");
+        {
+            let mut root = source_arena
+                .init_root_struct(1, 3)
+                .expect("source root initializes");
+            root.set_u64(0, 0xfeed_face_cafe_beef, 0)
+                .expect("source data writes");
+            root.set_text(0, "copied").expect("source text writes");
+            {
+                let mut child = root.init_struct(1, 1, 1).expect("source child writes");
+                child.set_u32(0, 77, 0).expect("child data writes");
+                let mut values = child.init_list::<u16>(0, 2).expect("child list writes");
+                values.set(0, 8).expect("value writes");
+                values.set(1, 9).expect("value writes");
+            }
+            {
+                let mut structs = root
+                    .init_struct_list(2, 2, 1, 0)
+                    .expect("struct list writes");
+                structs
+                    .get(0)
+                    .expect("first exists")
+                    .set_u32(0, 1, 0)
+                    .expect("first writes");
+                structs
+                    .get(1)
+                    .expect("second exists")
+                    .set_u32(0, 2, 0)
+                    .expect("second writes");
+            }
+        }
+        let source_owned = source_arena.into_segments();
+        let source_borrowed = source_owned.iter().map(AsRef::as_ref).collect::<Vec<_>>();
+        let source = MessageSegments::new(&source_borrowed).expect("source validates");
+
+        let mut copied =
+            ExclusiveArena::new_segmented(1, 3, 32, 128).expect("copy arena initializes");
+        copied
+            .copy_root(
+                &source,
+                ROOT,
+                &LocalTraversalBudget::new(64),
+                NestingLimit::new(8),
+            )
+            .expect("complete graph copies");
+        let copied_refs = copied.segments().collect::<Vec<_>>();
+        let copied_message = MessageSegments::new(&copied_refs).expect("copy validates");
+        let budget = LocalTraversalBudget::new(64);
+        let root = copied_message
+            .read_struct(ROOT, &budget, NestingLimit::new(8))
+            .expect("copy root reads");
+        assert_eq!(
+            root.data_section()
+                .expect("copy data exists")
+                .read_u64(0, 0),
+            Ok(0xfeed_face_cafe_beef)
+        );
+        assert_eq!(
+            root.read_text(0, None).expect("copy text reads").to_str(),
+            Ok("copied")
+        );
+        assert_eq!(
+            root.read_struct(1, None)
+                .expect("copy child reads")
+                .data_section()
+                .expect("child data exists")
+                .read_u32(0, 0),
+            Ok(77)
+        );
+        assert_eq!(
+            root.read_list(2, None)
+                .expect("copy structs read")
+                .as_structs()
+                .expect("struct layout matches")
+                .get(1)
+                .expect("second copy exists")
+                .data_section()
+                .expect("second data exists")
+                .read_u32(0, 0),
+            Ok(2)
+        );
+        copied
+            .clear_root(&LocalTraversalBudget::new(64), NestingLimit::new(8))
+            .expect("complete graph clears");
+        assert!(
+            copied
+                .segments()
+                .all(|segment| segment.iter().all(|byte| *byte == 0))
+        );
+    }
+
+    #[test]
+    fn failed_cycle_copy_rolls_back_and_failed_cycle_clear_is_unchanged() {
+        let cycle = WirePointer::new_struct(-1, 0, 1).expect("self pointer fits");
+        let mut source_bytes = vec![0u8; 8];
+        cycle
+            .write_to(&mut source_bytes, 0)
+            .expect("self pointer writes");
+        let source = MessageSegments::new(&[&source_bytes]).expect("cycle validates shallowly");
+        let mut destination =
+            ExclusiveArena::new_segmented(1, 2, 16, 64).expect("destination initializes");
+        let before = destination
+            .segments()
+            .map(<[u8]>::to_vec)
+            .collect::<Vec<_>>();
+        assert!(matches!(
+            destination.copy_root(
+                &source,
+                ROOT,
+                &LocalTraversalBudget::new(3),
+                NestingLimit::new(10),
+            ),
+            Err(GraphError::Traversal(TraversalError::Budget(_)))
+        ));
+        assert_eq!(
+            destination
+                .segments()
+                .map(<[u8]>::to_vec)
+                .collect::<Vec<_>>(),
+            before
+        );
+
+        let mut built_cycle = ExclusiveArena::new(1, 4).expect("cycle arena initializes");
+        {
+            let root = built_cycle
+                .init_root_struct(0, 1)
+                .expect("cycle root initializes");
+            let slot = root.pointer_slot(0).expect("self slot exists");
+            root.arena
+                .write_pointer(slot, WirePointer::new_struct(-1, 0, 1).expect("cycle fits"))
+                .expect("cycle writes");
+        }
+        let before = built_cycle
+            .segments()
+            .map(<[u8]>::to_vec)
+            .collect::<Vec<_>>();
+        assert!(
+            built_cycle
+                .clear_root(&LocalTraversalBudget::new(2), NestingLimit::new(10))
+                .is_err()
+        );
+        assert_eq!(
+            built_cycle
+                .segments()
+                .map(<[u8]>::to_vec)
+                .collect::<Vec<_>>(),
+            before
+        );
+    }
+
+    #[test]
+    fn overlapping_copy_targets_are_charged_per_reference() {
+        let mut bytes = vec![0u8; 32];
+        WirePointer::new_struct(0, 0, 2)
+            .expect("root fits")
+            .write_to(&mut bytes, 0)
+            .expect("root writes");
+        WirePointer::new_struct(1, 1, 0)
+            .expect("first alias fits")
+            .write_to(&mut bytes, 8)
+            .expect("first alias writes");
+        WirePointer::new_struct(0, 1, 0)
+            .expect("second alias fits")
+            .write_to(&mut bytes, 16)
+            .expect("second alias writes");
+        bytes[24..28].copy_from_slice(&101u32.to_le_bytes());
+        let source = MessageSegments::new(&[&bytes]).expect("source validates");
+
+        let mut insufficient = ExclusiveArena::new(1, 16).expect("arena initializes");
+        assert!(matches!(
+            insufficient.copy_root(
+                &source,
+                ROOT,
+                &LocalTraversalBudget::new(3),
+                NestingLimit::new(3),
+            ),
+            Err(GraphError::Traversal(TraversalError::Budget(_)))
+        ));
+        assert_eq!(insufficient.as_segment(), &[0; 8]);
+
+        let mut exact = ExclusiveArena::new(1, 16).expect("arena initializes");
+        let budget = LocalTraversalBudget::new(4);
+        exact
+            .copy_root(&source, ROOT, &budget, NestingLimit::new(3))
+            .expect("exact repeated charge copies both aliases");
+        assert_eq!(budget.remaining_words(), 0);
+        let refs = exact.segments().collect::<Vec<_>>();
+        let message = MessageSegments::new(&refs).expect("copy validates");
+        let read_budget = LocalTraversalBudget::new(4);
+        let root = message
+            .read_struct(ROOT, &read_budget, NestingLimit::new(3))
+            .expect("root reads");
+        let first = root.read_struct(0, None).expect("first copy reads");
+        let second = root.read_struct(1, None).expect("second copy reads");
+        assert_ne!(first.reference(), second.reference());
+        assert_eq!(
+            first
+                .data_section()
+                .expect("first data exists")
+                .read_u32(0, 0),
+            Ok(101)
+        );
+        assert_eq!(
+            second
+                .data_section()
+                .expect("second data exists")
+                .read_u32(0, 0),
+            Ok(101)
+        );
+    }
+
+    #[test]
+    fn typed_orphans_move_structs_and_lists_without_copying() {
+        let mut arena = ExclusiveArena::new_segmented(2, 2, 16, 64).expect("arena initializes");
+        let root_offset;
+        let child_offset;
+        let list_offset;
+        {
+            let mut root = arena.init_root_struct(0, 4).expect("root initializes");
+            root_offset = root.offset();
+            {
+                let mut child = root.init_struct(0, 1, 0).expect("child initializes");
+                child_offset = child.offset();
+                child.set_u32(0, 55, 0).expect("child value writes");
+            }
+            {
+                let mut list = root.init_list::<u16>(2, 2).expect("list initializes");
+                list_offset = list.offset();
+                list.set(0, 7).expect("list value writes");
+                list.set(1, 8).expect("list value writes");
+            }
+            root.disown_struct(0)
+                .expect("struct disowns")
+                .adopt_into_struct(root_offset, 1)
+                .expect("struct adopts");
+            root.disown_list(2)
+                .expect("list disowns")
+                .adopt_into_struct(root_offset, 3)
+                .expect("list adopts");
+        }
+
+        let refs = arena.segments().collect::<Vec<_>>();
+        let message = MessageSegments::new(&refs).expect("moved graph validates");
+        let budget = LocalTraversalBudget::new(32);
+        let root = message
+            .read_struct(ROOT, &budget, NestingLimit::new(4))
+            .expect("root reads");
+        assert!(
+            root.read_struct(0, None)
+                .expect("old field reads")
+                .reference()
+                .is_none()
+        );
+        let child = root.read_struct(1, None).expect("moved child reads");
+        assert_eq!(
+            child.reference().expect("child is non-null").content,
+            wire_location(child_offset.content)
+        );
+        assert_eq!(
+            child
+                .data_section()
+                .expect("child data exists")
+                .read_u32(0, 0),
+            Ok(55)
+        );
+        assert!(root.read_list(2, None).expect("old list reads").is_empty());
+        let list = root.read_list(3, None).expect("moved list reads");
+        assert_eq!(
+            list.reference().expect("list is non-null").content,
+            wire_location(list_offset.content)
+        );
+        assert_eq!(
+            list.as_primitive::<u16>()
+                .expect("list type matches")
+                .iter()
+                .collect::<Result<Vec<_>, _>>(),
+            Ok(vec![7, 8])
+        );
+    }
+
+    #[test]
+    fn orphan_type_and_arena_checks_preserve_or_clear_storage_safely() {
+        let mut foreign = ExclusiveArena::new(1, 8).expect("foreign arena initializes");
+        let foreign_root = foreign
+            .init_root_struct(0, 1)
+            .expect("foreign root initializes")
+            .offset();
+
+        let mut arena = ExclusiveArena::new(1, 32).expect("arena initializes");
+        let root_offset;
+        {
+            let mut root = arena.init_root_struct(0, 2).expect("root initializes");
+            root_offset = root.offset();
+            root.init_list::<u16>(0, 1).expect("list initializes");
+            assert!(matches!(
+                root.disown_struct(0),
+                Err(GraphError::ExpectedStruct)
+            ));
+            {
+                let mut child = root.init_struct(1, 1, 1).expect("child initializes");
+                child.set_u64(0, u64::MAX, 0).expect("child data writes");
+                child.set_text(0, "secret").expect("child text writes");
+            }
+            let orphan = root.disown_struct(1).expect("child disowns");
+            assert_eq!(
+                orphan.adopt_into_struct(foreign_root, 0),
+                Err(GraphError::WrongArena)
+            );
+        }
+
+        let root_slot = struct_pointer_slot(root_offset, 1).expect("root slot exists");
+        assert!(arena.read_pointer(root_slot).expect("slot reads").is_null());
+        assert!(
+            arena
+                .segments()
+                .flat_map(<[u8]>::iter)
+                .skip(16)
+                .all(|byte| *byte == 0)
         );
     }
 }

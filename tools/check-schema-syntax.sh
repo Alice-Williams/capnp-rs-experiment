@@ -15,6 +15,7 @@ fi
 
 for schema in \
     builder-fixture.capnp \
+    orphan-fixture.capnp \
     wire-fixture.capnp \
     language-fixture.capnp \
     import-fixture.capnp \

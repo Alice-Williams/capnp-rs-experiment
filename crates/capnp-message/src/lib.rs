@@ -24,8 +24,9 @@ pub use budget::{
     BudgetExhausted, LocalTraversalBudget, NestingLimit, NestingLimitExceeded, TraversalBudget,
 };
 pub use builder::{
-    ArenaError, DataListBuilder, ExclusiveArena, ListOffset, PointerListBuilder,
-    PrimitiveListValue, StructBuilder, StructListBuilder, StructOffset, WordOffset,
+    ArenaError, DataListBuilder, ExclusiveArena, GraphError, ListOffset, ListOrphan, Orphan,
+    OrphanKind, PointerListBuilder, PrimitiveListValue, StructBuilder, StructListBuilder,
+    StructOffset, StructOrphan, WordOffset,
 };
 pub use list::{
     EnumListIter, EnumListReader, ListReadError, ListReader, PointerListIter, PointerListReader,

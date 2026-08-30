@@ -39,7 +39,9 @@ stable struct/list references with exact shared traversal accounting. The
 Phase 2 begins with M11's exclusive, typed-offset, zero-initializing
 builder arena and checked base-shape emitters. M12 extends it across bounded,
 deterministically sized segments with direct, single-far, and double-far
-pointer emission. The remaining crates are explicit ownership
+pointer emission. M13 adds bounded schema-independent graph copy/clear and
+typed same-arena struct/list orphan movement with zeroing on abandonment. The
+remaining crates are explicit ownership
 boundaries rather than claimed protocol features.
 
 ## Development

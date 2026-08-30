@@ -18,6 +18,8 @@
 - `builder-fixture.capnp` is the compact independent C++ decode target for the
   native arena's scalar, blob, struct, primitive-list, pointer-list,
   inline-composite, and nested-list output.
+- `orphan-fixture.capnp` independently checks same-arena zero-copy struct and
+  list movement through disown/adopt.
 
 The pinned C++ compiler is the final acceptance oracle. The container's system
 compiler may be used as an early syntax check, but its version is not provenance

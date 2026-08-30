@@ -56,7 +56,7 @@ parallel_build = "not-started"
 std = "workspace-skeleton"
 no_std_alloc = "planned"
 no_allocation = "planned"
-construction = "M12 bounded deterministic multi-segment arena with direct and far-pointer emission"
+construction = "M13 bounded graph copy/clear and typed same-arena orphan movement"
 
 [milestones]
 M00 = "complete"
@@ -72,6 +72,17 @@ M09 = "complete"
 M10 = "complete"
 M11 = "complete"
 M12 = "complete"
+M13 = "complete"
+
+[evidence.M13]
+crate = "crates/capnp-message"
+oracle_schema = "conformance/schemas/orphan-fixture.capnp"
+oracle_check = "tools/verify-m13-cpp-decode.sh: pinned C++ decodes zero-copy moved struct/list fields with exact expected values"
+copy = ["schema-independent structs", "primitive and pointer lists", "inline-composite lists", "capabilities", "multi-segment sources and destinations", "transactional rollback on failure"]
+clear = ["whole graph planned before mutation", "objects, pointer words, and far pads zeroed", "budget or nesting failure leaves graph byte-identical", "dropped orphan descendants zeroed iteratively"]
+graph_limits = ["cycles terminate through traversal or nesting budgets", "overlapping targets charge per reference", "allocation failures roll back every new segment and byte"]
+orphans = ["typed struct and list disown/adopt", "same backing coordinates preserved", "wrong kind rejected before detach", "foreign arena rejected", "exclusive orphan lifetime compile test"]
+validation = "Rust 1.98 and 1.85 tests; public API and compile-fail doc tests; pinned C++ orphan decode; schema syntax; Clippy -D warnings; Bazel 18/18"
 
 [evidence.M12]
 crate = "crates/capnp-message"
