@@ -1,0 +1,21 @@
+[package]
+name = "capnp-generated-fixture"
+description = "Compile and interoperability fixture for native generated Rust APIs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+capnp-io = { path = "../capnp-io" }
+capnp-message = { path = "../capnp-message" }
+capnp-schema = { path = "../capnp-schema" }
+
+[build-dependencies]
+capnp-codegen = { path = "../capnp-codegen" }
+capnp-schema = { path = "../capnp-schema" }

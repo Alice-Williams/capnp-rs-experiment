@@ -238,13 +238,26 @@ impl DynamicStruct {
         if structure.discriminant_count == 0 {
             return Ok(None);
         }
-        let actual = self.with_reader(|reader| {
-            Ok(reader.data()?.read_u16(structure.discriminant_offset, 0)?)
-        })?;
+        let Some(actual) = self.union_discriminant()? else {
+            return Ok(None);
+        };
         Ok(structure
             .fields
             .iter()
             .find(|field| field.discriminant_value == Some(actual)))
+    }
+
+    /// Returns the raw union discriminant, preserving values unknown to this schema.
+    pub fn union_discriminant(&self) -> Result<Option<u16>, DynamicError> {
+        let structure = self.struct_schema()?;
+        if structure.discriminant_count == 0 {
+            return Ok(None);
+        }
+        self.with_reader(|reader| {
+            Ok(Some(
+                reader.data()?.read_u16(structure.discriminant_offset, 0)?,
+            ))
+        })
     }
 
     pub fn stringify(&self) -> Result<String, DynamicError> {

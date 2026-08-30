@@ -48,7 +48,7 @@ rules_shell = "0.8.0"
 
 [support]
 wire = "M10 borrowed and Arc-owned typed readers with stable coordinate references"
-generated_api = "M18 owned dynamic schema-driven readers, builders, downcasts, and formatting"
+generated_api = "M19 request-fed typed structs, enums, unions, lists, imports, and documentation"
 native_compiler = "not-started"
 rpc_level = "none"
 parallel_read = "not-started"
@@ -79,6 +79,18 @@ M15 = "complete"
 M16 = "complete"
 M17 = "complete"
 M18 = "complete"
+M19 = "complete"
+
+[evidence.M19]
+crates = ["crates/capnp-codegen", "crates/capnp-generated-fixture"]
+input = ["pinned wire CodeGeneratorRequest", "pinned evolution-v2 CodeGeneratorRequest", "pinned import CodeGeneratorRequest"]
+generated = ["typed struct and group readers/builders", "typed enums with collision-safe unknown ordinals", "typed recursive list readers", "union Which values with unknown discriminants", "source documentation", "stable type IDs", "import metadata"]
+defaults = ["scalar XOR defaults", "pointer defaults", "absent evolved fields"]
+cpp_to_rust = "generated typed reader decodes the pinned C++ wire frame"
+rust_to_cpp = "pinned C++ decodes a 360-byte standard frame emitted through generated Rust builders"
+negative = ["unknown requested file", "Rust keyword escaping", "identifier collision disambiguation", "unknown enum ordinal", "unknown union discriminant"]
+scope = "generic surface APIs, constants, annotations, interfaces, and pipelines remain M20-M21"
+validation = "Rust 1.98 and 1.85 workspace tests; generated-module compilation; public API docs; Clippy -D warnings; pinned C++ decode; Bazel complete test suite"
 
 [evidence.M18]
 crates = ["crates/capnp-schema", "crates/capnp-message"]
