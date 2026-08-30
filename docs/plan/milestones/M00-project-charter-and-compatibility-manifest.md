@@ -29,12 +29,15 @@ Create the workspace skeleton, charter, support matrix, pinned upstream revision
 
 Local evidence recorded on 2026-08-30:
 
-- Four pinned schema SHA-256 values matched upstream.
+- Five pinned schema SHA-256 values matched upstream.
 - Rust 1.98.0 workspace tests and Clippy passed.
 - Rust 1.85.0 MSRV workspace tests passed.
-- Bazel 9.2.0 analyzed 22 targets and all 11 tests passed.
+- Bazel 9.2.0 analyzed 30 targets and all 18 tests passed, including schema,
+  fixture, script, and recorded-baseline integrity gates.
 
-Completion is blocked only on the owner license choice and first hosted CI run.
+Completion is blocked only on the owner license choice and observing a hosted
+CI run. Browser-based CI inspection was temporarily unavailable after the
+foundation push, so no passing hosted result is claimed here.
 
 ## Scope boundary
 

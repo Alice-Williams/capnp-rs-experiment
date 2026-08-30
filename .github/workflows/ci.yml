@@ -10,6 +10,7 @@ permissions:
 jobs:
   conformance-foundation:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -20,6 +21,12 @@ jobs:
 
       - name: Test Cargo workspace with development Rust
         run: cargo test --workspace --all-targets
+
+      - name: Check formatting and lints
+        run: |
+          cargo fmt --all -- --check
+          rustfmt --edition 2021 --check --config skip_children=true benchmarks/rpc/rust/main.rs
+          cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Test Cargo workspace at MSRV
         run: |
