@@ -14,5 +14,5 @@ rust_library(
 rust_test(
     name = "capnp_compiler_test",
     crate = ":capnp_compiler",
+    compile_data = ["//conformance:schema_source_corpus"],
 )
-

@@ -49,7 +49,7 @@ rules_shell = "0.8.0"
 [support]
 wire = "M10 borrowed and Arc-owned typed readers with stable coordinate references"
 generated_api = "M21 typed data and thread-safe local interface APIs with exact pipelines"
-native_compiler = "not-started"
+native_compiler = "M22 bounded lossless lexer and statement syntax tree; semantic compilation remains M23-M25"
 rpc_level = "M21 in-memory local dispatch, inheritance, streaming completion, and capability pipelines; network protocol deferred to M32+"
 parallel_read = "not-started"
 parallel_build = "not-started"
@@ -82,6 +82,19 @@ M18 = "complete"
 M19 = "complete"
 M20 = "complete"
 M21 = "complete"
+M22 = "complete"
+
+[evidence.M22]
+crate = "crates/capnp-compiler"
+oracle_source = "pinned C++ compiler lexer.c++, lexer.capnp, lexer-test.c++, and parser declaration grammar at e7c9cd96f1505b5ae486db7821006c2f5dce5b5b"
+syntax = ["identifiers", "decoded strings and backtick lines", "hex binary", "integer and float literals", "operators", "nested comma-delimited parentheses and brackets", "semicolon declarations", "brace blocks", "UTF-8 BOM", "post-declaration documentation comments"]
+lossless = ["Arc-owned original UTF-8 source", "half-open byte ranges on tokens and statements", "whitespace, comment, and BOM trivia ranges", "exact source slicing"]
+limits = ["source bytes before scanning", "tokens", "statements", "shared bracket and block nesting", "retained diagnostics"]
+recovery = ["invalid character tokens", "missing list delimiters", "missing statement terminators", "unmatched braces", "unterminated strings and binary literals", "overflowing numbers"]
+oracle_check = "tools/verify-m22-parser.sh: native and pinned C++ agree on 14 accepted local/upstream schemas and 4 syntax rejections"
+fuzz_regression = "deterministic arbitrary byte prefixes through length 511 never panic; successful UTF-8 parses retain bounded diagnostics and at most linear recorded cursor work; 100000-level nesting is rejected at the configured depth"
+scope = "lossless lexical/statement syntax only; name, import, ID, constant, type, and layout semantics remain M23-M25"
+validation = "Rust 1.98 and 1.85 workspace tests; public API docs; Clippy -D warnings; pinned C++ accept/reject harness; Bazel complete test suite"
 
 [evidence.M21]
 crates = ["crates/capnp-codegen", "crates/capnp-rpc", "crates/capnp-generated-fixture", "crates/capnp-generated-import-fixture"]
