@@ -55,7 +55,7 @@ wire safety or protocol ordering.
 ### Phase 2 — Construction, copying, canonicalization, and I/O
 
 - [M11 — Exclusive builder arena](milestones/M11-exclusive-builder-arena.md) — complete
-- [M12 — Multi-segment allocation and far-pointer writing](milestones/M12-multi-segment-allocation-and-far-pointer-writing.md)
+- [M12 — Multi-segment allocation and far-pointer writing](milestones/M12-multi-segment-allocation-and-far-pointer-writing.md) — complete
 - [M13 — Deep copy, clear, orphan/disown/adopt](milestones/M13-deep-copy-clear-orphan-disown-adopt.md)
 - [M14 — Canonicalization and canonical checker](milestones/M14-canonicalization-and-canonical-checker.md)
 - [M15 — Packed codec](milestones/M15-packed-codec.md)

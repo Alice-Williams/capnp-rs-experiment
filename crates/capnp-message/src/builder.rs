@@ -1,14 +1,15 @@
-//! Exclusive, zero-initializing single-segment message construction.
+//! Exclusive, zero-initializing message construction.
 //!
 //! This is the ordinary builder from ADR-0003 and follows the pointer and
 //! allocation rules in the pinned C++ `layout.c++` implementation. One mutable
 //! borrow owns the arena; child builders reborrow it and carry typed word
 //! offsets rather than native pointers. Every allocation is checked, grown as
-//! zeroed bytes, and only then linked from its parent.
+//! zeroed bytes, and only then linked from its parent. M12 extends that same
+//! representation across deterministic segments and emits direct, single-far,
+//! or double-far pointers according to the actual placement.
 //!
-//! Multi-segment allocation and far pointers, deep copying, orphans,
-//! canonicalization, generated setters, and parallel construction are later
-//! milestones.
+//! Deep copying, orphans, canonicalization, generated setters, and parallel
+//! construction are later milestones.
 
 use core::fmt;
 use core::marker::PhantomData;
@@ -22,11 +23,18 @@ use capnp_wire::{
 pub const MAX_SINGLE_SEGMENT_WORDS: u32 = 1 << 29;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct WordOffset(u32);
+pub struct WordOffset {
+    segment_id: u32,
+    word_offset: u32,
+}
 
 impl WordOffset {
-    pub const fn get(self) -> u32 {
-        self.0
+    pub const fn segment_id(self) -> u32 {
+        self.segment_id
+    }
+
+    pub const fn word_offset(self) -> u32 {
+        self.word_offset
     }
 }
 
@@ -86,10 +94,13 @@ impl ListOffset {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ArenaError {
     InvalidWordLimit { requested: u32 },
+    InvalidSegmentLimit { requested: u32 },
     AlreadyInitialized,
     AllocationOverflow,
-    AllocationLimit { requested: u64, limit: u32 },
+    AllocationLimit { requested: u64, limit: u64 },
+    SegmentLimit { requested: u32, limit: u32 },
     AllocationFailed,
+    MultipleSegments,
     IndexOutOfBounds { index: u32, len: u32 },
     PointerIndexOutOfBounds { index: u16, len: u16 },
     Wire(WireError),
@@ -106,10 +117,13 @@ impl std::error::Error for ArenaError {
         match self {
             Self::Wire(error) => Some(error),
             Self::InvalidWordLimit { .. }
+            | Self::InvalidSegmentLimit { .. }
             | Self::AlreadyInitialized
             | Self::AllocationOverflow
             | Self::AllocationLimit { .. }
+            | Self::SegmentLimit { .. }
             | Self::AllocationFailed
+            | Self::MultipleSegments
             | Self::IndexOutOfBounds { .. }
             | Self::PointerIndexOutOfBounds { .. } => None,
         }
@@ -122,53 +136,136 @@ impl From<WireError> for ArenaError {
     }
 }
 
-/// A growable, exclusively borrowed, single-segment arena.
+#[derive(Debug)]
+struct SegmentStorage {
+    bytes: Vec<u8>,
+    word_limit: u32,
+}
+
+/// A growable, exclusively borrowed arena with deterministic segment policy.
 ///
-/// `initial_capacity_words` is only a reservation hint. The root word is
-/// always allocated and zeroed immediately; later growth also initializes
-/// every exposed byte to zero.
+/// `new()` retains M11's single-segment behavior. `new_segmented()` fixes the
+/// first and preferred later segment sizes so tests and callers can force
+/// landing-pad placement without depending on allocator capacity.
 #[derive(Debug)]
 pub struct ExclusiveArena {
-    segment: Vec<u8>,
-    max_words: u32,
+    segments: Vec<SegmentStorage>,
+    next_segment_words: u32,
+    max_segments: u32,
+    max_total_words: u64,
     root_initialized: bool,
 }
 
 impl ExclusiveArena {
     pub fn new(initial_capacity_words: u32, max_words: u32) -> Result<Self, ArenaError> {
-        if max_words == 0 || max_words > MAX_SINGLE_SEGMENT_WORDS {
-            return Err(ArenaError::InvalidWordLimit {
-                requested: max_words,
+        validate_segment_words(max_words)?;
+        Self::new_with_policy(
+            initial_capacity_words.max(1).min(max_words),
+            max_words,
+            max_words,
+            1,
+            u64::from(max_words),
+        )
+    }
+
+    pub fn new_segmented(
+        first_segment_words: u32,
+        next_segment_words: u32,
+        max_segments: u32,
+        max_total_words: u64,
+    ) -> Result<Self, ArenaError> {
+        validate_segment_words(first_segment_words)?;
+        validate_segment_words(next_segment_words)?;
+        if max_segments == 0 {
+            return Err(ArenaError::InvalidSegmentLimit {
+                requested: max_segments,
             });
         }
-        let capacity_words = initial_capacity_words.max(1).min(max_words);
-        let capacity = word_bytes(capacity_words)?;
-        let mut segment = Vec::new();
-        segment
-            .try_reserve_exact(capacity)
+        if max_total_words == 0 {
+            return Err(ArenaError::InvalidWordLimit { requested: 0 });
+        }
+        Self::new_with_policy(
+            first_segment_words,
+            first_segment_words,
+            next_segment_words,
+            max_segments,
+            max_total_words,
+        )
+    }
+
+    fn new_with_policy(
+        initial_capacity_words: u32,
+        first_word_limit: u32,
+        next_segment_words: u32,
+        max_segments: u32,
+        max_total_words: u64,
+    ) -> Result<Self, ArenaError> {
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(word_bytes(initial_capacity_words)?)
             .map_err(|_| ArenaError::AllocationFailed)?;
-        segment.resize(8, 0);
+        bytes.resize(8, 0);
         Ok(Self {
-            segment,
-            max_words,
+            segments: vec![SegmentStorage {
+                bytes,
+                word_limit: first_word_limit,
+            }],
+            next_segment_words,
+            max_segments,
+            max_total_words,
             root_initialized: false,
         })
     }
 
-    pub fn word_len(&self) -> u32 {
-        u32::try_from(self.segment.len() / 8).expect("single-segment limit fits u32")
+    pub fn word_len(&self) -> u64 {
+        self.segments
+            .iter()
+            .map(|segment| (segment.bytes.len() / 8) as u64)
+            .sum()
     }
 
-    pub const fn max_words(&self) -> u32 {
-        self.max_words
+    pub const fn max_words(&self) -> u64 {
+        self.max_total_words
+    }
+
+    pub fn segment_count(&self) -> usize {
+        self.segments.len()
+    }
+
+    pub fn segment(&self, id: u32) -> Option<&[u8]> {
+        usize::try_from(id).ok().and_then(|index| {
+            self.segments
+                .get(index)
+                .map(|segment| segment.bytes.as_slice())
+        })
+    }
+
+    pub fn segments(&self) -> impl ExactSizeIterator<Item = &[u8]> {
+        self.segments.iter().map(|segment| segment.bytes.as_slice())
     }
 
     pub fn as_segment(&self) -> &[u8] {
-        &self.segment
+        self.segment(0).expect("an arena always has segment zero")
     }
 
-    pub fn into_segment(self) -> Box<[u8]> {
-        self.segment.into_boxed_slice()
+    pub fn into_segment(self) -> Result<Box<[u8]>, ArenaError> {
+        if self.segments.len() != 1 {
+            return Err(ArenaError::MultipleSegments);
+        }
+        Ok(self
+            .segments
+            .into_iter()
+            .next()
+            .expect("an arena always has segment zero")
+            .bytes
+            .into_boxed_slice())
+    }
+
+    pub fn into_segments(self) -> Vec<Box<[u8]>> {
+        self.segments
+            .into_iter()
+            .map(|segment| segment.bytes.into_boxed_slice())
+            .collect()
     }
 
     /// Initializes the root once and returns the arena's exclusive struct view.
@@ -179,7 +276,7 @@ impl ExclusiveArena {
     ) -> Result<StructBuilder<'_>, ArenaError> {
         self.require_uninitialized_root()?;
         let reference = self.allocate_struct(data_words, pointer_count)?;
-        self.emit_struct(WordOffset(0), reference)?;
+        self.emit_struct(root_offset(), reference)?;
         self.root_initialized = true;
         Ok(StructBuilder {
             arena: self,
@@ -193,7 +290,7 @@ impl ExclusiveArena {
     ) -> Result<DataListBuilder<'_, T>, ArenaError> {
         self.require_uninitialized_root()?;
         let reference = self.allocate_data_list(T::ELEMENT_SIZE, element_count)?;
-        self.emit_list(WordOffset(0), reference)?;
+        self.emit_list(root_offset(), reference)?;
         self.root_initialized = true;
         Ok(DataListBuilder {
             arena: self,
@@ -208,7 +305,7 @@ impl ExclusiveArena {
     ) -> Result<PointerListBuilder<'_>, ArenaError> {
         self.require_uninitialized_root()?;
         let reference = self.allocate_data_list(ElementSize::Pointer, element_count)?;
-        self.emit_list(WordOffset(0), reference)?;
+        self.emit_list(root_offset(), reference)?;
         self.root_initialized = true;
         Ok(PointerListBuilder {
             arena: self,
@@ -224,7 +321,7 @@ impl ExclusiveArena {
     ) -> Result<StructListBuilder<'_>, ArenaError> {
         self.require_uninitialized_root()?;
         let reference = self.allocate_struct_list(element_count, data_words, pointer_count)?;
-        self.emit_list(WordOffset(0), reference)?;
+        self.emit_list(root_offset(), reference)?;
         self.root_initialized = true;
         Ok(StructListBuilder {
             arena: self,
@@ -240,25 +337,91 @@ impl ExclusiveArena {
     }
 
     fn allocate_words(&mut self, words: u64) -> Result<WordOffset, ArenaError> {
-        let current = u64::from(self.word_len());
-        let requested = current
+        let words_u32 = u32::try_from(words).map_err(|_| ArenaError::AllocationOverflow)?;
+        if words_u32 > MAX_SINGLE_SEGMENT_WORDS {
+            return Err(ArenaError::AllocationOverflow);
+        }
+        let last =
+            u32::try_from(self.segments.len() - 1).map_err(|_| ArenaError::AllocationOverflow)?;
+        if let Some(location) = self.try_allocate_in_segment(last, words_u32)? {
+            return Ok(location);
+        }
+        self.allocate_new_segment(words_u32)
+    }
+
+    fn try_allocate_in_segment(
+        &mut self,
+        segment_id: u32,
+        words: u32,
+    ) -> Result<Option<WordOffset>, ArenaError> {
+        let index = usize::try_from(segment_id).map_err(|_| ArenaError::AllocationOverflow)?;
+        let segment = self
+            .segments
+            .get(index)
+            .ok_or(ArenaError::AllocationOverflow)?;
+        let current =
+            u32::try_from(segment.bytes.len() / 8).map_err(|_| ArenaError::AllocationOverflow)?;
+        let end = current
             .checked_add(words)
             .ok_or(ArenaError::AllocationOverflow)?;
-        if requested > u64::from(self.max_words) {
-            return Err(ArenaError::AllocationLimit {
-                requested,
-                limit: self.max_words,
+        if end > segment.word_limit {
+            return Ok(None);
+        }
+        self.ensure_total_limit(u64::from(words))?;
+        let new_len = word_bytes(end)?;
+        let segment = &mut self.segments[index];
+        segment
+            .bytes
+            .try_reserve_exact(new_len.saturating_sub(segment.bytes.len()))
+            .map_err(|_| ArenaError::AllocationFailed)?;
+        segment.bytes.resize(new_len, 0);
+        Ok(Some(WordOffset {
+            segment_id,
+            word_offset: current,
+        }))
+    }
+
+    fn allocate_new_segment(&mut self, words: u32) -> Result<WordOffset, ArenaError> {
+        self.ensure_total_limit(u64::from(words))?;
+        let requested_segments = u32::try_from(self.segments.len())
+            .map_err(|_| ArenaError::AllocationOverflow)?
+            .checked_add(1)
+            .ok_or(ArenaError::AllocationOverflow)?;
+        if requested_segments > self.max_segments {
+            return Err(ArenaError::SegmentLimit {
+                requested: requested_segments,
+                limit: self.max_segments,
             });
         }
-        let new_len =
-            word_bytes(u32::try_from(requested).map_err(|_| ArenaError::AllocationOverflow)?)?;
-        self.segment
-            .try_reserve_exact(new_len.saturating_sub(self.segment.len()))
+        let word_limit = self.next_segment_words.max(words);
+        validate_segment_words(word_limit)?;
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(word_bytes(words)?)
             .map_err(|_| ArenaError::AllocationFailed)?;
-        self.segment.resize(new_len, 0);
-        Ok(WordOffset(
-            u32::try_from(current).map_err(|_| ArenaError::AllocationOverflow)?,
-        ))
+        bytes.resize(word_bytes(words)?, 0);
+        let segment_id =
+            u32::try_from(self.segments.len()).map_err(|_| ArenaError::AllocationOverflow)?;
+        self.segments.push(SegmentStorage { bytes, word_limit });
+        Ok(WordOffset {
+            segment_id,
+            word_offset: 0,
+        })
+    }
+
+    fn ensure_total_limit(&self, additional: u64) -> Result<(), ArenaError> {
+        let requested = self
+            .word_len()
+            .checked_add(additional)
+            .ok_or(ArenaError::AllocationOverflow)?;
+        if requested > self.max_total_words {
+            Err(ArenaError::AllocationLimit {
+                requested,
+                limit: self.max_total_words,
+            })
+        } else {
+            Ok(())
+        }
     }
 
     fn allocate_struct(
@@ -332,16 +495,25 @@ impl ExclusiveArena {
         pointer_location: WordOffset,
         target: StructOffset,
     ) -> Result<(), ArenaError> {
-        let pointer = if target.data_words == 0 && target.pointer_count == 0 {
-            WirePointer::empty_struct()
-        } else {
-            WirePointer::new_struct(
+        if target.data_words == 0 && target.pointer_count == 0 {
+            return self.write_pointer(pointer_location, WirePointer::empty_struct());
+        }
+        if pointer_location.segment_id == target.content.segment_id {
+            let pointer = WirePointer::new_struct(
                 relative_offset(pointer_location, target.content)?,
                 target.data_words,
                 target.pointer_count,
-            )?
-        };
-        self.write_pointer(pointer_location, pointer)
+            )?;
+            return self.write_pointer(pointer_location, pointer);
+        }
+        self.emit_far(
+            pointer_location,
+            target.content,
+            FarTag::Struct {
+                data_words: target.data_words,
+                pointer_count: target.pointer_count,
+            },
+        )
     }
 
     fn emit_list(
@@ -354,12 +526,49 @@ impl ExclusiveArena {
         } else {
             target.element_count
         };
-        let pointer = WirePointer::new_list(
-            relative_offset(pointer_location, target.pointer_target)?,
-            target.element_size,
-            count,
+        if pointer_location.segment_id == target.pointer_target.segment_id {
+            let pointer = WirePointer::new_list(
+                relative_offset(pointer_location, target.pointer_target)?,
+                target.element_size,
+                count,
+            )?;
+            return self.write_pointer(pointer_location, pointer);
+        }
+        self.emit_far(
+            pointer_location,
+            target.pointer_target,
+            FarTag::List {
+                element_size: target.element_size,
+                count,
+            },
+        )
+    }
+
+    fn emit_far(
+        &mut self,
+        pointer_location: WordOffset,
+        object: WordOffset,
+        tag: FarTag,
+    ) -> Result<(), ArenaError> {
+        if let Some(pad) = self.try_allocate_in_segment(object.segment_id, 1)? {
+            self.write_pointer(pad, tag.positional(pad, object)?)?;
+            return self.write_pointer(
+                pointer_location,
+                WirePointer::new_far(false, pad.word_offset, pad.segment_id)?,
+            );
+        }
+
+        let pad = self.allocate_words(2)?;
+        let tag_location = add_words(pad, 1)?;
+        self.write_pointer(
+            pad,
+            WirePointer::new_far(false, object.word_offset, object.segment_id)?,
         )?;
-        self.write_pointer(pointer_location, pointer)
+        self.write_pointer(tag_location, tag.double_far_tag()?)?;
+        self.write_pointer(
+            pointer_location,
+            WirePointer::new_far(true, pad.word_offset, pad.segment_id)?,
+        )
     }
 
     fn write_pointer(
@@ -367,8 +576,62 @@ impl ExclusiveArena {
         location: WordOffset,
         pointer: WirePointer,
     ) -> Result<(), ArenaError> {
-        pointer.write_to(&mut self.segment, byte_offset(location)?)?;
+        let segment = self.segment_mut(location.segment_id)?;
+        pointer.write_to(segment, byte_offset(location)?)?;
         Ok(())
+    }
+
+    fn segment_mut(&mut self, segment_id: u32) -> Result<&mut [u8], ArenaError> {
+        usize::try_from(segment_id)
+            .ok()
+            .and_then(|index| self.segments.get_mut(index))
+            .map(|segment| segment.bytes.as_mut_slice())
+            .ok_or(ArenaError::AllocationOverflow)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum FarTag {
+    Struct {
+        data_words: u16,
+        pointer_count: u16,
+    },
+    List {
+        element_size: ElementSize,
+        count: u32,
+    },
+}
+
+impl FarTag {
+    fn positional(
+        self,
+        pointer: WordOffset,
+        object: WordOffset,
+    ) -> Result<WirePointer, ArenaError> {
+        let offset = relative_offset(pointer, object)?;
+        Ok(match self {
+            Self::Struct {
+                data_words,
+                pointer_count,
+            } => WirePointer::new_struct(offset, data_words, pointer_count)?,
+            Self::List {
+                element_size,
+                count,
+            } => WirePointer::new_list(offset, element_size, count)?,
+        })
+    }
+
+    fn double_far_tag(self) -> Result<WirePointer, ArenaError> {
+        Ok(match self {
+            Self::Struct {
+                data_words,
+                pointer_count,
+            } => WirePointer::new_struct(0, data_words, pointer_count)?,
+            Self::List {
+                element_size,
+                count,
+            } => WirePointer::new_list(0, element_size, count)?,
+        })
     }
 }
 
@@ -404,66 +667,99 @@ impl StructBuilder<'_> {
         let byte = usize::try_from(absolute / 8).map_err(|_| ArenaError::AllocationOverflow)?;
         let bit = u8::try_from(absolute % 8).map_err(|_| ArenaError::AllocationOverflow)?;
         let mask = 1u8 << bit;
+        let segment = self.arena.segment_mut(self.reference.content.segment_id)?;
         if value ^ default {
-            self.arena.segment[byte] |= mask;
+            segment[byte] |= mask;
         } else {
-            self.arena.segment[byte] &= !mask;
+            segment[byte] &= !mask;
         }
         Ok(())
     }
 
     pub fn set_u8(&mut self, offset: u32, value: u8, default: u8) -> Result<(), ArenaError> {
         let byte = self.data_element_offset(offset, 1)?;
-        write_u8(&mut self.arena.segment, byte, value ^ default)?;
+        write_u8(
+            self.arena.segment_mut(self.reference.content.segment_id)?,
+            byte,
+            value ^ default,
+        )?;
         Ok(())
     }
 
     pub fn set_i8(&mut self, offset: u32, value: i8, default: i8) -> Result<(), ArenaError> {
         let byte = self.data_element_offset(offset, 1)?;
-        write_i8(&mut self.arena.segment, byte, value ^ default)?;
+        write_i8(
+            self.arena.segment_mut(self.reference.content.segment_id)?,
+            byte,
+            value ^ default,
+        )?;
         Ok(())
     }
 
     pub fn set_u16(&mut self, offset: u32, value: u16, default: u16) -> Result<(), ArenaError> {
         let byte = self.data_element_offset(offset, 2)?;
-        write_u16_le(&mut self.arena.segment, byte, value ^ default)?;
+        write_u16_le(
+            self.arena.segment_mut(self.reference.content.segment_id)?,
+            byte,
+            value ^ default,
+        )?;
         Ok(())
     }
 
     pub fn set_i16(&mut self, offset: u32, value: i16, default: i16) -> Result<(), ArenaError> {
         let byte = self.data_element_offset(offset, 2)?;
-        write_i16_le(&mut self.arena.segment, byte, value ^ default)?;
+        write_i16_le(
+            self.arena.segment_mut(self.reference.content.segment_id)?,
+            byte,
+            value ^ default,
+        )?;
         Ok(())
     }
 
     pub fn set_u32(&mut self, offset: u32, value: u32, default: u32) -> Result<(), ArenaError> {
         let byte = self.data_element_offset(offset, 4)?;
-        write_u32_le(&mut self.arena.segment, byte, value ^ default)?;
+        write_u32_le(
+            self.arena.segment_mut(self.reference.content.segment_id)?,
+            byte,
+            value ^ default,
+        )?;
         Ok(())
     }
 
     pub fn set_i32(&mut self, offset: u32, value: i32, default: i32) -> Result<(), ArenaError> {
         let byte = self.data_element_offset(offset, 4)?;
-        write_i32_le(&mut self.arena.segment, byte, value ^ default)?;
+        write_i32_le(
+            self.arena.segment_mut(self.reference.content.segment_id)?,
+            byte,
+            value ^ default,
+        )?;
         Ok(())
     }
 
     pub fn set_u64(&mut self, offset: u32, value: u64, default: u64) -> Result<(), ArenaError> {
         let byte = self.data_element_offset(offset, 8)?;
-        write_u64_le(&mut self.arena.segment, byte, value ^ default)?;
+        write_u64_le(
+            self.arena.segment_mut(self.reference.content.segment_id)?,
+            byte,
+            value ^ default,
+        )?;
         Ok(())
     }
 
     pub fn set_i64(&mut self, offset: u32, value: i64, default: i64) -> Result<(), ArenaError> {
         let byte = self.data_element_offset(offset, 8)?;
-        write_i64_le(&mut self.arena.segment, byte, value ^ default)?;
+        write_i64_le(
+            self.arena.segment_mut(self.reference.content.segment_id)?,
+            byte,
+            value ^ default,
+        )?;
         Ok(())
     }
 
     pub fn set_f32(&mut self, offset: u32, value: f32, default: f32) -> Result<(), ArenaError> {
         let byte = self.data_element_offset(offset, 4)?;
         write_f32_le(
-            &mut self.arena.segment,
+            self.arena.segment_mut(self.reference.content.segment_id)?,
             byte,
             f32::from_bits(value.to_bits() ^ default.to_bits()),
         )?;
@@ -473,7 +769,7 @@ impl StructBuilder<'_> {
     pub fn set_f64(&mut self, offset: u32, value: f64, default: f64) -> Result<(), ArenaError> {
         let byte = self.data_element_offset(offset, 8)?;
         write_f64_le(
-            &mut self.arena.segment,
+            self.arena.segment_mut(self.reference.content.segment_id)?,
             byte,
             f64::from_bits(value.to_bits() ^ default.to_bits()),
         )?;
@@ -559,7 +855,8 @@ impl StructBuilder<'_> {
         let end = start
             .checked_add(value.len())
             .ok_or(ArenaError::AllocationOverflow)?;
-        self.arena.segment[start..end].copy_from_slice(value.as_bytes());
+        self.arena.segment_mut(reference.content.segment_id)?[start..end]
+            .copy_from_slice(value.as_bytes());
         Ok(())
     }
 
@@ -572,7 +869,7 @@ impl StructBuilder<'_> {
         let end = start
             .checked_add(value.len())
             .ok_or(ArenaError::AllocationOverflow)?;
-        self.arena.segment[start..end].copy_from_slice(value);
+        self.arena.segment_mut(reference.content.segment_id)?[start..end].copy_from_slice(value);
         Ok(())
     }
 
@@ -595,7 +892,7 @@ impl StructBuilder<'_> {
                 len: u32::from(self.reference.data_words) * 64,
             });
         }
-        u64::from(self.reference.content.0)
+        u64::from(self.reference.content.word_offset)
             .checked_mul(64)
             .and_then(|start| start.checked_add(u64::from(bit_offset)))
             .ok_or(ArenaError::AllocationOverflow)
@@ -717,7 +1014,7 @@ impl<T: PrimitiveListValue> DataListBuilder<'_, T> {
 
     pub fn set(&mut self, index: u32, value: T) -> Result<(), ArenaError> {
         check_index(index, self.len())?;
-        let start = u64::from(self.reference.content.0)
+        let start = u64::from(self.reference.content.word_offset)
             .checked_mul(64)
             .ok_or(ArenaError::AllocationOverflow)?;
         let bits = element_bits(T::ELEMENT_SIZE);
@@ -725,7 +1022,11 @@ impl<T: PrimitiveListValue> DataListBuilder<'_, T> {
             .checked_mul(bits)
             .and_then(|relative| start.checked_add(relative))
             .ok_or(ArenaError::AllocationOverflow)?;
-        T::write_at(&mut self.arena.segment, offset, value)
+        T::write_at(
+            self.arena.segment_mut(self.reference.content.segment_id)?,
+            offset,
+            value,
+        )
     }
 }
 
@@ -792,7 +1093,8 @@ impl PointerListBuilder<'_> {
         let end = start
             .checked_add(value.len())
             .ok_or(ArenaError::AllocationOverflow)?;
-        self.arena.segment[start..end].copy_from_slice(value.as_bytes());
+        self.arena.segment_mut(reference.content.segment_id)?[start..end]
+            .copy_from_slice(value.as_bytes());
         Ok(())
     }
 
@@ -805,7 +1107,7 @@ impl PointerListBuilder<'_> {
         let end = start
             .checked_add(value.len())
             .ok_or(ArenaError::AllocationOverflow)?;
-        self.arena.segment[start..end].copy_from_slice(value);
+        self.arena.segment_mut(reference.content.segment_id)?[start..end].copy_from_slice(value);
         Ok(())
     }
 
@@ -866,23 +1168,44 @@ fn check_index(index: u32, len: u32) -> Result<(), ArenaError> {
 }
 
 fn relative_offset(pointer: WordOffset, target: WordOffset) -> Result<i32, ArenaError> {
-    let value = i64::from(target.0) - i64::from(pointer.0) - 1;
+    if pointer.segment_id != target.segment_id {
+        return Err(ArenaError::AllocationOverflow);
+    }
+    let value = i64::from(target.word_offset) - i64::from(pointer.word_offset) - 1;
     i32::try_from(value).map_err(|_| ArenaError::AllocationOverflow)
 }
 
 fn add_words(offset: WordOffset, words: u64) -> Result<WordOffset, ArenaError> {
-    let value = u64::from(offset.0)
+    let value = u64::from(offset.word_offset)
         .checked_add(words)
         .and_then(|value| u32::try_from(value).ok())
         .ok_or(ArenaError::AllocationOverflow)?;
-    Ok(WordOffset(value))
+    Ok(WordOffset {
+        segment_id: offset.segment_id,
+        word_offset: value,
+    })
 }
 
 fn byte_offset(offset: WordOffset) -> Result<usize, ArenaError> {
-    usize::try_from(offset.0)
+    usize::try_from(offset.word_offset)
         .ok()
         .and_then(|word| word.checked_mul(8))
         .ok_or(ArenaError::AllocationOverflow)
+}
+
+const fn root_offset() -> WordOffset {
+    WordOffset {
+        segment_id: 0,
+        word_offset: 0,
+    }
+}
+
+fn validate_segment_words(words: u32) -> Result<(), ArenaError> {
+    if words == 0 || words > MAX_SINGLE_SEGMENT_WORDS {
+        Err(ArenaError::InvalidWordLimit { requested: words })
+    } else {
+        Ok(())
+    }
 }
 
 fn word_bytes(words: u32) -> Result<usize, ArenaError> {
@@ -1220,6 +1543,140 @@ mod tests {
         assert_eq!(
             list.set(1, 7),
             Err(ArenaError::IndexOutOfBounds { index: 1, len: 1 })
+        );
+    }
+
+    #[test]
+    fn tiny_segments_force_single_and_double_far_struct_pads() {
+        for (next_words, double_far) in [(2, false), (1, true)] {
+            let mut arena = ExclusiveArena::new_segmented(2, next_words, 4, 16)
+                .expect("segmented arena initializes");
+            {
+                let mut root = arena.init_root_struct(0, 1).expect("root initializes");
+                let mut child = root.init_struct(0, 1, 0).expect("child initializes");
+                child.set_u32(0, 1234, 0).expect("child value writes");
+            }
+
+            let source = WirePointer::read_from(arena.segment(0).expect("segment zero"), 8)
+                .expect("far pointer exists");
+            let far = source.far_fields().expect("child uses a far pointer");
+            assert_eq!(far.double_far, double_far);
+            if double_far {
+                assert_eq!(arena.segment_count(), 3);
+                let first = WirePointer::read_from(
+                    arena.segment(far.segment_id).expect("pad segment exists"),
+                    usize::try_from(far.landing_pad_word).expect("offset fits") * 8,
+                )
+                .expect("double-far first word exists");
+                assert!(first.far_fields().is_some());
+            } else {
+                assert_eq!(arena.segment_count(), 2);
+                let pad = WirePointer::read_from(
+                    arena.segment(far.segment_id).expect("pad segment exists"),
+                    usize::try_from(far.landing_pad_word).expect("offset fits") * 8,
+                )
+                .expect("single landing pad exists");
+                assert!(pad.struct_fields().is_some());
+            }
+
+            let owned = arena.into_segments();
+            let borrowed = owned.iter().map(AsRef::as_ref).collect::<Vec<_>>();
+            let segments = MessageSegments::new(&borrowed).expect("segments validate");
+            let budget = LocalTraversalBudget::new(8);
+            let root = segments
+                .read_struct(ROOT, &budget, NestingLimit::new(2))
+                .expect("root reads");
+            assert_eq!(
+                root.read_struct(0, None)
+                    .expect("far child reads")
+                    .data_section()
+                    .expect("child data exists")
+                    .read_u32(0, 0),
+                Ok(1234)
+            );
+        }
+    }
+
+    #[test]
+    fn tiny_segments_force_single_and_double_far_list_pads() {
+        for (next_words, double_far) in [(2, false), (1, true)] {
+            let mut arena = ExclusiveArena::new_segmented(2, next_words, 4, 16)
+                .expect("segmented arena initializes");
+            {
+                let mut root = arena.init_root_struct(0, 1).expect("root initializes");
+                let mut list = root.init_list::<u16>(0, 2).expect("list initializes");
+                list.set(0, 5).expect("first value writes");
+                list.set(1, 6).expect("second value writes");
+            }
+            let source = WirePointer::read_from(arena.segment(0).expect("segment zero"), 8)
+                .expect("far pointer exists");
+            assert_eq!(
+                source
+                    .far_fields()
+                    .expect("list uses a far pointer")
+                    .double_far,
+                double_far
+            );
+            let owned = arena.into_segments();
+            let borrowed = owned.iter().map(AsRef::as_ref).collect::<Vec<_>>();
+            let segments = MessageSegments::new(&borrowed).expect("segments validate");
+            let budget = LocalTraversalBudget::new(8);
+            let root = segments
+                .read_struct(ROOT, &budget, NestingLimit::new(2))
+                .expect("root reads");
+            let list = root
+                .read_list(0, None)
+                .expect("far list reads")
+                .as_primitive::<u16>()
+                .expect("list type matches");
+            assert_eq!(list.iter().collect::<Result<Vec<_>, _>>(), Ok(vec![5, 6]));
+        }
+    }
+
+    #[test]
+    fn segmented_layout_is_deterministic_and_pad_limits_are_checked() {
+        fn build() -> Vec<Box<[u8]>> {
+            let mut arena =
+                ExclusiveArena::new_segmented(2, 1, 8, 32).expect("segmented arena initializes");
+            {
+                let mut root = arena.init_root_struct(0, 2).expect("root initializes");
+                let mut child = root.init_struct(0, 1, 0).expect("child initializes");
+                child.set_u32(0, 9, 0).expect("child value writes");
+                root.set_text(1, "deterministic").expect("text writes");
+            }
+            arena.into_segments()
+        }
+        assert_eq!(build(), build());
+
+        assert!(matches!(
+            ExclusiveArena::new_segmented(1, MAX_SINGLE_SEGMENT_WORDS + 1, 2, 2),
+            Err(ArenaError::InvalidWordLimit { .. })
+        ));
+
+        let mut segment_limited =
+            ExclusiveArena::new_segmented(2, 1, 2, 16).expect("arena initializes");
+        let mut root = segment_limited
+            .init_root_struct(0, 1)
+            .expect("root initializes");
+        assert_eq!(
+            root.init_struct(0, 1, 0).map(|_| ()),
+            Err(ArenaError::SegmentLimit {
+                requested: 3,
+                limit: 2,
+            })
+        );
+
+        let mut word_limited =
+            ExclusiveArena::new_segmented(2, 1, 4, 4).expect("arena initializes");
+        let mut root = word_limited
+            .init_root_struct(0, 1)
+            .expect("root initializes");
+        assert_eq!(
+            root.init_struct(0, 1, 0).map(|_| ()),
+            Err(ArenaError::AllocationLimit {
+                requested: 5,
+                limit: 4,
+            })
         );
     }
 }

@@ -37,8 +37,9 @@ and struct-list readers with the reference implementation's legal list-upgrade
 semantics. M10 adds borrowed and `Arc`-owned message contexts, typed roots, and
 stable struct/list references with exact shared traversal accounting. The
 Phase 2 begins with M11's exclusive, typed-offset, zero-initializing
-single-segment builder arena and checked base-shape emitters. The remaining
-crates are explicit ownership
+builder arena and checked base-shape emitters. M12 extends it across bounded,
+deterministically sized segments with direct, single-far, and double-far
+pointer emission. The remaining crates are explicit ownership
 boundaries rather than claimed protocol features.
 
 ## Development
