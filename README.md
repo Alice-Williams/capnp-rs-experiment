@@ -42,3 +42,7 @@ Rust package/MSRV interface, while Bazel is the pinned Linux orchestration and
 conformance environment.
 
 This is experimental software and is not yet suitable for production use.
+
+## License
+
+Licensed under the [MIT License](LICENSE).

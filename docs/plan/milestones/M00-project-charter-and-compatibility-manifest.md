@@ -21,7 +21,7 @@ Create the workspace skeleton, charter, support matrix, pinned upstream revision
 - [x] Verify all pinned standard-schema hashes against the upstream commit.
 - [x] Run Cargo tests/Clippy on Rust 1.98.0, Cargo tests on Rust 1.85.0, and
   all Bazel tests in the Linux development container.
-- [ ] Select and add the repository license.
+- [x] Select and add the repository license (MIT).
 - [ ] Observe the new workflow passing on GitHub after this foundation is
   pushed.
 
@@ -35,8 +35,9 @@ Local evidence recorded on 2026-08-30:
 - Bazel 9.2.0 analyzed 30 targets and all 18 tests passed, including schema,
   fixture, script, and recorded-baseline integrity gates.
 
-Completion is blocked only on the owner license choice and observing a hosted
-CI run. Browser-based CI inspection was temporarily unavailable after the
+The owner selected MIT, recorded in `LICENSE`, Cargo package metadata, and the
+compatibility manifest. Completion is blocked only on observing a hosted CI
+run. Browser-based CI inspection was temporarily unavailable after the
 foundation push, so no passing hosted result is claimed here.
 
 ## Scope boundary

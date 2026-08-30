@@ -1,6 +1,9 @@
 manifest_version = 1
 updated = "2026-08-30"
 
+[project]
+license = "MIT"
+
 [upstream.capnproto]
 role = "primary product and protocol oracle"
 commit = "e7c9cd96f1505b5ae486db7821006c2f5dce5b5b"
