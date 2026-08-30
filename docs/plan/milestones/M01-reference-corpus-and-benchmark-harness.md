@@ -15,7 +15,9 @@ Check in independently generated C++ and current-Rust schemas/fixtures, provenan
 - [x] Add reproducible remote acquisition and local corpus-integrity scripts.
 - [x] Make checked-in schema integrity a Bazel and CI test.
 - [ ] Add project-owned schemas covering every pointer, list, evolution, schema,
-  and interface category.
+  and interface category. Core scalar/list/pointer/evolution/generic/interface
+  coverage is present; advanced streaming, constants, and evolution variants
+  remain.
 - [ ] Build the pinned C++ oracle and check in generated wire/compiler fixtures.
 - [ ] Build the pinned current-Rust oracle and add its secondary fixtures.
 - [ ] Add fixture metadata that records command line, producer commit, schema,
