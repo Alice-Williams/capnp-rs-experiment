@@ -12,4 +12,5 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+capnp-io = { path = "../capnp-io" }
 capnp-message = { path = "../capnp-message" }

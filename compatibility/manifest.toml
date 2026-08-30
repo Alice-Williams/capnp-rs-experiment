@@ -48,7 +48,7 @@ rules_shell = "0.8.0"
 
 [support]
 wire = "M10 borrowed and Arc-owned typed readers with stable coordinate references"
-generated_api = "not-started"
+generated_api = "M17 owned compiled-schema metadata and indexed introspection"
 native_compiler = "not-started"
 rpc_level = "none"
 parallel_read = "not-started"
@@ -77,6 +77,18 @@ M13 = "complete"
 M14 = "complete"
 M15 = "complete"
 M16 = "complete"
+M17 = "complete"
+
+[evidence.M17]
+crate = "crates/capnp-schema"
+oracle_schema = "conformance/upstream/capnproto/e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/schema.capnp"
+oracle_fixtures = ["compiler-request-evolution-v1.bin", "compiler-request-evolution-v2.bin", "compiler-request-evolution-v3.bin", "compiler-request-import-fixture.bin", "compiler-request-language-fixture.bin", "compiler-request-streaming-fixture.bin", "compiler-request-wire-fixture.bin"]
+model = ["nodes and node kinds", "fields and enumerants", "interfaces and methods", "recursive types", "generic brands", "all value discriminants", "annotations and targets", "source info", "requested files, imports, and source identifiers"]
+lookups = ["node by ID", "nested declaration by parent and name", "field by name or stable index", "enumerant by name", "method by name", "source info by node ID", "requested file by ID"]
+limits = ["standard frame segments and words", "exact traversal budget", "nesting depth", "aggregate metadata item count", "UTF-8 and union discriminant validation"]
+negative = ["empty and trailing frames", "unknown discriminants", "duplicate node, source-info, and requested-file IDs", "invalid display-name prefixes", "missing group and source references", "source-member count mismatches", "item-limit exhaustion"]
+scope = "pointer-backed list, struct, and any-pointer values retain their validated wire kind; dynamic interpretation is M18"
+validation = "all seven pinned CodeGeneratorRequest fixtures; Rust 1.98 and 1.85 workspace tests; public API docs; Clippy -D warnings; Bazel 18/18"
 
 [evidence.M16]
 crates = ["crates/capnp-wire", "crates/capnp-message", "crates/capnp-io", "crates/capnp-async"]

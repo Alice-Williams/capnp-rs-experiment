@@ -86,6 +86,7 @@ dependencies = [
 name = "capnp-schema"
 version = "0.1.0"
 dependencies = [
+ "capnp-io",
  "capnp-message",
 ]
 
