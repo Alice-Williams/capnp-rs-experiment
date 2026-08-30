@@ -16,12 +16,21 @@ The runner refuses to overwrite a result directory. `BENCH_WARMUPS` and
 per-iteration means, hardware/container context, exact producer commits, and
 toolchain versions.
 
+The common two-party RPC baseline is added to an existing run directory with:
+
+```console
+bash benchmarks/run-rpc-oracle-baselines.sh benchmarks/results/<run-name>
+```
+
+It uses the same `Ping.ping(UInt64) -> UInt64` schema and sequential call
+pattern in both implementations. Each runs a single-thread event loop over an
+in-memory bidirectional byte stream, avoiding network variability while still
+exercising framing, RPC tables, dispatch, and response delivery.
+
 The pinned C++ benchmark sources need a three-line compatibility adaptation for
 the pinned commit's newer KJ output-stream API. The build applies the reviewed
 patch from `benchmarks/patches/` to an isolated copy; neither oracle checkout is
 modified.
 
 Results are baselines, not universal performance claims. Compare revisions on
-the same hardware and container setup. The first corpus deliberately does not
-claim an RPC baseline yet; that needs a common transport/workload harness and
-remains an explicit M01 exit gap.
+the same hardware and container setup.

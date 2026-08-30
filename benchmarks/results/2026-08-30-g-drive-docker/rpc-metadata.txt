@@ -1,0 +1,13 @@
+format_version=1
+generated_utc=2026-08-30T15:32:52Z
+schema=benchmarks/rpc/ping.capnp
+schema_sha256=bd64cf8c596d3b2644af04e3b9417349a339928268134c8ba1d4c62f0512e9ba
+pattern=one bootstrap followed by sequential UInt64 request/reply calls
+execution=single-thread event loop with in-memory bidirectional byte stream
+cpp_transport=KJ newTwoWayPipe
+rust_transport=Tokio duplex 1 MiB buffer
+cpp_oracle_commit=e7c9cd96f1505b5ae486db7821006c2f5dce5b5b
+rust_oracle_commit=2228b71e55cee819c30450bb9bfd9c1f6a722429
+warmups=1
+recorded_runs=5
+iterations=10000

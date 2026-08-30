@@ -30,12 +30,17 @@ Check in independently generated C++ and current-Rust schemas/fixtures, provenan
   metadata output for build/read/unpacked/packed paths.
 - [x] Record primary C++ and secondary current-Rust build/read/unpacked/packed
   baseline results with raw samples and environment metadata.
-- [ ] Add and record a common two-party RPC baseline for both oracles.
+- [x] Add and record a common sequential two-party RPC baseline for both
+  oracles over in-memory bidirectional transports.
 - [x] Update compatibility evidence and run full Cargo/Bazel validation.
 
 ## Required exit evidence
 
 Every pointer, list, and schema category has an oracle fixture; provenance hashes verify; C++ baselines are primary and current Rust is secondary.
+
+All M01-specific exit evidence is present. The milestone remains marked
+in-progress only because its M00 dependency still needs the owner's license
+choice and the first hosted CI run.
 
 ## Scope boundary
 

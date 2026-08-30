@@ -11,3 +11,9 @@ sh_test(
     srcs = ["run-oracle-baselines.sh"],
     args = ["--syntax-check-only"],
 )
+
+sh_test(
+    name = "rpc_runner_syntax_test",
+    srcs = ["run-rpc-oracle-baselines.sh"],
+    args = ["--syntax-check-only"],
+)

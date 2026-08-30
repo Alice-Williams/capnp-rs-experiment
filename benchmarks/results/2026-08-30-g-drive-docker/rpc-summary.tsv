@@ -1,0 +1,3 @@
+#implementation	iterations	runs	mean_ns_per_call
+cpp	10000	5	5314.70
+rust	10000	5	11197.47

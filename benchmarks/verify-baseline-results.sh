@@ -12,6 +12,11 @@ grep -Fx 'recorded_runs=5' "$result_dir/metadata.txt"
 
 test "$(wc -l < "$result_dir/results.tsv")" -eq 61
 test "$(wc -l < "$result_dir/summary.tsv")" -eq 11
+test "$(wc -l < "$result_dir/rpc-results.tsv")" -eq 13
+test "$(wc -l < "$result_dir/rpc-summary.tsv")" -eq 3
+grep -Fx 'schema_sha256=bd64cf8c596d3b2644af04e3b9417349a339928268134c8ba1d4c62f0512e9ba' \
+    "$result_dir/rpc-metadata.txt"
+grep -Fx 'iterations=10000' "$result_dir/rpc-metadata.txt"
 
 awk -F '\t' '
     NR == 1 { next }
@@ -22,4 +27,6 @@ awk -F '\t' '
 
 for implementation in cpp rust; do
     test "$(grep -c "^${implementation}"$'\t' "$result_dir/summary.tsv")" -eq 5
+    test "$(grep -c "^${implementation}"$'\t' "$result_dir/rpc-summary.tsv")" -eq 1
+    test "$(grep -c "^${implementation}"$'\t10000\t' "$result_dir/rpc-results.tsv")" -eq 6
 done
