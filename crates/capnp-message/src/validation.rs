@@ -64,7 +64,8 @@ pub enum ValidationError {
     ReservedPointer {
         lower32: u32,
     },
-    FarPointerRequiresLandingPadValidation,
+    InvalidFarLandingPad,
+    InvalidDoubleFarTag,
     InvalidInlineCompositeTag,
     InlineCompositeOverrun {
         required_words: u64,
@@ -118,8 +119,7 @@ impl<'a> MessageSegments<'a> {
             .and_then(|index| self.segments.get(index).copied())
     }
 
-    /// Validates a non-far pointer and returns coordinates, never cached native pointers.
-    /// Far landing pads are added in the next M05 slice.
+    /// Validates and follows a pointer, returning coordinates rather than native pointers.
     pub fn validate_pointer(
         &self,
         location: WireLocation,
@@ -131,7 +131,7 @@ impl<'a> MessageSegments<'a> {
         match pointer.kind() {
             PointerKind::Struct => self.validate_struct(location, pointer),
             PointerKind::List => self.validate_list(location, pointer),
-            PointerKind::Far => Err(ValidationError::FarPointerRequiresLandingPadValidation),
+            PointerKind::Far => self.validate_far(pointer),
             PointerKind::Other if pointer.is_capability() => {
                 Ok(ResolvedPointer::Capability(CapabilityRef {
                     index: pointer
@@ -154,6 +154,17 @@ impl<'a> MessageSegments<'a> {
             .struct_fields()
             .expect("struct discriminator was checked");
         let content = positional_target(pointer_location, fields.offset)?;
+        self.validate_struct_at(content, pointer)
+    }
+
+    fn validate_struct_at(
+        &self,
+        content: WireLocation,
+        pointer: WirePointer,
+    ) -> Result<ResolvedPointer, ValidationError> {
+        let fields = pointer
+            .struct_fields()
+            .expect("struct discriminator was checked");
         let words = u64::from(fields.data_words) + u64::from(fields.pointer_count);
         self.check_range(content, words)?;
         Ok(ResolvedPointer::Struct(StructRef {
@@ -172,6 +183,17 @@ impl<'a> MessageSegments<'a> {
             .list_fields()
             .expect("list discriminator was checked");
         let target = positional_target(pointer_location, fields.offset)?;
+        self.validate_list_at(target, pointer)
+    }
+
+    fn validate_list_at(
+        &self,
+        target: WireLocation,
+        pointer: WirePointer,
+    ) -> Result<ResolvedPointer, ValidationError> {
+        let fields = pointer
+            .list_fields()
+            .expect("list discriminator was checked");
         if fields.element_size == ElementSize::InlineComposite {
             let declared_words = fields.count;
             self.check_range(target, u64::from(declared_words) + 1)?;
@@ -215,6 +237,66 @@ impl<'a> MessageSegments<'a> {
                     .map_err(|_| ValidationError::TargetWordOverflow)?,
                 inline_struct_size: None,
             }))
+        }
+    }
+
+    fn validate_far(&self, pointer: WirePointer) -> Result<ResolvedPointer, ValidationError> {
+        let fields = pointer.far_fields().expect("far discriminator was checked");
+        let pad = WireLocation {
+            segment_id: fields.segment_id,
+            word_offset: fields.landing_pad_word,
+        };
+        self.check_range(pad, if fields.double_far { 2 } else { 1 })?;
+        let first = self.read_pointer(pad)?;
+        if !fields.double_far {
+            if first.kind() == PointerKind::Far {
+                return Err(ValidationError::InvalidFarLandingPad);
+            }
+            return self.validate_non_far(pad, first);
+        }
+
+        if first.kind() != PointerKind::Far {
+            return Err(ValidationError::InvalidFarLandingPad);
+        }
+        let first_far = first.far_fields().expect("far discriminator was checked");
+        let object = WireLocation {
+            segment_id: first_far.segment_id,
+            word_offset: first_far.landing_pad_word,
+        };
+        let tag_location = WireLocation {
+            segment_id: pad.segment_id,
+            word_offset: pad
+                .word_offset
+                .checked_add(1)
+                .ok_or(ValidationError::TargetWordOverflow)?,
+        };
+        let tag = self.read_pointer(tag_location)?;
+        match tag.kind() {
+            PointerKind::Struct => self.validate_struct_at(object, tag),
+            PointerKind::List => self.validate_list_at(object, tag),
+            PointerKind::Far | PointerKind::Other => Err(ValidationError::InvalidDoubleFarTag),
+        }
+    }
+
+    fn validate_non_far(
+        &self,
+        location: WireLocation,
+        pointer: WirePointer,
+    ) -> Result<ResolvedPointer, ValidationError> {
+        match pointer.kind() {
+            PointerKind::Struct => self.validate_struct(location, pointer),
+            PointerKind::List => self.validate_list(location, pointer),
+            PointerKind::Other if pointer.is_capability() => {
+                Ok(ResolvedPointer::Capability(CapabilityRef {
+                    index: pointer
+                        .capability_index()
+                        .expect("capability discriminator was checked"),
+                }))
+            }
+            PointerKind::Other => Err(ValidationError::ReservedPointer {
+                lower32: pointer.lower32(),
+            }),
+            PointerKind::Far => Err(ValidationError::InvalidFarLandingPad),
         }
     }
 
@@ -385,6 +467,97 @@ mod tests {
             }),
             Err(ValidationError::InlineCompositeOverrun { .. })
         ));
+    }
+
+    #[test]
+    fn single_far_pointer_resolves_relative_to_its_landing_pad() {
+        let segment0 = with_pointer(
+            WirePointer::new_far(false, 0, 1).expect("outer far pointer fits"),
+            0,
+        );
+        let segment1 = with_pointer(
+            WirePointer::new_struct(0, 1, 0).expect("landing pointer fits"),
+            1,
+        );
+        let segments = MessageSegments::new(&[&segment0, &segment1]).expect("segments are aligned");
+        assert_eq!(
+            segments.validate_pointer(WireLocation {
+                segment_id: 0,
+                word_offset: 0,
+            }),
+            Ok(ResolvedPointer::Struct(StructRef {
+                content: WireLocation {
+                    segment_id: 1,
+                    word_offset: 1,
+                },
+                data_words: 1,
+                pointer_count: 0,
+            }))
+        );
+    }
+
+    #[test]
+    fn double_far_pointer_uses_adjacent_tag_and_explicit_target() {
+        let segment0 = with_pointer(
+            WirePointer::new_far(true, 0, 1).expect("outer far pointer fits"),
+            0,
+        );
+        let mut segment1 = vec![0u8; 16];
+        WirePointer::new_far(false, 0, 2)
+            .expect("inner far pointer fits")
+            .write_to(&mut segment1, 0)
+            .expect("inner far word fits");
+        WirePointer::new_struct(0, 1, 0)
+            .expect("tag fits")
+            .write_to(&mut segment1, 8)
+            .expect("tag word fits");
+        let segment2 = [0u8; 8];
+        let segments =
+            MessageSegments::new(&[&segment0, &segment1, &segment2]).expect("segments are aligned");
+        assert_eq!(
+            segments.validate_pointer(WireLocation {
+                segment_id: 0,
+                word_offset: 0,
+            }),
+            Ok(ResolvedPointer::Struct(StructRef {
+                content: WireLocation {
+                    segment_id: 2,
+                    word_offset: 0,
+                },
+                data_words: 1,
+                pointer_count: 0,
+            }))
+        );
+    }
+
+    #[test]
+    fn malformed_far_pads_fail_without_following_unchecked_coordinates() {
+        let unknown = with_pointer(
+            WirePointer::new_far(false, 0, 7).expect("far pointer fits"),
+            0,
+        );
+        let segments = MessageSegments::new(&[&unknown]).expect("segment is aligned");
+        assert_eq!(
+            segments.validate_pointer(WireLocation {
+                segment_id: 0,
+                word_offset: 0,
+            }),
+            Err(ValidationError::UnknownSegment { segment_id: 7 })
+        );
+
+        let outer = with_pointer(
+            WirePointer::new_far(true, 0, 1).expect("far pointer fits"),
+            0,
+        );
+        let bad_pad = [0u8; 16];
+        let segments = MessageSegments::new(&[&outer, &bad_pad]).expect("segments are aligned");
+        assert_eq!(
+            segments.validate_pointer(WireLocation {
+                segment_id: 0,
+                word_offset: 0,
+            }),
+            Err(ValidationError::InvalidFarLandingPad)
+        );
     }
 
     #[test]
