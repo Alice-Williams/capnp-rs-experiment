@@ -1,5 +1,12 @@
 #![doc = "Safe Cap'n Proto messages, readers, builders, and traversal budgets."]
 
+mod validation;
+
+pub use validation::{
+    CapabilityRef, ListRef, MessageSegments, ResolvedPointer, StructRef, ValidationError,
+    WireLocation,
+};
+
 #[cfg(test)]
 #[allow(dead_code)]
 mod m02_design_prototype {

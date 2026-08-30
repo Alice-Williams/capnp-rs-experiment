@@ -1,6 +1,6 @@
 # M05 — Struct, list, far, and capability pointer validation
 
-- Status: planned
+- Status: in-progress
 - Phase: 1
 - Depends on: M03, M04
 
@@ -23,4 +23,3 @@ Null, struct, all list sizes, inline composite, far/double-far, capability, rese
 ## Scope boundary
 
 Later milestone behavior may be anticipated in types only where required to avoid a known compatibility dead end. It must not be implemented or claimed here.
-

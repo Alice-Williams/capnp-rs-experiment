@@ -2,7 +2,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 rust_library(
     name = "capnp_message",
-    srcs = ["src/lib.rs"],
+    srcs = glob(["src/**/*.rs"]),
     crate_name = "capnp_message",
     edition = "2024",
     deps = [
@@ -15,4 +15,3 @@ rust_test(
     name = "capnp_message_test",
     crate = ":capnp_message",
 )
-
