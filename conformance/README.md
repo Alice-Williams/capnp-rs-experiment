@@ -19,7 +19,9 @@ code must not generate its own expected values.
 
 Generated fixture directories are committed deliberately. Each generator must
 write to a temporary location, verify its producer revision, and install output
-atomically so partial files cannot look authoritative.
+atomically so partial files cannot look authoritative. Repository text uses LF
+on every host so schema and textual-input hashes are reproducible inside the
+Linux development environment.
 
 The pinned C++ oracle is built into the persistent container volume with:
 

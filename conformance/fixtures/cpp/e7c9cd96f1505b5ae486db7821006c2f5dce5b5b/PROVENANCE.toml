@@ -1,0 +1,96 @@
+producer = "capnproto-c++"
+repository = "https://github.com/capnproto/capnproto.git"
+commit = "e7c9cd96f1505b5ae486db7821006c2f5dce5b5b"
+reported_version = "Cap'n Proto version 2.0-dev"
+generator = "tools/generate-cpp-fixtures.sh"
+wire_schema = "conformance/schemas/wire-fixture.capnp"
+wire_schema_sha256 = "425508a1fa43e56660a78f30605e1f083c7d9f49579b7b3979204ab30d2972f6"
+wire_input = "conformance/fixtures/source/wire-fixture.txt"
+wire_input_sha256 = "216d5390813d8bf13838460cd81161bbb72b91c16c8bf85458fb835537c6f4fc"
+language_schema = "conformance/schemas/language-fixture.capnp"
+language_schema_sha256 = "9866cc6d7246b8520f48e55ca542a42b020b3cd371965569945964c098d64816"
+language_input = "conformance/fixtures/source/language-fixture.txt"
+language_input_sha256 = "e98ea1269a0b0204d57b24f2b94956132c3aa0567c477a3ef802c43aace0fd15"
+evolution_schema = "conformance/schemas/evolution-v1.capnp"
+evolution_schema_sha256 = "52e2aef150349e65e3cb53bc78a73f437656b5322bffcdb3cc5f223ec2c5fa3b"
+evolution_input = "conformance/fixtures/source/evolution-v1.txt"
+evolution_input_sha256 = "f028bc19fcd6e6268a8593c747a6229ab2bbab94b660e74fc5425468f7eca20d"
+
+commands = [
+  "capnp encode wire-fixture.capnp WireFixture",
+  "capnp encode --packed wire-fixture.capnp WireFixture",
+  "capnp encode --flat wire-fixture.capnp WireFixture",
+  "capnp encode --segment-size=1 wire-fixture.capnp WireFixture",
+  "capnp encode language-fixture.capnp LanguageFixture",
+  "capnp encode evolution-v1.capnp Record",
+  "capnp compile --src-prefix=conformance/schemas -Iconformance/schemas -o- <schema>",
+]
+
+[[compiler_request]]
+schema = "conformance/schemas/evolution-v1.capnp"
+schema_sha256 = "52e2aef150349e65e3cb53bc78a73f437656b5322bffcdb3cc5f223ec2c5fa3b"
+output = "compiler-request-evolution-v1.bin"
+
+[[compiler_request]]
+schema = "conformance/schemas/evolution-v2.capnp"
+schema_sha256 = "491d63466427cff4289234eae0dae073c3f4c1efdc7a476d77246aef22a80c12"
+output = "compiler-request-evolution-v2.bin"
+
+[[compiler_request]]
+schema = "conformance/schemas/import-fixture.capnp"
+schema_sha256 = "77b63f2c548c62f7ff30b971561b6659fe9a3aba0c115f0241c26a671a54116b"
+output = "compiler-request-import-fixture.bin"
+
+[[compiler_request]]
+schema = "conformance/schemas/language-fixture.capnp"
+schema_sha256 = "9866cc6d7246b8520f48e55ca542a42b020b3cd371965569945964c098d64816"
+output = "compiler-request-language-fixture.bin"
+
+[[compiler_request]]
+schema = "conformance/schemas/wire-fixture.capnp"
+schema_sha256 = "425508a1fa43e56660a78f30605e1f083c7d9f49579b7b3979204ab30d2972f6"
+output = "compiler-request-wire-fixture.bin"
+
+[[output]]
+path = "compiler-request-evolution-v1.bin"
+sha256 = "c9e58a0f937bee32dab9a7d35b09f8beeedbbbde215e3af51df98dc067f57602"
+
+[[output]]
+path = "compiler-request-evolution-v2.bin"
+sha256 = "2fcecad58cec7eaf66f1da6fc1d4d718fdcf31f9bd66951523eda7399ffad1ee"
+
+[[output]]
+path = "compiler-request-import-fixture.bin"
+sha256 = "8f29731863ef593506474a7592b6be1331f4be35dabd21ed57c4f3b4cc7f7ac8"
+
+[[output]]
+path = "compiler-request-language-fixture.bin"
+sha256 = "4aa8387992dfe83d6d8d12e00141235c066959f030885d15a8e89ce423c0c2e3"
+
+[[output]]
+path = "compiler-request-wire-fixture.bin"
+sha256 = "0c1444d394375361ec9ec6e933503d68e19543360f9faca78d1a3bb8ba212881"
+
+[[output]]
+path = "evolution-v1-unpacked.bin"
+sha256 = "92c3692013def957bca1f54299b6d0f56089d3c310588707384f3c2a1ffa71c7"
+
+[[output]]
+path = "language-unpacked.bin"
+sha256 = "072f28d7fb56dd5fff07d93ca24eaa99d2ddce2e04f1435445ecbf8073a45e77"
+
+[[output]]
+path = "wire-flat.bin"
+sha256 = "69485a806d971d3f77193ee5995647aa5dbac74d50b778d22cdadf00cedeecaa"
+
+[[output]]
+path = "wire-multisegment.bin"
+sha256 = "51b81eca45698b2872cf33e9b9bea10fea29b3738768471ab74aa3e715352dc7"
+
+[[output]]
+path = "wire-packed.bin"
+sha256 = "23edefa1631c531c873b778048d06b5345da6447ea8f16b75449f6aa2646844a"
+
+[[output]]
+path = "wire-unpacked.bin"
+sha256 = "e0d681cc82c859915c9a8cd87dfc408b686550f9334ab13cd5996dfe7517c3c8"

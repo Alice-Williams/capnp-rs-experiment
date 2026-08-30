@@ -1,0 +1,6 @@
+(
+  boxedText = (value = "generic text"),
+  boxedData = (value = 0x"000102ff"),
+  nestedGeneric = (first = "nested", second = 0x"cafe"),
+  state = future
+)
