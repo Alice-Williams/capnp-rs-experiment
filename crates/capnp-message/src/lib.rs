@@ -3,6 +3,7 @@
 mod blob;
 mod budget;
 mod builder;
+mod canonical;
 mod list;
 #[cfg(target_has_atomic = "64")]
 mod owned;
@@ -28,6 +29,7 @@ pub use builder::{
     OrphanKind, PointerListBuilder, PrimitiveListValue, StructBuilder, StructListBuilder,
     StructOffset, StructOrphan, WordOffset,
 };
+pub use canonical::{CanonicalError, canonicalize, is_canonical};
 pub use list::{
     EnumListIter, EnumListReader, ListReadError, ListReader, PointerListIter, PointerListReader,
     PrimitiveListElement, PrimitiveListIter, PrimitiveListReader, StructElementReader,

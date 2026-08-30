@@ -56,7 +56,7 @@ parallel_build = "not-started"
 std = "workspace-skeleton"
 no_std_alloc = "planned"
 no_allocation = "planned"
-construction = "M13 bounded graph copy/clear and typed same-arena orphan movement"
+construction = "M14 bounded schema-independent canonicalization and exact canonical checking"
 
 [milestones]
 M00 = "complete"
@@ -73,6 +73,15 @@ M10 = "complete"
 M11 = "complete"
 M12 = "complete"
 M13 = "complete"
+M14 = "complete"
+
+[evidence.M14]
+crate = "crates/capnp-message"
+oracle_fixture = "conformance/fixtures/cpp/e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/builder-canonical.bin"
+oracle_check = "tools/verify-m14-canonical.sh: native output is byte-identical to pinned C++ canonical output; C++ canonicalization is idempotent"
+canonical_rules = ["exactly one segment", "dense pointer preorder without far pointers", "minimal struct data and pointer sections", "exact common inline-composite element width", "zero primitive and bit-list padding", "no capability pointers", "no unconsumed trailing words"]
+properties = ["semantic values preserved across multi-segment input", "normalization is idempotent", "aliases duplicate into preorder", "traversal, nesting, and output allocation remain independently bounded"]
+validation = "Rust 1.98 and 1.85 tests; public API docs; pinned C++ byte comparison and canonical acceptance; Clippy -D warnings; Bazel 18/18"
 
 [evidence.M13]
 crate = "crates/capnp-message"

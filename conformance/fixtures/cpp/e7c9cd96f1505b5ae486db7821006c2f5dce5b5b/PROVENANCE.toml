@@ -21,6 +21,7 @@ evolution_v2_input = "conformance/fixtures/source/evolution-v2.txt"
 evolution_v2_input_sha256 = "ee816dbbff2f9269ba9cba426f9d4660971e0879a945eaa4fe3d96a81b1911f6"
 
 commands = [
+  "capnp convert binary:canonical < m12-builder-fixture.bin",
   "capnp encode wire-fixture.capnp WireFixture",
   "capnp encode --packed wire-fixture.capnp WireFixture",
   "capnp encode --flat wire-fixture.capnp WireFixture",
@@ -31,6 +32,10 @@ commands = [
   "capnp encode evolution-v2.capnp Record",
   "capnp compile --src-prefix=conformance/schemas -Iconformance/schemas -o- <schema>",
 ]
+
+[[output]]
+path = "builder-canonical.bin"
+sha256 = "1627078e7055b83c2292ce900bc6f31a0cbc14b6d87325bde34e92b4e3cf474b"
 
 [[compiler_request]]
 schema = "conformance/schemas/evolution-v1.capnp"

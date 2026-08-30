@@ -11,8 +11,8 @@
 //! M13 adds iterative schema-independent copy/clear and typed same-arena
 //! orphans. Copy failures roll allocations back, bounded clear failures are
 //! non-mutating, and dropped orphans recursively zero abandoned storage.
-//! Canonicalization, generated setters, and parallel construction are later
-//! milestones.
+//! Canonicalization reuses this allocator internally to produce a single dense
+//! segment. Generated setters and parallel construction are later milestones.
 
 use core::fmt;
 use core::marker::PhantomData;
@@ -156,6 +156,7 @@ pub enum GraphError {
     WrongArena,
     ExpectedStruct,
     ExpectedList,
+    CapabilityNotCanonicalizable { index: u32 },
 }
 
 impl fmt::Display for GraphError {
@@ -172,7 +173,8 @@ impl std::error::Error for GraphError {
             Self::DestinationNotNull { .. }
             | Self::WrongArena
             | Self::ExpectedStruct
-            | Self::ExpectedList => None,
+            | Self::ExpectedList
+            | Self::CapabilityNotCanonicalizable { .. } => None,
         }
     }
 }
@@ -663,6 +665,29 @@ impl ExclusiveArena {
         Ok(())
     }
 
+    pub(crate) fn canonicalize_from<B: TraversalBudget>(
+        source: &MessageSegments<'_>,
+        budget: &B,
+        nesting: NestingLimit,
+        max_output_words: u32,
+    ) -> Result<Box<[u8]>, GraphError> {
+        let mut arena = Self::new(1, max_output_words)?;
+        arena.canonical_copy_tasks(
+            vec![CopyTask {
+                destination: root_offset(),
+                source: WireLocation {
+                    segment_id: 0,
+                    word_offset: 0,
+                },
+                nesting,
+            }],
+            source,
+            budget,
+        )?;
+        arena.root_initialized = true;
+        arena.into_segment().map_err(GraphError::from)
+    }
+
     /// Clears the complete root graph only after a bounded traversal succeeds.
     pub fn clear_root<B: TraversalBudget>(
         &mut self,
@@ -754,6 +779,223 @@ impl ExclusiveArena {
                 }
             }
         }
+        Ok(())
+    }
+
+    fn canonical_copy_tasks<B: TraversalBudget>(
+        &mut self,
+        mut tasks: Vec<CopyTask>,
+        source: &MessageSegments<'_>,
+        budget: &B,
+    ) -> Result<(), GraphError> {
+        while let Some(task) = tasks.pop() {
+            let bounded = source.validate_pointer_with_limits(task.source, budget, task.nesting)?;
+            match bounded.pointer {
+                ResolvedPointer::Null => self.write_pointer(task.destination, WirePointer::NULL)?,
+                ResolvedPointer::Capability(capability) => {
+                    return Err(GraphError::CapabilityNotCanonicalizable {
+                        index: capability.index,
+                    });
+                }
+                ResolvedPointer::Struct(reference) => {
+                    let mut data_words = reference.data_words;
+                    while data_words != 0
+                        && source_word_is_zero(
+                            source,
+                            add_wire_words(reference.content, u64::from(data_words - 1))?,
+                        )?
+                    {
+                        data_words -= 1;
+                    }
+                    let mut pointer_count = reference.pointer_count;
+                    while pointer_count != 0
+                        && read_message_pointer(
+                            source,
+                            add_wire_words(
+                                reference.content,
+                                u64::from(reference.data_words) + u64::from(pointer_count - 1),
+                            )?,
+                        )?
+                        .is_null()
+                    {
+                        pointer_count -= 1;
+                    }
+
+                    let target = self.allocate_struct(data_words, pointer_count)?;
+                    self.emit_struct(task.destination, target)?;
+                    self.copy_words_from(
+                        target.content,
+                        source,
+                        reference.content,
+                        u64::from(data_words),
+                    )?;
+                    for index in (0..pointer_count).rev() {
+                        tasks.push(CopyTask {
+                            destination: add_words(
+                                target.content,
+                                u64::from(data_words) + u64::from(index),
+                            )?,
+                            source: add_wire_words(
+                                reference.content,
+                                u64::from(reference.data_words) + u64::from(index),
+                            )?,
+                            nesting: bounded.child_nesting,
+                        });
+                    }
+                }
+                ResolvedPointer::List(reference) => self.canonical_copy_list(
+                    task.destination,
+                    reference,
+                    bounded.child_nesting,
+                    source,
+                    &mut tasks,
+                )?,
+            }
+        }
+        Ok(())
+    }
+
+    fn canonical_copy_list(
+        &mut self,
+        destination: WordOffset,
+        reference: ListRef,
+        nesting: NestingLimit,
+        source: &MessageSegments<'_>,
+        tasks: &mut Vec<CopyTask>,
+    ) -> Result<(), GraphError> {
+        if reference.element_size != ElementSize::InlineComposite {
+            let target =
+                self.allocate_data_list(reference.element_size, reference.element_count)?;
+            self.emit_list(destination, target)?;
+            if reference.element_size == ElementSize::Pointer {
+                for index in (0..reference.element_count).rev() {
+                    tasks.push(CopyTask {
+                        destination: add_words(target.content, u64::from(index))?,
+                        source: add_wire_words(reference.content, u64::from(index))?,
+                        nesting,
+                    });
+                }
+            } else {
+                self.copy_words_from(
+                    target.content,
+                    source,
+                    reference.content,
+                    u64::from(reference.content_words),
+                )?;
+                self.clear_primitive_padding(
+                    target.content,
+                    reference.element_size,
+                    reference.element_count,
+                )?;
+            }
+            return Ok(());
+        }
+
+        let (source_data_words, source_pointer_count) = reference
+            .inline_struct_size
+            .ok_or(ArenaError::AllocationOverflow)?;
+        let source_step = u64::from(source_data_words) + u64::from(source_pointer_count);
+        let mut data_words = source_data_words;
+        while data_words != 0 {
+            let mut any_nonzero = false;
+            for element in 0..reference.element_count {
+                let offset = u64::from(element)
+                    .checked_mul(source_step)
+                    .and_then(|value| value.checked_add(u64::from(data_words - 1)))
+                    .ok_or(ArenaError::AllocationOverflow)?;
+                any_nonzero |=
+                    !source_word_is_zero(source, add_wire_words(reference.content, offset)?)?;
+            }
+            if any_nonzero {
+                break;
+            }
+            data_words -= 1;
+        }
+        let mut pointer_count = source_pointer_count;
+        while pointer_count != 0 {
+            let mut any_nonnull = false;
+            for element in 0..reference.element_count {
+                let offset = u64::from(element)
+                    .checked_mul(source_step)
+                    .and_then(|value| value.checked_add(u64::from(source_data_words)))
+                    .and_then(|value| value.checked_add(u64::from(pointer_count - 1)))
+                    .ok_or(ArenaError::AllocationOverflow)?;
+                any_nonnull |=
+                    !read_message_pointer(source, add_wire_words(reference.content, offset)?)?
+                        .is_null();
+            }
+            if any_nonnull {
+                break;
+            }
+            pointer_count -= 1;
+        }
+
+        let target =
+            self.allocate_struct_list(reference.element_count, data_words, pointer_count)?;
+        self.emit_list(destination, target)?;
+        let target_step = u64::from(data_words) + u64::from(pointer_count);
+        for element in 0..reference.element_count {
+            let source_element = u64::from(element)
+                .checked_mul(source_step)
+                .ok_or(ArenaError::AllocationOverflow)?;
+            let target_element = u64::from(element)
+                .checked_mul(target_step)
+                .ok_or(ArenaError::AllocationOverflow)?;
+            self.copy_words_from(
+                add_words(target.content, target_element)?,
+                source,
+                add_wire_words(reference.content, source_element)?,
+                u64::from(data_words),
+            )?;
+        }
+        let child_nesting = nesting.descend().map_err(TraversalError::from)?;
+        for element in (0..reference.element_count).rev() {
+            let source_element = u64::from(element)
+                .checked_mul(source_step)
+                .ok_or(ArenaError::AllocationOverflow)?;
+            let target_element = u64::from(element)
+                .checked_mul(target_step)
+                .ok_or(ArenaError::AllocationOverflow)?;
+            for pointer in (0..pointer_count).rev() {
+                tasks.push(CopyTask {
+                    destination: add_words(
+                        target.content,
+                        target_element + u64::from(data_words) + u64::from(pointer),
+                    )?,
+                    source: add_wire_words(
+                        reference.content,
+                        source_element + u64::from(source_data_words) + u64::from(pointer),
+                    )?,
+                    nesting: child_nesting,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn clear_primitive_padding(
+        &mut self,
+        content: WordOffset,
+        element_size: ElementSize,
+        element_count: u32,
+    ) -> Result<(), ArenaError> {
+        let bit_count = u64::from(element_count)
+            .checked_mul(element_bits(element_size))
+            .ok_or(ArenaError::AllocationOverflow)?;
+        let content_words = u64::from(list_words(element_size, element_count)?);
+        let total_bytes = usize::try_from(content_words)
+            .ok()
+            .and_then(|words| words.checked_mul(8))
+            .ok_or(ArenaError::AllocationOverflow)?;
+        let used_bytes =
+            usize::try_from(bit_count.div_ceil(8)).map_err(|_| ArenaError::AllocationOverflow)?;
+        let start = byte_offset(content)?;
+        let segment = self.segment_mut(content.segment_id)?;
+        if bit_count % 8 != 0 {
+            let keep = (1_u8 << (bit_count % 8)) - 1;
+            segment[start + used_bytes - 1] &= keep;
+        }
+        segment[start + used_bytes..start + total_bytes].fill(0);
         Ok(())
     }
 
@@ -2027,6 +2269,28 @@ fn read_message_pointer(
         })?;
     WirePointer::read_from(segment, wire_byte_offset(location)?)
         .map_err(|_| ValidationError::PointerOutOfBounds { location }.into())
+}
+
+fn source_word_is_zero(
+    message: &MessageSegments<'_>,
+    location: WireLocation,
+) -> Result<bool, GraphError> {
+    let segment = message
+        .segment(location.segment_id)
+        .ok_or(ValidationError::UnknownSegment {
+            segment_id: location.segment_id,
+        })?;
+    let start = wire_byte_offset(location)?;
+    let end = start.checked_add(8).ok_or(ArenaError::AllocationOverflow)?;
+    let bytes = segment
+        .get(start..end)
+        .ok_or(ValidationError::ObjectOutOfBounds {
+            location,
+            words: 1,
+            segment_words: u64::try_from(segment.len() / 8)
+                .map_err(|_| ArenaError::AllocationOverflow)?,
+        })?;
+    Ok(bytes.iter().all(|byte| *byte == 0))
 }
 
 const fn root_offset() -> WordOffset {
