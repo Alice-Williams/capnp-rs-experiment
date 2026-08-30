@@ -31,3 +31,9 @@ bash tools/build-cpp-oracle.sh
 
 Its source, build, and install trees live under `/opt/capnp-oracles` and are not
 part of the Git repository or Docker image.
+
+The secondary current-Rust code-generation oracle is installed similarly:
+
+```console
+bash tools/build-rust-oracle.sh
+```
