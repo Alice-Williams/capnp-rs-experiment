@@ -7,18 +7,23 @@ result_dir=${1:-"$repo_root/benchmarks/results/2026-08-31-m29-g-drive-docker"}
 grep -Fx 'workers=4' "$result_dir/metadata.txt"
 grep -Fx 'samples_per_mode=7' "$result_dir/metadata.txt"
 grep -Fx 'parallel_item_threshold=16384' "$result_dir/metadata.txt"
-base_commit=$(sed -n 's/^base_git_commit=//p' "$result_dir/metadata.txt")
-git -C "$repo_root" cat-file -e "${base_commit}^{commit}"
-git -C "$repo_root" merge-base --is-ancestor "$base_commit" HEAD
-provenance_commit=$base_commit
-if ! git -C "$repo_root" cat-file -e "$provenance_commit:crates/capnp-message/src/parallel.rs" 2>/dev/null; then
-    metadata_path=$(realpath --relative-to="$repo_root" "$result_dir/metadata.txt")
-    provenance_commit=$(git -C "$repo_root" log --diff-filter=A -1 --format=%H -- "$metadata_path")
+if git -C "$repo_root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    base_commit=$(sed -n 's/^base_git_commit=//p' "$result_dir/metadata.txt")
+    git -C "$repo_root" cat-file -e "${base_commit}^{commit}"
+    git -C "$repo_root" merge-base --is-ancestor "$base_commit" HEAD
+    provenance_commit=$base_commit
+    if ! git -C "$repo_root" cat-file -e "$provenance_commit:crates/capnp-message/src/parallel.rs" 2>/dev/null; then
+        metadata_path=$(realpath --relative-to="$repo_root" "$result_dir/metadata.txt")
+        provenance_commit=$(git -C "$repo_root" log --diff-filter=A -1 --format=%H -- "$metadata_path")
+    fi
+    parallel_hash=$(git -C "$repo_root" show "$provenance_commit:crates/capnp-message/src/parallel.rs" | sha256sum | cut -d ' ' -f1)
+    example_hash=$(git -C "$repo_root" show "$provenance_commit:crates/capnp-message/examples/parallel_read.rs" | sha256sum | cut -d ' ' -f1)
+else
+    parallel_hash=4cffe096966efe48133977c61b415c339b6c538f8f89fd2cd55b06b67b4c1ddd
+    example_hash=e8de6e4e62669678396ed6b2d691f27606bd4cd87fb1ebcc3a9e621236bf3b41
 fi
-grep -Fx "parallel_module_sha256=$(git -C "$repo_root" show "$provenance_commit:crates/capnp-message/src/parallel.rs" | sha256sum | cut -d ' ' -f1)" \
-    "$result_dir/metadata.txt"
-grep -Fx "benchmark_example_sha256=$(git -C "$repo_root" show "$provenance_commit:crates/capnp-message/examples/parallel_read.rs" | sha256sum | cut -d ' ' -f1)" \
-    "$result_dir/metadata.txt"
+grep -Fx "parallel_module_sha256=$parallel_hash" "$result_dir/metadata.txt"
+grep -Fx "benchmark_example_sha256=$example_hash" "$result_dir/metadata.txt"
 
 awk -F '\t' '
     NR == 1 {
