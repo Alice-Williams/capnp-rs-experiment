@@ -5,9 +5,10 @@
 //! M32 binds the revision-tolerant `Message` union and transport envelope;
 //! M33 adds the connection actor; M34 adds settled hosted-capability payloads
 //! and actor-owned import/export lifetime accounting; M35 adds bounded promise
-//! pipelining and two-party tail routing. Unknown union discriminants remain
-//! inspectable instead of being rejected. Promise resolution, cancellation,
-//! reconnect, and network-resource behavior remain later milestones.
+//! pipelining and two-party tail routing; M36 adds `Resolve`, frozen promise
+//! routes, and loopback disembargo/E-order. Unknown union discriminants remain
+//! inspectable instead of being rejected. Streaming, cancellation, reconnect,
+//! and network-resource behavior remain later milestones.
 
 mod actor;
 mod capability;
@@ -17,19 +18,19 @@ mod transport;
 
 pub use actor::{
     ActorEffect, ActorLimits, AnswerKey, CompletionToken, ConnectionActor, ConnectionError,
-    ConnectionHandle, ConnectionStats, IncomingCallTarget, IncomingRequest, QuestionFuture,
-    QuestionKey, QuestionTarget,
+    ConnectionHandle, ConnectionStats, IncomingCallTarget, IncomingRequest, LocalCompletionToken,
+    PromiseResolver, QuestionFuture, QuestionKey, QuestionTarget,
 };
 pub use capability::{
     CapabilityError, CapabilityStats, CapabilityTables, HostedCapability, OutgoingCapability,
-    ReceivedCapability,
+    PromiseCapability, ReceivedCapability,
 };
 pub use level0::{
-    BootstrapMessage, CallMessage, CallTarget, CapDescriptor, FinishMessage, HandlerResult,
-    Payload, PipelineOp, PromisedAnswer, ReleaseMessage, ReturnMessage, ReturnPayload,
-    SendResultsTo, encode_bootstrap, encode_call, encode_call_with_capabilities,
-    encode_call_with_options, encode_finish, encode_finish_with_release, encode_release,
-    encode_return,
+    BootstrapMessage, CallMessage, CallTarget, CapDescriptor, DisembargoContext, DisembargoMessage,
+    FinishMessage, HandlerResult, Payload, PipelineOp, PromiseResolution, PromisedAnswer,
+    ReleaseMessage, ResolveMessage, ReturnMessage, ReturnPayload, SendResultsTo, encode_bootstrap,
+    encode_call, encode_call_with_capabilities, encode_call_with_options, encode_disembargo,
+    encode_finish, encode_finish_with_release, encode_release, encode_resolve, encode_return,
 };
 pub use protocol::{
     EXCEPTION_TYPE_ID, ExceptionType, MESSAGE_TYPE_ID, ProtocolError, ProtocolLimits,

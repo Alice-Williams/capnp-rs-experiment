@@ -855,6 +855,52 @@ impl DynamicAnyPointer {
             OwnedPointerRef::Capability(value) => Self::Capability(value),
         }
     }
+
+    /// Retains this dynamic pointer as an opaque schema value suitable for
+    /// lossless forwarding without decoding its application schema.
+    pub fn to_opaque(&self, limits: ReaderLimits) -> Result<OpaquePointer, DynamicError> {
+        let (kind, value) = match self {
+            Self::Null => return Ok(OpaquePointer::null()),
+            Self::Struct(value) => (OpaquePointerKind::Struct, value),
+            Self::List(value) => {
+                let message = value.message();
+                let backing = (0..message.segment_count())
+                    .filter_map(|index| message.segment(u32::try_from(index).ok()?).map(Arc::from))
+                    .collect::<Vec<Arc<[u8]>>>();
+                if backing.len() != message.segment_count() {
+                    return Err(DynamicError::TypeMismatch {
+                        expected: "retained list pointer",
+                    });
+                }
+                return Ok(OpaquePointer {
+                    kind: OpaquePointerKind::List,
+                    backing: Arc::from(backing),
+                    location: value.location(),
+                    nesting: capnp_message::NestingLimit::new(limits.nesting_levels),
+                });
+            }
+            Self::Capability(_) => {
+                return Err(DynamicError::TypeMismatch {
+                    expected: "non-capability any-pointer",
+                });
+            }
+        };
+        let message = value.message();
+        let backing = (0..message.segment_count())
+            .filter_map(|index| message.segment(u32::try_from(index).ok()?).map(Arc::from))
+            .collect::<Vec<Arc<[u8]>>>();
+        if backing.len() != message.segment_count() {
+            return Err(DynamicError::TypeMismatch {
+                expected: "retained struct pointer",
+            });
+        }
+        Ok(OpaquePointer {
+            kind,
+            backing: Arc::from(backing),
+            location: value.location(),
+            nesting: capnp_message::NestingLimit::new(limits.nesting_levels),
+        })
+    }
 }
 
 #[derive(Clone, Debug)]

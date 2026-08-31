@@ -4,16 +4,46 @@ use std::fmt;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+use capnp_message::OwnedMessage;
 use capnp_rpc_core::{
     ActorEffect, ActorLimits, CompletionToken, ConnectionActor, ConnectionError, ConnectionHandle,
-    DuplexTransport, EnvelopeLimits, IncomingRequest, ProtocolLimits, TransportEnvelope,
-    TransportError,
+    DuplexTransport, EnvelopeLimits, HandlerResult, IncomingRequest, LocalCompletionToken,
+    OutgoingCapability, ProtocolLimits, TransportEnvelope, TransportError,
 };
+use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct DriverDispatch {
     pub request: IncomingRequest,
-    pub completion: CompletionToken,
+    pub completion: DriverCompletion,
+}
+
+#[derive(Debug)]
+pub enum DriverCompletion {
+    Remote(CompletionToken),
+    Local(LocalCompletionToken),
+}
+
+impl DriverCompletion {
+    pub fn complete(self, result: HandlerResult) -> Result<(), ConnectionError> {
+        match self {
+            Self::Remote(completion) => completion.complete(result),
+            Self::Local(completion) => completion.complete(result),
+        }
+    }
+
+    pub fn complete_with_capabilities(
+        self,
+        content: Arc<OwnedMessage>,
+        capabilities: Vec<OutgoingCapability>,
+    ) -> Result<(), ConnectionError> {
+        match self {
+            Self::Remote(completion) => {
+                completion.complete_with_capabilities(content, capabilities)
+            }
+            Self::Local(completion) => completion.complete_with_capabilities(content, capabilities),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -54,7 +84,7 @@ impl<E: std::error::Error + 'static> std::error::Error for DriverError<E> {
 /// Drives one connection without choosing an executor or spawning handlers.
 ///
 /// Each ready item is an application dispatch. The caller may run independent
-/// dispatches on any executor and return through their `CompletionToken`s.
+/// dispatches on any executor and return through their `DriverCompletion`s.
 /// Outbound frames are drained before further inbound reads, preserving actor
 /// order and transport backpressure. `Ready(Ok(None))` means the transport is
 /// closed and all actor waiters have been completed.
@@ -155,7 +185,16 @@ impl<T: DuplexTransport> ConnectionDriver<T> {
                 })) => {
                     return Poll::Ready(Ok(Some(DriverDispatch {
                         request,
-                        completion,
+                        completion: DriverCompletion::Remote(completion),
+                    })));
+                }
+                Poll::Ready(Some(ActorEffect::DispatchLocal {
+                    request,
+                    completion,
+                })) => {
+                    return Poll::Ready(Ok(Some(DriverDispatch {
+                        request,
+                        completion: DriverCompletion::Local(completion),
                     })));
                 }
                 Poll::Ready(Some(ActorEffect::CloseTransport)) | Poll::Ready(None) => {

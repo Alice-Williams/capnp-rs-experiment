@@ -2,8 +2,8 @@
 //!
 //! M34 adds settled hosted descriptors and `Release`; M35 adds promised-answer
 //! transforms, `receiverAnswer`, redirected results, and Level-1 tail routing.
-//! `Resolve`, embargo, third-party, and attached-resource behavior remains
-//! owned by later milestones.
+//! M36 adds `senderPromise`, `Resolve`, and loopback `Disembargo`. Third-party
+//! and attached-resource behavior remains owned by later milestones.
 
 use std::sync::Arc;
 
@@ -43,8 +43,33 @@ pub struct PromisedAnswer {
 pub enum CapDescriptor {
     None,
     SenderHosted(u32),
+    SenderPromise(u32),
     ReceiverHosted(u32),
     ReceiverAnswer(PromisedAnswer),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PromiseResolution {
+    Cap(CapDescriptor),
+    Exception(RpcException),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolveMessage {
+    pub promise_id: u32,
+    pub resolution: PromiseResolution,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DisembargoContext {
+    SenderLoopback(u32),
+    ReceiverLoopback(u32),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DisembargoMessage {
+    pub target: CallTarget,
+    pub context: DisembargoContext,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -186,6 +211,56 @@ pub fn encode_call_with_options(
 ) -> Result<Arc<OwnedMessage>, ProtocolError> {
     check_cap_table_len(cap_table.len(), limits)?;
     let content = opaque_root(params, limits)?;
+    encode_call_with_opaque_options(
+        question_id,
+        target,
+        interface_id,
+        method_id,
+        &content,
+        cap_table,
+        send_results_to,
+        limits,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn encode_call_payload_with_options(
+    question_id: u32,
+    target: CallTarget,
+    interface_id: u64,
+    method_id: u16,
+    params: &Payload,
+    cap_table: &[CapDescriptor],
+    send_results_to: SendResultsTo,
+    limits: ProtocolLimits,
+) -> Result<Arc<OwnedMessage>, ProtocolError> {
+    check_cap_table_len(cap_table.len(), limits)?;
+    let content = params
+        .content
+        .to_opaque(crate::protocol::reader_limits(limits))?;
+    encode_call_with_opaque_options(
+        question_id,
+        target,
+        interface_id,
+        method_id,
+        &content,
+        cap_table,
+        send_results_to,
+        limits,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn encode_call_with_opaque_options(
+    question_id: u32,
+    target: CallTarget,
+    interface_id: u64,
+    method_id: u16,
+    content: &capnp_schema::OpaquePointer,
+    cap_table: &[CapDescriptor],
+    send_results_to: SendResultsTo,
+    limits: ProtocolLimits,
+) -> Result<Arc<OwnedMessage>, ProtocolError> {
     let schema = protocol_schema()?;
     let mut arena = arena(limits)?;
     {
@@ -221,7 +296,7 @@ pub fn encode_call_with_options(
         }
         {
             let mut payload = call.init_struct("params")?;
-            payload.set("content", DynamicInput::Pointer(&content))?;
+            payload.set("content", DynamicInput::Pointer(content))?;
             write_cap_table(&mut payload, cap_table, limits)?;
         }
     }
@@ -298,6 +373,61 @@ pub fn encode_release(
         let mut release = message.init_struct("release")?;
         release.set("id", DynamicInput::UInt32(id))?;
         release.set("referenceCount", DynamicInput::UInt32(reference_count))?;
+    }
+    owned(arena, limits)
+}
+
+pub fn encode_resolve(
+    promise_id: u32,
+    resolution: &PromiseResolution,
+    limits: ProtocolLimits,
+) -> Result<Arc<OwnedMessage>, ProtocolError> {
+    if let PromiseResolution::Exception(exception) = resolution {
+        check_exception_limits(exception, limits)?;
+    }
+    let schema = protocol_schema()?;
+    let mut arena = arena(limits)?;
+    {
+        let mut message =
+            capnp_schema::DynamicStructBuilder::root(&schema, &mut arena, MESSAGE_TYPE_ID)?;
+        let mut resolve = message.init_struct("resolve")?;
+        resolve.set("promiseId", DynamicInput::UInt32(promise_id))?;
+        match resolution {
+            PromiseResolution::Cap(descriptor) => {
+                let mut cap = resolve.init_struct("cap")?;
+                write_cap_descriptor(&mut cap, descriptor, limits)?;
+            }
+            PromiseResolution::Exception(exception) => {
+                let mut output = resolve.init_struct("exception")?;
+                write_exception(&mut output, exception)?;
+            }
+        }
+    }
+    owned(arena, limits)
+}
+
+pub fn encode_disembargo(
+    target: &CallTarget,
+    context: DisembargoContext,
+    limits: ProtocolLimits,
+) -> Result<Arc<OwnedMessage>, ProtocolError> {
+    let schema = protocol_schema()?;
+    let mut arena = arena(limits)?;
+    {
+        let mut message =
+            capnp_schema::DynamicStructBuilder::root(&schema, &mut arena, MESSAGE_TYPE_ID)?;
+        let mut disembargo = message.init_struct("disembargo")?;
+        let mut target_builder = disembargo.init_struct("target")?;
+        write_message_target(&mut target_builder, target, limits)?;
+        let mut output = disembargo.group("context")?;
+        match context {
+            DisembargoContext::SenderLoopback(id) => {
+                output.set("senderLoopback", DynamicInput::UInt32(id))?;
+            }
+            DisembargoContext::ReceiverLoopback(id) => {
+                output.set("receiverLoopback", DynamicInput::UInt32(id))?;
+            }
+        }
     }
     owned(arena, limits)
 }
@@ -415,6 +545,52 @@ pub(crate) fn read_release(root: &DynamicStruct) -> Result<ReleaseMessage, Proto
     })
 }
 
+pub(crate) fn read_resolve(
+    root: &DynamicStruct,
+    limits: ProtocolLimits,
+) -> Result<ResolveMessage, ProtocolError> {
+    let resolve = structure(root.get("resolve")?, "resolve")?;
+    let resolution = match resolve.union_discriminant()?.unwrap_or(u16::MAX) {
+        0 => {
+            let cap = structure(resolve.get("cap")?, "resolve.cap")?;
+            PromiseResolution::Cap(read_cap_descriptor(&cap, limits)?)
+        }
+        1 => {
+            let exception = structure(resolve.get("exception")?, "resolve.exception")?;
+            PromiseResolution::Exception(read_exception(&exception)?)
+        }
+        _ => return Err(ProtocolError::UnsupportedFeature("resolve payload")),
+    };
+    Ok(ResolveMessage {
+        promise_id: uint32(resolve.get("promiseId")?, "promiseId")?,
+        resolution,
+    })
+}
+
+pub(crate) fn read_disembargo(
+    root: &DynamicStruct,
+    limits: ProtocolLimits,
+) -> Result<DisembargoMessage, ProtocolError> {
+    let disembargo = structure(root.get("disembargo")?, "disembargo")?;
+    let target = structure(disembargo.get("target")?, "disembargo.target")?;
+    let context = structure(disembargo.get("context")?, "disembargo.context")?;
+    let context = match context.union_discriminant()?.unwrap_or(u16::MAX) {
+        0 => DisembargoContext::SenderLoopback(uint32(
+            context.get("senderLoopback")?,
+            "senderLoopback",
+        )?),
+        1 => DisembargoContext::ReceiverLoopback(uint32(
+            context.get("receiverLoopback")?,
+            "receiverLoopback",
+        )?),
+        _ => return Err(ProtocolError::UnsupportedFeature("disembargo context")),
+    };
+    Ok(DisembargoMessage {
+        target: read_message_target(&target, limits)?,
+        context,
+    })
+}
+
 pub(crate) fn read_finish(root: &DynamicStruct) -> Result<FinishMessage, ProtocolError> {
     let finish = structure(root.get("finish")?, "finish")?;
     Ok(FinishMessage {
@@ -492,21 +668,106 @@ fn write_cap_table(
     for (index, descriptor) in cap_table.iter().enumerate() {
         let index = u32::try_from(index).map_err(|_| ProtocolError::MessageSizeOverflow)?;
         let mut value = output.struct_element(index)?;
-        match descriptor {
-            CapDescriptor::None => value.activate("none")?,
-            CapDescriptor::SenderHosted(id) => {
-                value.set("senderHosted", DynamicInput::UInt32(*id))?;
-            }
-            CapDescriptor::ReceiverHosted(id) => {
-                value.set("receiverHosted", DynamicInput::UInt32(*id))?;
-            }
-            CapDescriptor::ReceiverAnswer(promised_answer) => {
-                let mut promised = value.init_struct("receiverAnswer")?;
-                write_promised_answer(&mut promised, promised_answer, limits)?;
-            }
+        write_cap_descriptor(&mut value, descriptor, limits)?;
+    }
+    Ok(())
+}
+
+fn write_cap_descriptor(
+    output: &mut capnp_schema::DynamicStructBuilder<'_, '_>,
+    descriptor: &CapDescriptor,
+    limits: ProtocolLimits,
+) -> Result<(), ProtocolError> {
+    match descriptor {
+        CapDescriptor::None => output.activate("none")?,
+        CapDescriptor::SenderHosted(id) => {
+            output.set("senderHosted", DynamicInput::UInt32(*id))?;
+        }
+        CapDescriptor::SenderPromise(id) => {
+            output.set("senderPromise", DynamicInput::UInt32(*id))?;
+        }
+        CapDescriptor::ReceiverHosted(id) => {
+            output.set("receiverHosted", DynamicInput::UInt32(*id))?;
+        }
+        CapDescriptor::ReceiverAnswer(promised_answer) => {
+            let mut promised = output.init_struct("receiverAnswer")?;
+            write_promised_answer(&mut promised, promised_answer, limits)?;
         }
     }
     Ok(())
+}
+
+fn write_message_target(
+    output: &mut capnp_schema::DynamicStructBuilder<'_, '_>,
+    target: &CallTarget,
+    limits: ProtocolLimits,
+) -> Result<(), ProtocolError> {
+    match target {
+        CallTarget::BootstrapAnswer(answer_id) => {
+            let mut promised = output.init_struct("promisedAnswer")?;
+            promised.set("questionId", DynamicInput::UInt32(*answer_id))?;
+            promised.init_list("transform", 0)?;
+        }
+        CallTarget::ImportedCap(import_id) => {
+            output.set("importedCap", DynamicInput::UInt32(*import_id))?;
+        }
+        CallTarget::PromisedAnswer(promised_answer) => {
+            let mut promised = output.init_struct("promisedAnswer")?;
+            write_promised_answer(&mut promised, promised_answer, limits)?;
+        }
+    }
+    Ok(())
+}
+
+fn read_message_target(
+    target: &DynamicStruct,
+    limits: ProtocolLimits,
+) -> Result<CallTarget, ProtocolError> {
+    match target.union_discriminant()?.unwrap_or(u16::MAX) {
+        0 => Ok(CallTarget::ImportedCap(uint32(
+            target.get("importedCap")?,
+            "importedCap",
+        )?)),
+        1 => {
+            let promised = structure(target.get("promisedAnswer")?, "promisedAnswer")?;
+            let promised = read_promised_answer(&promised, limits)?;
+            if promised.transform.is_empty() {
+                Ok(CallTarget::BootstrapAnswer(promised.question_id))
+            } else {
+                Ok(CallTarget::PromisedAnswer(promised))
+            }
+        }
+        _ => Err(ProtocolError::UnsupportedFeature("message target")),
+    }
+}
+
+fn read_cap_descriptor(
+    value: &DynamicStruct,
+    limits: ProtocolLimits,
+) -> Result<CapDescriptor, ProtocolError> {
+    match value.union_discriminant()?.unwrap_or(u16::MAX) {
+        0 => Ok(CapDescriptor::None),
+        1 => Ok(CapDescriptor::SenderHosted(uint32(
+            value.get("senderHosted")?,
+            "senderHosted",
+        )?)),
+        2 => Ok(CapDescriptor::SenderPromise(uint32(
+            value.get("senderPromise")?,
+            "senderPromise",
+        )?)),
+        3 => Ok(CapDescriptor::ReceiverHosted(uint32(
+            value.get("receiverHosted")?,
+            "receiverHosted",
+        )?)),
+        4 => {
+            let promised = structure(value.get("receiverAnswer")?, "receiverAnswer")?;
+            Ok(CapDescriptor::ReceiverAnswer(read_promised_answer(
+                &promised, limits,
+            )?))
+        }
+        5 => Err(ProtocolError::UnsupportedFeature("thirdPartyHosted")),
+        _ => Err(ProtocolError::UnsupportedFeature("capability descriptor")),
+    }
 }
 
 fn write_promised_answer(
@@ -585,25 +846,7 @@ fn read_payload(
             let mut output = Vec::with_capacity(len);
             for index in 0..values.len()? {
                 let value = structure(values.get(index)?, "capTable element")?;
-                let descriptor = match value.union_discriminant()?.unwrap_or(u16::MAX) {
-                    0 => CapDescriptor::None,
-                    1 => CapDescriptor::SenderHosted(uint32(
-                        value.get("senderHosted")?,
-                        "senderHosted",
-                    )?),
-                    3 => CapDescriptor::ReceiverHosted(uint32(
-                        value.get("receiverHosted")?,
-                        "receiverHosted",
-                    )?),
-                    2 => return Err(ProtocolError::UnsupportedFeature("senderPromise")),
-                    4 => {
-                        let promised = structure(value.get("receiverAnswer")?, "receiverAnswer")?;
-                        CapDescriptor::ReceiverAnswer(read_promised_answer(&promised, limits)?)
-                    }
-                    5 => return Err(ProtocolError::UnsupportedFeature("thirdPartyHosted")),
-                    _ => return Err(ProtocolError::UnsupportedFeature("capability descriptor")),
-                };
-                output.push(descriptor);
+                output.push(read_cap_descriptor(&value, limits)?);
             }
             output
         }
@@ -670,7 +913,7 @@ mod tests {
     }
 
     #[test]
-    fn rpc_messages_through_m35_round_trip() {
+    fn rpc_messages_through_m36_round_trip() {
         let limits = ProtocolLimits::default();
         assert!(matches!(
             read_protocol_message(encode_bootstrap(7, limits).expect("bootstrap")),
@@ -702,6 +945,7 @@ mod tests {
         let descriptors = vec![
             CapDescriptor::SenderHosted(4),
             CapDescriptor::SenderHosted(4),
+            CapDescriptor::SenderPromise(5),
             CapDescriptor::ReceiverHosted(9),
             CapDescriptor::None,
         ];
@@ -801,6 +1045,38 @@ mod tests {
             encode_release(4, 0, limits),
             Err(ProtocolError::InvalidReferenceCount)
         ));
+
+        for resolution in [
+            PromiseResolution::Cap(CapDescriptor::ReceiverHosted(9)),
+            PromiseResolution::Exception(RpcException::new(
+                "broken promise",
+                crate::ExceptionType::Failed,
+            )),
+        ] {
+            let ProtocolMessage::Resolve(actual) =
+                read_protocol_message(encode_resolve(5, &resolution, limits).expect("resolve"))
+                    .expect("resolve reads")
+            else {
+                panic!("Resolve")
+            };
+            assert_eq!(actual.promise_id, 5);
+            assert_eq!(actual.resolution, resolution);
+        }
+
+        for context in [
+            DisembargoContext::SenderLoopback(17),
+            DisembargoContext::ReceiverLoopback(17),
+        ] {
+            let target = CallTarget::ImportedCap(9);
+            let ProtocolMessage::Disembargo(actual) = read_protocol_message(
+                encode_disembargo(&target, context, limits).expect("disembargo"),
+            )
+            .expect("disembargo reads") else {
+                panic!("Disembargo")
+            };
+            assert_eq!(actual.target, target);
+            assert_eq!(actual.context, context);
+        }
     }
 
     #[test]

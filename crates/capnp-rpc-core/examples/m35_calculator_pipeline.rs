@@ -86,6 +86,9 @@ fn drain(
                     return Err("duplicate calculator method dispatch".into());
                 }
             }
+            Poll::Ready(Some(ActorEffect::DispatchLocal { .. })) => {
+                return Err("M35 trace unexpectedly shortened a local promise".into());
+            }
             Poll::Ready(Some(ActorEffect::CloseTransport)) => {
                 return Err("calculator trace closed transport".into());
             }

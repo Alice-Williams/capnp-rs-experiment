@@ -19,11 +19,11 @@ mod driver;
 pub use capnp_rpc_core::{
     ActorLimits, AnswerKey, CapDescriptor, CapabilityError, CapabilityStats, CapabilityTables,
     CompletionToken, ConnectionError, ConnectionHandle, ConnectionStats, ExceptionType,
-    HandlerResult, HostedCapability, IncomingCallTarget, IncomingRequest, OutgoingCapability,
-    Payload, ProtocolLimits, QuestionFuture, QuestionKey, QuestionTarget, ReceivedCapability,
-    ReturnPayload, RpcException,
+    HandlerResult, HostedCapability, IncomingCallTarget, IncomingRequest, LocalCompletionToken,
+    OutgoingCapability, Payload, PromiseCapability, PromiseResolver, ProtocolLimits,
+    QuestionFuture, QuestionKey, QuestionTarget, ReceivedCapability, ReturnPayload, RpcException,
 };
-pub use driver::{ConnectionDriver, DriverDispatch, DriverError};
+pub use driver::{ConnectionDriver, DriverCompletion, DriverDispatch, DriverError};
 
 pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
 pub type MessageFuture = BoxFuture<Result<Arc<OwnedMessage>, RpcError>>;

@@ -55,7 +55,9 @@ to M43.
 
 ## Explicit non-goals
 
-M33–M35 do not implement `senderPromise`, `Resolve`, embargo, streaming flow
-control, cooperative cancellation of already-dispatched handlers, reconnect,
-scheduling policy, attached-resource meaning, or three-party protocol
-features. Those remain M36–M45.
+M36 layers actor-owned `senderPromise`, `Resolve`, immutable forwarding routes,
+and loopback embargoes onto this design; see
+[promise-resolution-and-e-order.md](promise-resolution-and-e-order.md).
+Streaming flow control, cooperative cancellation of already-dispatched
+handlers, reconnect, scheduling policy, attached-resource meaning, and
+three-party protocol features remain M37–M45.

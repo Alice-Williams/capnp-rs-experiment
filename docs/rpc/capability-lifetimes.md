@@ -48,7 +48,9 @@ release, ID reuse, exact quotas, and disconnect cleanup.
 
 M34 itself does not implement promise descriptors or routing. M35 adds
 `receiverAnswer`, non-empty promised-answer transforms, and two-party tail
-routing as documented in [promise-pipelining.md](promise-pipelining.md).
-`senderPromise`, `Resolve`, embargo, attached descriptors, third-party handoff,
-cooperative cancellation, reconnect, and higher-level generated client
-ergonomics remain later work.
+routing as documented in [promise-pipelining.md](promise-pipelining.md). M36
+adds exact `senderPromise` references, late-resolution tombstones, `Resolve`,
+and loopback embargo/E-order as documented in
+[promise-resolution-and-e-order.md](promise-resolution-and-e-order.md).
+Attached descriptors, third-party handoff, cooperative cancellation, reconnect,
+and higher-level generated client ergonomics remain later work.

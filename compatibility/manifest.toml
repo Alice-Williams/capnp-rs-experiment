@@ -62,7 +62,7 @@ generated_api = "M21 typed data and thread-safe local interface APIs with exact 
 native_compiler = "M26 native multi-file compile and id CLI, plugin-compatible request streaming, deterministic built-in Rust output, and self-hosted generation without a system capnp compiler"
 text_tools = "M27 bounded native text encode/decode/eval with standard, packed, and flat modes and pinned C++ short-format parity"
 json = "M28 bounded reflection codec and native binary/packed/flat JSON conversion with pinned C++ policy and annotations"
-rpc_level = "M35 bounded promised-answer transforms, receiverAnswer payloads, actor-owned queued delivery, early-Finish cleanup, and two-party Level-1 tail routing, layered over M34 exact capability lifetime accounting; Resolve and E-order remain M36"
+rpc_level = "M36 senderPromise and Resolve, permanently frozen forwarding routes, exact release races, bounded loopback embargo/disembargo, and local route shortening, layered over M35 promised-answer pipelines and two-party tail routing"
 parallel_read = "M29 zero-copy Arc-owned list partitions and deterministic retained-subtree work plans for scoped or external executors"
 parallel_build = "M30 disjoint primitive partitions plus sealed single-segment worker fragments with deterministic far-link finalization"
 batch_pipeline = "M31 bounded reservation-window scheduling for ordered concurrent process/build/pack work with no-pool single-item paths"
@@ -109,6 +109,20 @@ M32 = "complete"
 M33 = "complete"
 M34 = "complete"
 M35 = "complete"
+M36 = "complete"
+
+[evidence.M36]
+crates = ["crates/capnp-schema", "crates/capnp-rpc-core"]
+wire = ["CapDescriptor.senderPromise", "Resolve.promiseId/cap/exception", "Disembargo.target", "Disembargo.Context.senderLoopback/receiverLoopback"]
+ownership = "the connection actor exclusively owns promise import states, immutable export routes, released-ID tombstones, and bounded embargo queues; PromiseResolver and completion handles only enqueue FIFO commands"
+routing = ["calls received before export resolution route before Resolve is emitted", "same-connection resolutions shorten directly to the frozen remote export or promised answer", "later resolution of the target never changes an older promise's frozen forwarding route", "broken resolutions short-circuit later calls locally"]
+e_order = ["senderLoopback is emitted before loopback-local calls may dispatch", "the peer echoes receiverLoopback only after prior actor-ordered calls", "queued loopback calls release FIFO after the matching receiverLoopback", "capability-bearing loopback calls retain the wire route and exact reference semantics"]
+lifecycle = ["duplicate senderPromise descriptors count exact references", "last-release promise IDs remain reserved until the resolver fires", "release-before-resolve suppresses Resolve", "Resolve for an already-released import immediately releases any new sender capability", "settled route imports are released when the original promise loses its last reference"]
+oracle_fixture = "conformance/fixtures/cpp/e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/rpc-promise-resolution.bin SHA-256 a159859b0b6f51ce296b58e186619636ba45d749f063e9973d92fce54fcce7a7"
+oracle_check = "tools/verify-m36-promise-resolution.sh: pinned C++ emits senderPromise/Resolve/both loopback contexts, native validates and independently emits them, pinned C++ validates native output"
+documentation = "docs/rpc/promise-resolution-and-e-order.md"
+limitations = ["PromiseResolver must be consumed after its promise is exported", "capability-bearing loopback calls preserve the wire route instead of using local dispatch", "streaming remains M37", "cooperative cancellation/reconnect remain M38", "attached resources remain M43", "three-party routing remains M44+"]
+validation = "35 focused capnp-rpc-core tests; pinned C++ -> native -> pinned C++ promise-resolution fixture; Rust 1.98 and 1.85 workspace tests; Clippy -D warnings; doctests; complete Bazel suite"
 
 [evidence.M35]
 crates = ["crates/capnp-message", "crates/capnp-rpc-core"]

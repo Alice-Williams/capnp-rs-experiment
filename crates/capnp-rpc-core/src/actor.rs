@@ -4,10 +4,13 @@
 //! a bounded mailbox. Application work leaves the actor as a `Dispatch` effect
 //! and returns through a generation-bearing completion token, so handlers may
 //! run concurrently and finish out of order without sharing table state.
-//! M35 adds bounded promised-answer transforms, actor-owned queued delivery,
-//! and two-party tail routing. Promise resolution and E-order remain M36.
+//! M36 adds actor-owned promise import/export resolution, permanently frozen
+//! forwarding routes, and bounded loopback embargoes. A call already ordered
+//! before `Resolve` is routed before that message is emitted; a loopback route
+//! cannot dispatch locally until the matching receiver disembargo arrives.
+//! Streaming, cancellation, and reconnect remain later milestones.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
@@ -16,12 +19,14 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 
 use crate::capability::{
-    CapabilityStats, CapabilityTables, HostedCapability, OutgoingCapability, ReceivedCapability,
+    CapabilityStats, CapabilityTables, HostedCapability, OutgoingCapability, PromiseCapability,
+    ReceivedCapability,
 };
 use crate::level0::{
-    CallTarget, CapDescriptor, HandlerResult, Payload, PipelineOp, PromisedAnswer, ReturnPayload,
-    SendResultsTo, encode_bootstrap, encode_call_with_options, encode_finish_with_release,
-    encode_release, encode_return,
+    CallTarget, CapDescriptor, DisembargoContext, DisembargoMessage, HandlerResult, Payload,
+    PipelineOp, PromiseResolution, PromisedAnswer, ResolveMessage, ReturnPayload, SendResultsTo,
+    encode_bootstrap, encode_call_payload_with_options, encode_call_with_options,
+    encode_disembargo, encode_finish_with_release, encode_release, encode_resolve, encode_return,
 };
 use crate::protocol::{
     ExceptionType, ProtocolLimits, ProtocolMessage, RpcException, encode_abort,
@@ -69,6 +74,8 @@ pub struct ActorLimits {
     pub max_answers: usize,
     pub max_imports: usize,
     pub max_exports: usize,
+    pub max_embargoes: usize,
+    pub max_embargoed_calls: usize,
 }
 
 impl Default for ActorLimits {
@@ -79,6 +86,8 @@ impl Default for ActorLimits {
             max_answers: 4096,
             max_imports: 4096,
             max_exports: 4096,
+            max_embargoes: 4096,
+            max_embargoed_calls: 4096,
         }
     }
 }
@@ -96,6 +105,8 @@ pub struct ConnectionStats {
     pub active_exports: usize,
     pub import_references: u64,
     pub export_references: u64,
+    pub active_embargoes: usize,
+    pub queued_embargo_calls: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -141,6 +152,20 @@ impl fmt::Debug for ConnectionHandle {
 }
 
 impl ConnectionHandle {
+    /// Creates a connection-local promise and its one-shot resolver. The
+    /// promise must be exported in a payload before the resolver is consumed.
+    pub fn new_promise(&self) -> Result<(PromiseCapability, PromiseResolver), ConnectionError> {
+        let capability = PromiseCapability::new()
+            .map_err(|error| ConnectionError::Capability(error.to_string()))?;
+        Ok((
+            capability.clone(),
+            PromiseResolver {
+                handle: self.clone(),
+                capability,
+            },
+        ))
+    }
+
     pub fn bootstrap(&self) -> Result<QuestionFuture, ConnectionError> {
         let cell = Arc::new(QuestionCell::new());
         self.submit(ActorCommand::StartBootstrap {
@@ -198,6 +223,42 @@ impl ConnectionHandle {
 
     fn submit(&self, command: ActorCommand) -> Result<(), ConnectionError> {
         self.mailbox.submit(command)
+    }
+}
+
+/// A one-shot authority to settle a promise exported by this connection.
+pub struct PromiseResolver {
+    handle: ConnectionHandle,
+    capability: PromiseCapability,
+}
+
+impl fmt::Debug for PromiseResolver {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PromiseResolver")
+            .field("identity", &self.capability.identity())
+            .finish_non_exhaustive()
+    }
+}
+
+impl PromiseResolver {
+    pub fn resolve_to_hosted(self, capability: HostedCapability) -> Result<(), ConnectionError> {
+        self.resolve(LocalPromiseResolution::Hosted(capability))
+    }
+
+    pub fn resolve_to_import(self, import_id: u32) -> Result<(), ConnectionError> {
+        self.resolve(LocalPromiseResolution::Imported(import_id))
+    }
+
+    pub fn reject(self, exception: RpcException) -> Result<(), ConnectionError> {
+        self.resolve(LocalPromiseResolution::Exception(exception))
+    }
+
+    fn resolve(self, resolution: LocalPromiseResolution) -> Result<(), ConnectionError> {
+        self.handle.submit(ActorCommand::ResolvePromise {
+            identity: self.capability.identity(),
+            resolution,
+        })
     }
 }
 
@@ -303,6 +364,43 @@ pub struct CompletionToken {
     answer: AnswerKey,
 }
 
+/// Completion authority for a call shortened back to a local capability.
+pub struct LocalCompletionToken {
+    handle: ConnectionHandle,
+    question: QuestionKey,
+}
+
+impl fmt::Debug for LocalCompletionToken {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("LocalCompletionToken")
+            .field("question", &self.question)
+            .finish_non_exhaustive()
+    }
+}
+
+impl LocalCompletionToken {
+    pub fn complete(self, result: HandlerResult) -> Result<(), ConnectionError> {
+        self.handle.submit(ActorCommand::LocalCallComplete {
+            question: self.question,
+            result,
+            capabilities: Vec::new(),
+        })
+    }
+
+    pub fn complete_with_capabilities(
+        self,
+        content: Arc<OwnedMessage>,
+        capabilities: Vec<OutgoingCapability>,
+    ) -> Result<(), ConnectionError> {
+        self.handle.submit(ActorCommand::LocalCallComplete {
+            question: self.question,
+            result: HandlerResult::Results(content),
+            capabilities,
+        })
+    }
+}
+
 impl fmt::Debug for CompletionToken {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -365,7 +463,74 @@ pub enum ActorEffect {
         request: IncomingRequest,
         completion: CompletionToken,
     },
+    DispatchLocal {
+        request: IncomingRequest,
+        completion: LocalCompletionToken,
+    },
     CloseTransport,
+}
+
+#[derive(Clone, Debug)]
+enum LocalPromiseResolution {
+    Hosted(HostedCapability),
+    Imported(u32),
+    Exception(RpcException),
+}
+
+#[derive(Clone, Debug)]
+enum FrozenPromiseRoute {
+    Hosted(HostedCapability),
+    Imported(u32),
+    Exception(RpcException),
+}
+
+#[derive(Clone, Debug)]
+enum ImportPromiseState {
+    Unresolved,
+    Remote(u32),
+    PromisedAnswer(PromisedAnswer),
+    Loopback {
+        capability: HostedCapability,
+        embargo_id: u32,
+    },
+    Local(HostedCapability),
+    Broken(RpcException),
+}
+
+#[derive(Clone, Debug)]
+struct PendingPromiseCall {
+    answer: AnswerKey,
+    interface_id: u64,
+    method_id: u16,
+    params: Payload,
+}
+
+enum TailCallParams {
+    Owned(Arc<OwnedMessage>),
+    Dynamic(Payload),
+}
+
+#[derive(Clone, Debug)]
+struct ExportPromiseState {
+    identity: u64,
+    route: Option<FrozenPromiseRoute>,
+    queued_calls: VecDeque<PendingPromiseCall>,
+}
+
+#[derive(Clone)]
+struct PendingLocalCall {
+    interface_id: u64,
+    method_id: u16,
+    params: Arc<OwnedMessage>,
+    capabilities: Vec<OutgoingCapability>,
+    cell: Arc<QuestionCell>,
+}
+
+#[derive(Clone)]
+struct EmbargoState {
+    promise_id: u32,
+    capability: HostedCapability,
+    queued_calls: VecDeque<PendingLocalCall>,
 }
 
 /// The only owner of a connection's ordered protocol state.
@@ -376,6 +541,12 @@ pub struct ConnectionActor {
     questions: QuestionTable,
     answers: AnswerTable,
     capabilities: CapabilityTables,
+    promise_imports: BTreeMap<u32, ImportPromiseState>,
+    promise_exports: BTreeMap<u32, ExportPromiseState>,
+    embargoes: BTreeMap<u32, EmbargoState>,
+    max_embargoes: usize,
+    max_embargoed_calls: usize,
+    embargoed_calls: usize,
     effects: VecDeque<ActorEffect>,
     stats: ConnectionStats,
     terminal: bool,
@@ -406,6 +577,12 @@ impl ConnectionActor {
                 questions: QuestionTable::new(limits.max_questions),
                 answers: AnswerTable::new(limits.max_answers),
                 capabilities: CapabilityTables::new(limits.max_imports, limits.max_exports),
+                promise_imports: BTreeMap::new(),
+                promise_exports: BTreeMap::new(),
+                embargoes: BTreeMap::new(),
+                max_embargoes: limits.max_embargoes,
+                max_embargoed_calls: limits.max_embargoed_calls,
+                embargoed_calls: 0,
                 effects: VecDeque::new(),
                 stats: ConnectionStats::default(),
                 terminal: false,
@@ -427,6 +604,8 @@ impl ConnectionActor {
             active_exports,
             import_references,
             export_references,
+            active_embargoes: self.embargoes.len(),
+            queued_embargo_calls: self.embargoed_calls,
             ..self.stats
         }
     }
@@ -434,6 +613,18 @@ impl ConnectionActor {
     /// Releases locally-held import references and schedules a batched wire
     /// `Release` message without involving application locks.
     pub fn release_import(&mut self, id: u32, count: u32) -> Result<(), ConnectionError> {
+        self.release_import_inner(id, count, &mut BTreeSet::new())
+    }
+
+    fn release_import_inner(
+        &mut self,
+        id: u32,
+        count: u32,
+        releasing: &mut BTreeSet<u32>,
+    ) -> Result<(), ConnectionError> {
+        if !releasing.insert(id) {
+            return Ok(());
+        }
         let snapshot = self.capabilities.clone();
         let release = self
             .capabilities
@@ -448,6 +639,13 @@ impl ConnectionActor {
                 }
             };
         self.effects.push_back(ActorEffect::Send(message));
+        if !self.capabilities.contains_import(id) {
+            if let Some(ImportPromiseState::Remote(target)) = self.promise_imports.remove(&id) {
+                if self.capabilities.contains_import(target) {
+                    self.release_import_inner(target, 1, releasing)?;
+                }
+            }
+        }
         Ok(())
     }
 
@@ -506,6 +704,15 @@ impl ConnectionActor {
                 result,
                 capabilities,
             } => self.handler_complete(answer, result, capabilities),
+            ActorCommand::ResolvePromise {
+                identity,
+                resolution,
+            } => self.resolve_promise(identity, resolution),
+            ActorCommand::LocalCallComplete {
+                question,
+                result,
+                capabilities,
+            } => self.local_call_complete(question, result, capabilities),
             ActorCommand::Shutdown => {
                 self.transition_terminal(ConnectionError::Disconnected, false)
             }
@@ -555,6 +762,65 @@ impl ConnectionActor {
         capabilities: Vec<OutgoingCapability>,
         cell: Arc<QuestionCell>,
     ) {
+        if let OutgoingCallTarget::Imported(id) = &target {
+            match self.promise_imports.get(id).cloned() {
+                Some(ImportPromiseState::Loopback {
+                    capability,
+                    embargo_id,
+                }) => {
+                    if self.embargoed_calls >= self.max_embargoed_calls {
+                        cell.complete(Err(ConnectionError::Overloaded {
+                            capacity: self.max_embargoed_calls,
+                        }));
+                        return;
+                    }
+                    let Some(embargo) = self.embargoes.get_mut(&embargo_id) else {
+                        cell.complete(Err(ConnectionError::Protocol(format!(
+                            "promise import {id} references missing embargo {embargo_id}"
+                        ))));
+                        return;
+                    };
+                    debug_assert_eq!(embargo.capability, capability);
+                    embargo.queued_calls.push_back(PendingLocalCall {
+                        interface_id,
+                        method_id,
+                        params,
+                        capabilities,
+                        cell,
+                    });
+                    self.embargoed_calls = match self.embargoed_calls.checked_add(1) {
+                        Some(count) => count,
+                        None => {
+                            self.protocol_failure(ConnectionError::GenerationExhausted);
+                            return;
+                        }
+                    };
+                    return;
+                }
+                Some(ImportPromiseState::Local(capability)) if capabilities.is_empty() => {
+                    self.start_local_call(
+                        capability,
+                        interface_id,
+                        method_id,
+                        params,
+                        capabilities,
+                        cell,
+                    );
+                    return;
+                }
+                Some(ImportPromiseState::Broken(exception)) => {
+                    cell.complete(Ok(ReturnPayload::Exception(exception)));
+                    return;
+                }
+                Some(
+                    ImportPromiseState::Unresolved
+                    | ImportPromiseState::Remote(_)
+                    | ImportPromiseState::PromisedAnswer(_)
+                    | ImportPromiseState::Local(_),
+                )
+                | None => {}
+            }
+        }
         let wire_target = match target {
             OutgoingCallTarget::Bootstrap(target) => match target.cell.active_key() {
                 Ok(Some(key)) if self.questions.contains(key) => {
@@ -581,7 +847,16 @@ impl ConnectionActor {
                 }
             },
             OutgoingCallTarget::Imported(id) if self.capabilities.contains_import(id) => {
-                CallTarget::ImportedCap(id)
+                let routed_id = match self.promise_imports.get(&id) {
+                    Some(ImportPromiseState::Remote(routed_id)) => *routed_id,
+                    _ => id,
+                };
+                match self.promise_imports.get(&id) {
+                    Some(ImportPromiseState::PromisedAnswer(target)) => {
+                        CallTarget::PromisedAnswer(target.clone())
+                    }
+                    _ => CallTarget::ImportedCap(routed_id),
+                }
             }
             OutgoingCallTarget::Imported(id) => {
                 cell.complete(Err(ConnectionError::Capability(format!(
@@ -643,6 +918,62 @@ impl ConnectionActor {
         }
     }
 
+    fn start_local_call(
+        &mut self,
+        capability: HostedCapability,
+        interface_id: u64,
+        method_id: u16,
+        params: Arc<OwnedMessage>,
+        capabilities: Vec<OutgoingCapability>,
+        cell: Arc<QuestionCell>,
+    ) {
+        debug_assert!(capabilities.is_empty());
+        let key = match self.questions.allocate(QuestionState {
+            cell: Arc::clone(&cell),
+            param_exports: Vec::new(),
+            is_tail_call: false,
+        }) {
+            Ok(key) => key,
+            Err(error) => {
+                cell.complete(Err(error));
+                return;
+            }
+        };
+        self.record_question_allocation(key);
+        if let Err(error) = cell.assign(key) {
+            let _ = self.questions.remove(key);
+            self.protocol_failure(error);
+            return;
+        }
+        let content = match params.root_pointer() {
+            Ok(OwnedPointerRef::Null) => DynamicAnyPointer::Null,
+            Ok(OwnedPointerRef::Struct(value)) => DynamicAnyPointer::Struct(value),
+            Ok(OwnedPointerRef::List(value)) => DynamicAnyPointer::List(value),
+            Ok(OwnedPointerRef::Capability(value)) => DynamicAnyPointer::Capability(value),
+            Err(error) => {
+                let _ = self.questions.remove(key);
+                cell.complete(Err(ConnectionError::Protocol(error.to_string())));
+                return;
+            }
+        };
+        self.stats.dispatched_handlers = self.stats.dispatched_handlers.saturating_add(1);
+        self.effects.push_back(ActorEffect::DispatchLocal {
+            request: IncomingRequest::Call {
+                target: IncomingCallTarget::Hosted(capability),
+                interface_id,
+                method_id,
+                params: Payload {
+                    content,
+                    cap_table: Vec::new(),
+                },
+            },
+            completion: LocalCompletionToken {
+                handle: self.handle.clone(),
+                question: key,
+            },
+        });
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn start_tail_call(
         &mut self,
@@ -651,6 +982,26 @@ impl ConnectionActor {
         interface_id: u64,
         method_id: u16,
         params: Arc<OwnedMessage>,
+        capabilities: Vec<OutgoingCapability>,
+    ) {
+        self.start_tail_call_common(
+            answer,
+            import_id,
+            interface_id,
+            method_id,
+            TailCallParams::Owned(params),
+            capabilities,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn start_tail_call_common(
+        &mut self,
+        answer: AnswerKey,
+        import_id: u32,
+        interface_id: u64,
+        method_id: u16,
+        params: TailCallParams,
         capabilities: Vec<OutgoingCapability>,
     ) {
         if !self.answers.is_in_progress(answer) {
@@ -690,16 +1041,28 @@ impl ConnectionActor {
             self.protocol_failure(error);
             return;
         }
-        let call = encode_call_with_options(
-            key.id,
-            CallTarget::ImportedCap(import_id),
-            interface_id,
-            method_id,
-            &params,
-            &descriptors,
-            SendResultsTo::Yourself,
-            self.protocol_limits,
-        );
+        let call = match &params {
+            TailCallParams::Owned(params) => encode_call_with_options(
+                key.id,
+                CallTarget::ImportedCap(import_id),
+                interface_id,
+                method_id,
+                params,
+                &descriptors,
+                SendResultsTo::Yourself,
+                self.protocol_limits,
+            ),
+            TailCallParams::Dynamic(params) => encode_call_payload_with_options(
+                key.id,
+                CallTarget::ImportedCap(import_id),
+                interface_id,
+                method_id,
+                params,
+                &descriptors,
+                SendResultsTo::Yourself,
+                self.protocol_limits,
+            ),
+        };
         let returned = encode_return(
             answer.id,
             &HandlerResult::TakeFromOtherQuestion(key.id),
@@ -732,11 +1095,8 @@ impl ConnectionActor {
             return;
         }
         let original_param_imports = self.answers.param_imports(answer).unwrap_or_default();
-        if let Err(error) = self
-            .capabilities
-            .apply_implicit_import_releases(&original_param_imports)
-        {
-            self.protocol_failure(ConnectionError::Capability(error.to_string()));
+        if let Err(error) = self.apply_implicit_import_releases(&original_param_imports) {
+            self.protocol_failure(error);
             return;
         }
         self.effects.push_back(ActorEffect::Send(call));
@@ -769,7 +1129,7 @@ impl ConnectionActor {
                 self.dispatch(IncomingRequest::Bootstrap, answer);
             }
             ProtocolMessage::Call(message) => {
-                let (target, promised_answer) = match message.target {
+                let (target, promised_answer, promise_export) = match message.target {
                     CallTarget::BootstrapAnswer(target_id) => {
                         let Some(target) = self.answers.key_for_id(target_id) else {
                             self.protocol_failure(ConnectionError::Protocol(format!(
@@ -778,7 +1138,11 @@ impl ConnectionActor {
                             return;
                         };
                         if self.answers.is_bootstrap(target) {
-                            (Some(IncomingCallTarget::BootstrapAnswer(target)), None)
+                            (
+                                Some(IncomingCallTarget::BootstrapAnswer(target)),
+                                None,
+                                None,
+                            )
                         } else {
                             (
                                 None,
@@ -786,6 +1150,7 @@ impl ConnectionActor {
                                     question_id: target_id,
                                     transform: Vec::new(),
                                 }),
+                                None,
                             )
                         }
                     }
@@ -795,7 +1160,10 @@ impl ConnectionActor {
                             .receive(&CapDescriptor::ReceiverHosted(export_id))
                         {
                             Ok(ReceivedCapability::Hosted(capability)) => {
-                                (Some(IncomingCallTarget::Hosted(capability)), None)
+                                (Some(IncomingCallTarget::Hosted(capability)), None, None)
+                            }
+                            Ok(ReceivedCapability::ExportedPromise(_)) => {
+                                (None, None, Some(export_id))
                             }
                             Ok(_) => {
                                 self.protocol_failure(ConnectionError::Protocol(
@@ -811,7 +1179,9 @@ impl ConnectionActor {
                             }
                         }
                     }
-                    CallTarget::PromisedAnswer(promised_answer) => (None, Some(promised_answer)),
+                    CallTarget::PromisedAnswer(promised_answer) => {
+                        (None, Some(promised_answer), None)
+                    }
                 };
                 let param_imports = match self.receive_cap_table(&message.params.cap_table) {
                     Ok(imports) => imports,
@@ -858,6 +1228,16 @@ impl ConnectionActor {
                         Ok(None) => {}
                         Err(error) => self.fail_pipeline_call(answer, error.to_string()),
                     }
+                } else if let Some(export_id) = promise_export {
+                    self.route_exported_promise_call(
+                        export_id,
+                        PendingPromiseCall {
+                            answer,
+                            interface_id: message.interface_id,
+                            method_id: message.method_id,
+                            params: message.params,
+                        },
+                    );
                 }
             }
             ProtocolMessage::Return(message) => {
@@ -969,6 +1349,8 @@ impl ConnectionActor {
                     self.protocol_failure(ConnectionError::Capability(error.to_string()));
                 }
             }
+            ProtocolMessage::Resolve(message) => self.incoming_resolve(message),
+            ProtocolMessage::Disembargo(message) => self.incoming_disembargo(message),
             ProtocolMessage::Abort(exception) => {
                 self.transition_terminal(ConnectionError::RemoteAbort(exception), false);
             }
@@ -981,6 +1363,243 @@ impl ConnectionActor {
                     Ok(message) => self.effects.push_back(ActorEffect::Send(message)),
                     Err(error) => {
                         self.protocol_failure(ConnectionError::Wire(error.to_string()));
+                    }
+                }
+            }
+        }
+    }
+
+    fn incoming_resolve(&mut self, message: ResolveMessage) {
+        let Some(state) = self.promise_imports.get(&message.promise_id) else {
+            self.release_abandoned_resolution(message.resolution);
+            return;
+        };
+        if !matches!(state, ImportPromiseState::Unresolved) {
+            self.protocol_failure(ConnectionError::Protocol(format!(
+                "promise import {} resolved more than once",
+                message.promise_id
+            )));
+            return;
+        }
+
+        let next = match message.resolution {
+            PromiseResolution::Exception(exception) => ImportPromiseState::Broken(exception),
+            PromiseResolution::Cap(CapDescriptor::SenderHosted(id)) => {
+                match self.capabilities.receive(&CapDescriptor::SenderHosted(id)) {
+                    Ok(ReceivedCapability::Imported(_)) => ImportPromiseState::Remote(id),
+                    Ok(_) => unreachable!("senderHosted has a fixed receive kind"),
+                    Err(error) => {
+                        self.protocol_failure(ConnectionError::Capability(error.to_string()));
+                        return;
+                    }
+                }
+            }
+            PromiseResolution::Cap(CapDescriptor::SenderPromise(id)) => {
+                if id == message.promise_id {
+                    self.protocol_failure(ConnectionError::Protocol(format!(
+                        "promise import {id} resolved to itself"
+                    )));
+                    return;
+                }
+                match self.capabilities.receive(&CapDescriptor::SenderPromise(id)) {
+                    Ok(ReceivedCapability::PromiseImported(_)) => {
+                        self.promise_imports
+                            .entry(id)
+                            .or_insert(ImportPromiseState::Unresolved);
+                        ImportPromiseState::Remote(id)
+                    }
+                    Ok(_) => unreachable!("senderPromise has a fixed receive kind"),
+                    Err(error) => {
+                        self.protocol_failure(ConnectionError::Capability(error.to_string()));
+                        return;
+                    }
+                }
+            }
+            PromiseResolution::Cap(CapDescriptor::ReceiverHosted(export_id)) => {
+                let capability = match self
+                    .capabilities
+                    .receive(&CapDescriptor::ReceiverHosted(export_id))
+                {
+                    Ok(ReceivedCapability::Hosted(capability)) => capability,
+                    Ok(ReceivedCapability::ExportedPromise(_)) => {
+                        // Keeping the original peer route is always a valid
+                        // non-shortened path. The peer's frozen export route
+                        // performs the eventual promise-to-promise forwarding.
+                        self.promise_imports.insert(
+                            message.promise_id,
+                            ImportPromiseState::Remote(message.promise_id),
+                        );
+                        return;
+                    }
+                    Ok(_) => unreachable!("receiverHosted has a fixed receive kind"),
+                    Err(error) => {
+                        self.protocol_failure(ConnectionError::Capability(error.to_string()));
+                        return;
+                    }
+                };
+                if self.embargoes.len() >= self.max_embargoes {
+                    self.protocol_failure(ConnectionError::Protocol(format!(
+                        "embargo limit {} exceeded",
+                        self.max_embargoes
+                    )));
+                    return;
+                }
+                let embargo_id = match lowest_free_actor_id(&self.embargoes) {
+                    Some(id) => id,
+                    None => {
+                        self.protocol_failure(ConnectionError::GenerationExhausted);
+                        return;
+                    }
+                };
+                self.embargoes.insert(
+                    embargo_id,
+                    EmbargoState {
+                        promise_id: message.promise_id,
+                        capability: capability.clone(),
+                        queued_calls: VecDeque::new(),
+                    },
+                );
+                let disembargo = encode_disembargo(
+                    &CallTarget::ImportedCap(message.promise_id),
+                    DisembargoContext::SenderLoopback(embargo_id),
+                    self.protocol_limits,
+                );
+                match disembargo {
+                    Ok(disembargo) => self.effects.push_back(ActorEffect::Send(disembargo)),
+                    Err(error) => {
+                        self.embargoes.remove(&embargo_id);
+                        self.protocol_failure(ConnectionError::Wire(error.to_string()));
+                        return;
+                    }
+                }
+                ImportPromiseState::Loopback {
+                    capability,
+                    embargo_id,
+                }
+            }
+            PromiseResolution::Cap(CapDescriptor::None) => ImportPromiseState::Broken(
+                RpcException::new("promise resolved to null", ExceptionType::Failed),
+            ),
+            PromiseResolution::Cap(CapDescriptor::ReceiverAnswer(target)) => {
+                if !self.questions.contains_id(target.question_id)
+                    || target.transform.len() > self.protocol_limits.max_pipeline_ops
+                {
+                    self.protocol_failure(ConnectionError::Protocol(format!(
+                        "promise resolution references unavailable receiverAnswer {}",
+                        target.question_id
+                    )));
+                    return;
+                }
+                ImportPromiseState::PromisedAnswer(target)
+            }
+        };
+        self.promise_imports.insert(message.promise_id, next);
+    }
+
+    fn release_abandoned_resolution(&mut self, resolution: PromiseResolution) {
+        let PromiseResolution::Cap(descriptor) = resolution else {
+            return;
+        };
+        match self.capabilities.receive(&descriptor) {
+            Ok(ReceivedCapability::Imported(id) | ReceivedCapability::PromiseImported(id)) => {
+                if let Err(error) = self.release_import(id, 1) {
+                    self.protocol_failure(error);
+                }
+            }
+            Ok(_) => {}
+            Err(error) => self.protocol_failure(ConnectionError::Capability(error.to_string())),
+        }
+    }
+
+    fn incoming_disembargo(&mut self, message: DisembargoMessage) {
+        match message.context {
+            DisembargoContext::SenderLoopback(id) => {
+                let CallTarget::ImportedCap(export_id) = message.target else {
+                    self.protocol_failure(ConnectionError::Protocol(
+                        "senderLoopback requires an importedCap target".to_owned(),
+                    ));
+                    return;
+                };
+                let Some(state) = self.promise_exports.get(&export_id) else {
+                    self.protocol_failure(ConnectionError::Protocol(format!(
+                        "senderLoopback targets unknown promise export {export_id}"
+                    )));
+                    return;
+                };
+                let Some(FrozenPromiseRoute::Imported(import_id)) = state.route else {
+                    self.protocol_failure(ConnectionError::Protocol(format!(
+                        "senderLoopback target {export_id} does not resolve back to its sender"
+                    )));
+                    return;
+                };
+                if !self.capabilities.contains_import(import_id) {
+                    self.protocol_failure(ConnectionError::Protocol(format!(
+                        "senderLoopback route references released import {import_id}"
+                    )));
+                    return;
+                }
+                match encode_disembargo(
+                    &CallTarget::ImportedCap(export_id),
+                    DisembargoContext::ReceiverLoopback(id),
+                    self.protocol_limits,
+                ) {
+                    Ok(reply) => self.effects.push_back(ActorEffect::Send(reply)),
+                    Err(error) => self.protocol_failure(ConnectionError::Wire(error.to_string())),
+                }
+            }
+            DisembargoContext::ReceiverLoopback(id) => {
+                let Some(embargo) = self.embargoes.remove(&id) else {
+                    self.protocol_failure(ConnectionError::Protocol(format!(
+                        "receiverLoopback references unknown embargo {id}"
+                    )));
+                    return;
+                };
+                let Some(remaining) = self.embargoed_calls.checked_sub(embargo.queued_calls.len())
+                else {
+                    self.protocol_failure(ConnectionError::Protocol(
+                        "embargoed-call accounting underflow".to_owned(),
+                    ));
+                    return;
+                };
+                self.embargoed_calls = remaining;
+                let matches = self
+                    .promise_imports
+                    .get(&embargo.promise_id)
+                    .is_some_and(|state| {
+                        matches!(
+                            state,
+                            ImportPromiseState::Loopback { embargo_id, .. } if *embargo_id == id
+                        )
+                    });
+                if !matches {
+                    self.protocol_failure(ConnectionError::Protocol(format!(
+                        "receiverLoopback {id} does not match its promise route"
+                    )));
+                    return;
+                }
+                self.promise_imports.insert(
+                    embargo.promise_id,
+                    ImportPromiseState::Local(embargo.capability.clone()),
+                );
+                for call in embargo.queued_calls {
+                    if call.capabilities.is_empty() {
+                        self.start_local_call(
+                            embargo.capability.clone(),
+                            call.interface_id,
+                            call.method_id,
+                            call.params,
+                            call.capabilities,
+                            call.cell,
+                        );
+                    } else {
+                        self.start_call(
+                            OutgoingCallTarget::Imported(embargo.promise_id),
+                            call.interface_id,
+                            call.method_id,
+                            call.params,
+                            call.capabilities,
+                            call.cell,
+                        );
                     }
                 }
             }
@@ -1025,11 +1644,48 @@ impl ConnectionActor {
                 .capabilities
                 .receive(descriptor)
                 .map_err(|error| ConnectionError::Capability(error.to_string()))?;
-            if let ReceivedCapability::Imported(id) = received {
-                imports.push(id);
+            match received {
+                ReceivedCapability::Imported(id) => imports.push(id),
+                ReceivedCapability::PromiseImported(id) => {
+                    match self.promise_imports.get(&id) {
+                        Some(ImportPromiseState::Unresolved) | None => {
+                            self.promise_imports
+                                .entry(id)
+                                .or_insert(ImportPromiseState::Unresolved);
+                        }
+                        Some(_) => {
+                            return Err(ConnectionError::Protocol(format!(
+                                "resolved promise import {id} was described again"
+                            )));
+                        }
+                    }
+                    imports.push(id);
+                }
+                ReceivedCapability::None
+                | ReceivedCapability::Hosted(_)
+                | ReceivedCapability::ExportedPromise(_)
+                | ReceivedCapability::ReceiverAnswer(_) => {}
             }
         }
         Ok(imports)
+    }
+
+    fn apply_implicit_import_releases(&mut self, ids: &[u32]) -> Result<(), ConnectionError> {
+        self.capabilities
+            .apply_implicit_import_releases(ids)
+            .map_err(|error| ConnectionError::Capability(error.to_string()))?;
+        let unique = ids.iter().copied().collect::<BTreeSet<_>>();
+        for id in unique {
+            if self.capabilities.contains_import(id) {
+                continue;
+            }
+            if let Some(ImportPromiseState::Remote(target)) = self.promise_imports.remove(&id) {
+                if self.capabilities.contains_import(target) {
+                    self.release_import(target, 1)?;
+                }
+            }
+        }
+        Ok(())
     }
 
     fn describe_outgoing_capabilities(
@@ -1050,10 +1706,227 @@ impl ConnectionActor {
                     ));
                 }
             }
+            if let OutgoingCapability::Promise(promise) = capability {
+                if let Some(export_id) = self.capabilities.promise_export_id(promise.identity()) {
+                    if self
+                        .promise_exports
+                        .get(&export_id)
+                        .is_some_and(|state| state.route.is_some())
+                    {
+                        return Err(ConnectionError::Protocol(
+                            "a resolved promise cannot be described as senderPromise again"
+                                .to_owned(),
+                        ));
+                    }
+                }
+            }
         }
-        self.capabilities
+        let descriptors = self
+            .capabilities
             .describe_all(capabilities)
-            .map_err(|error| ConnectionError::Capability(error.to_string()))
+            .map_err(|error| ConnectionError::Capability(error.to_string()))?;
+        for (capability, descriptor) in capabilities.iter().zip(&descriptors) {
+            if let (OutgoingCapability::Promise(promise), CapDescriptor::SenderPromise(id)) =
+                (capability, descriptor)
+            {
+                self.promise_exports
+                    .entry(*id)
+                    .or_insert_with(|| ExportPromiseState {
+                        identity: promise.identity(),
+                        route: None,
+                        queued_calls: VecDeque::new(),
+                    });
+            }
+        }
+        Ok(descriptors)
+    }
+
+    fn resolve_promise(&mut self, identity: u64, resolution: LocalPromiseResolution) {
+        let Some(export_id) = self
+            .promise_exports
+            .iter()
+            .find_map(|(id, state)| (state.identity == identity).then_some(*id))
+        else {
+            self.protocol_failure(ConnectionError::Capability(format!(
+                "promise identity {identity} was resolved before being exported"
+            )));
+            return;
+        };
+        if self
+            .promise_exports
+            .get(&export_id)
+            .is_some_and(|state| state.route.is_some())
+        {
+            self.protocol_failure(ConnectionError::Protocol(format!(
+                "promise export {export_id} resolved more than once"
+            )));
+            return;
+        }
+
+        let live_export = self.capabilities.contains_export(export_id);
+        let (wire, frozen) = match resolution {
+            LocalPromiseResolution::Hosted(capability) => {
+                let descriptor = if live_export {
+                    match self
+                        .capabilities
+                        .describe(&OutgoingCapability::Hosted(capability.clone()))
+                    {
+                        Ok(descriptor @ CapDescriptor::SenderHosted(_)) => Some(descriptor),
+                        Ok(_) => unreachable!("hosted capability has a fixed descriptor kind"),
+                        Err(error) => {
+                            self.protocol_failure(ConnectionError::Capability(error.to_string()));
+                            return;
+                        }
+                    }
+                } else {
+                    None
+                };
+                (
+                    descriptor.map(PromiseResolution::Cap),
+                    FrozenPromiseRoute::Hosted(capability),
+                )
+            }
+            LocalPromiseResolution::Imported(import_id) => {
+                if !self.capabilities.contains_import(import_id) {
+                    self.protocol_failure(ConnectionError::Capability(format!(
+                        "promise resolution references unknown import {import_id}"
+                    )));
+                    return;
+                }
+                (
+                    live_export.then_some(PromiseResolution::Cap(CapDescriptor::ReceiverHosted(
+                        import_id,
+                    ))),
+                    FrozenPromiseRoute::Imported(import_id),
+                )
+            }
+            LocalPromiseResolution::Exception(exception) => (
+                live_export.then(|| PromiseResolution::Exception(exception.clone())),
+                FrozenPromiseRoute::Exception(exception),
+            ),
+        };
+        let queued = {
+            let state = self
+                .promise_exports
+                .get_mut(&export_id)
+                .expect("promise export found above");
+            state.route = Some(frozen.clone());
+            core::mem::take(&mut state.queued_calls)
+        };
+        for call in queued {
+            self.route_frozen_promise_call(call, &frozen);
+        }
+        if let Some(wire) = wire {
+            match encode_resolve(export_id, &wire, self.protocol_limits) {
+                Ok(message) => self.effects.push_back(ActorEffect::Send(message)),
+                Err(error) => self.protocol_failure(ConnectionError::Wire(error.to_string())),
+            }
+        } else {
+            self.promise_exports.remove(&export_id);
+            self.capabilities.release_promise_reservation(export_id);
+        }
+    }
+
+    fn route_exported_promise_call(&mut self, export_id: u32, call: PendingPromiseCall) {
+        let Some(state) = self.promise_exports.get_mut(&export_id) else {
+            self.protocol_failure(ConnectionError::Protocol(format!(
+                "call targets unknown promise export {export_id}"
+            )));
+            return;
+        };
+        if let Some(route) = state.route.clone() {
+            self.route_frozen_promise_call(call, &route);
+        } else {
+            state.queued_calls.push_back(call);
+        }
+    }
+
+    fn route_frozen_promise_call(&mut self, call: PendingPromiseCall, route: &FrozenPromiseRoute) {
+        match route {
+            FrozenPromiseRoute::Hosted(capability) => self.dispatch(
+                IncomingRequest::Call {
+                    target: IncomingCallTarget::Hosted(capability.clone()),
+                    interface_id: call.interface_id,
+                    method_id: call.method_id,
+                    params: call.params,
+                },
+                call.answer,
+            ),
+            FrozenPromiseRoute::Imported(import_id) => {
+                let capabilities = match self.forwarding_capabilities(&call.params.cap_table) {
+                    Ok(capabilities) => capabilities,
+                    Err(error) => {
+                        self.fail_pipeline_call(call.answer, error.to_string());
+                        return;
+                    }
+                };
+                self.start_tail_call_common(
+                    call.answer,
+                    *import_id,
+                    call.interface_id,
+                    call.method_id,
+                    TailCallParams::Dynamic(call.params),
+                    capabilities,
+                );
+            }
+            FrozenPromiseRoute::Exception(exception) => {
+                self.fail_pipeline_call(call.answer, exception.reason.clone());
+            }
+        }
+    }
+
+    fn forwarding_capabilities(
+        &mut self,
+        descriptors: &[CapDescriptor],
+    ) -> Result<Vec<OutgoingCapability>, ConnectionError> {
+        descriptors
+            .iter()
+            .map(|descriptor| match descriptor {
+                CapDescriptor::None => Ok(OutgoingCapability::None),
+                CapDescriptor::SenderHosted(id) | CapDescriptor::SenderPromise(id) => {
+                    Ok(OutgoingCapability::ReceiverHosted(*id))
+                }
+                CapDescriptor::ReceiverHosted(_) => match self.capabilities.receive(descriptor) {
+                    Ok(ReceivedCapability::Hosted(capability)) => {
+                        Ok(OutgoingCapability::Hosted(capability))
+                    }
+                    Ok(ReceivedCapability::ExportedPromise(capability)) => {
+                        Ok(OutgoingCapability::Promise(capability))
+                    }
+                    Ok(_) => unreachable!("receiverHosted has a fixed receive kind"),
+                    Err(error) => Err(ConnectionError::Capability(error.to_string())),
+                },
+                CapDescriptor::ReceiverAnswer(target) => {
+                    if !self.questions.contains_id(target.question_id) {
+                        return Err(ConnectionError::Protocol(format!(
+                            "forwarded receiverAnswer references inactive question {}",
+                            target.question_id
+                        )));
+                    }
+                    Ok(OutgoingCapability::ReceiverAnswer(target.clone()))
+                }
+            })
+            .collect()
+    }
+
+    fn local_call_complete(
+        &mut self,
+        question: QuestionKey,
+        result: HandlerResult,
+        capabilities: Vec<OutgoingCapability>,
+    ) {
+        let Some(question_state) = self.questions.remove(question) else {
+            self.stats.stale_handler_completions =
+                self.stats.stale_handler_completions.saturating_add(1);
+            return;
+        };
+        self.stats.completed_handlers = self.stats.completed_handlers.saturating_add(1);
+        question_state
+            .cell
+            .complete(redirected_response_payload(RedirectedResponse {
+                result,
+                capabilities,
+            }));
     }
 
     fn route_pipeline_call(&mut self, pending: PendingPipelineCall, pipeline: &PipelineSnapshot) {
@@ -1081,11 +1954,8 @@ impl ConnectionActor {
         let result = HandlerResult::Exception(RpcException::new(reason, ExceptionType::Failed));
         match encode_return(answer.id, &result, self.protocol_limits) {
             Ok(message) => {
-                if let Err(error) = self
-                    .capabilities
-                    .apply_implicit_import_releases(&param_imports)
-                {
-                    self.protocol_failure(ConnectionError::Capability(error.to_string()));
+                if let Err(error) = self.apply_implicit_import_releases(&param_imports) {
+                    self.protocol_failure(error);
                     return;
                 }
                 self.effects.push_back(ActorEffect::Send(message));
@@ -1126,11 +1996,8 @@ impl ConnectionActor {
                 return;
             }
         };
-        if let Err(error) = self
-            .capabilities
-            .apply_implicit_import_releases(&param_imports)
-        {
-            self.protocol_failure(ConnectionError::Capability(error.to_string()));
+        if let Err(error) = self.apply_implicit_import_releases(&param_imports) {
+            self.protocol_failure(error);
             return;
         }
         let queued = if let Some(pipeline) = pipeline {
@@ -1270,11 +2137,8 @@ impl ConnectionActor {
         let finish = self.answers.finish_state(answer);
         match encode_return(answer.id, &result, self.protocol_limits) {
             Ok(message) => {
-                if let Err(error) = self
-                    .capabilities
-                    .apply_implicit_import_releases(&param_imports)
-                {
-                    self.protocol_failure(ConnectionError::Capability(error.to_string()));
+                if let Err(error) = self.apply_implicit_import_releases(&param_imports) {
+                    self.protocol_failure(error);
                     return;
                 }
                 let queued = if let Some(pipeline) = pipeline {
@@ -1361,6 +2225,10 @@ impl ConnectionActor {
         }
         self.answers.clear();
         self.capabilities.clear();
+        self.promise_imports.clear();
+        self.promise_exports.clear();
+        self.embargoes.clear();
+        self.embargoed_calls = 0;
         if let Ok(commands) = self.mailbox.drain() {
             for command in commands {
                 complete_rejected(command, error.clone());
@@ -1402,6 +2270,15 @@ enum ActorCommand {
         result: HandlerResult,
         capabilities: Vec<OutgoingCapability>,
     },
+    ResolvePromise {
+        identity: u64,
+        resolution: LocalPromiseResolution,
+    },
+    LocalCallComplete {
+        question: QuestionKey,
+        result: HandlerResult,
+        capabilities: Vec<OutgoingCapability>,
+    },
     Shutdown,
 }
 
@@ -1414,12 +2291,23 @@ fn sender_hosted_ids(descriptors: &[CapDescriptor]) -> Vec<u32> {
     descriptors
         .iter()
         .filter_map(|descriptor| match descriptor {
-            CapDescriptor::SenderHosted(id) => Some(*id),
+            CapDescriptor::SenderHosted(id) | CapDescriptor::SenderPromise(id) => Some(*id),
             CapDescriptor::None
             | CapDescriptor::ReceiverHosted(_)
             | CapDescriptor::ReceiverAnswer(_) => None,
         })
         .collect()
+}
+
+fn lowest_free_actor_id<T>(values: &BTreeMap<u32, T>) -> Option<u32> {
+    let mut candidate = 0_u32;
+    for id in values.keys().copied() {
+        if id != candidate {
+            break;
+        }
+        candidate = candidate.checked_add(1)?;
+    }
+    Some(candidate)
 }
 
 fn resolve_pipeline_target(
@@ -1459,7 +2347,8 @@ fn resolve_pipeline_target(
         Some(OutgoingCapability::None) | None => Err(ConnectionError::Protocol(format!(
             "pipeline capability index {index} is absent"
         ))),
-        Some(OutgoingCapability::ReceiverHosted(_))
+        Some(OutgoingCapability::Promise(_))
+        | Some(OutgoingCapability::ReceiverHosted(_))
         | Some(OutgoingCapability::ReceiverAnswer(_)) => Err(ConnectionError::Protocol(
             "pipeline target requires Level-1 tail routing".to_owned(),
         )),
@@ -1503,6 +2392,8 @@ fn complete_rejected(command: ActorCommand, error: ConnectionError) {
         ActorCommand::Incoming(_)
         | ActorCommand::StartTailCall { .. }
         | ActorCommand::HandlerComplete { .. }
+        | ActorCommand::ResolvePromise { .. }
+        | ActorCommand::LocalCallComplete { .. }
         | ActorCommand::Shutdown => {}
     }
 }
@@ -2153,6 +3044,8 @@ fn _assert_public_send_traits() {
     assert_send::<ConnectionActor>();
     assert_send::<QuestionFuture>();
     assert_send::<CompletionToken>();
+    assert_send::<LocalCompletionToken>();
+    assert_send::<PromiseResolver>();
     assert_send_sync::<HostedCapability>();
     assert_send_sync::<OutgoingCapability>();
     assert_send::<CapabilityTables>();
@@ -2203,6 +3096,386 @@ mod tests {
     fn poll_future(future: &mut QuestionFuture) -> Poll<Result<ReturnPayload, ConnectionError>> {
         let mut context = Context::from_waker(Waker::noop());
         Pin::new(future).poll(&mut context)
+    }
+
+    #[test]
+    fn promise_resolution_freezes_the_original_remote_route() {
+        let (handle, mut actor) =
+            ConnectionActor::new(ActorLimits::default(), ProtocolLimits::default());
+        let (promise, resolver) = handle.new_promise().expect("promise");
+        assert_eq!(
+            actor
+                .describe_outgoing_capabilities(&[OutgoingCapability::Promise(promise)])
+                .expect("export promise"),
+            vec![CapDescriptor::SenderPromise(0)]
+        );
+        assert_eq!(
+            actor.capabilities.receive(&CapDescriptor::SenderPromise(7)),
+            Ok(ReceivedCapability::PromiseImported(7))
+        );
+        actor
+            .promise_imports
+            .insert(7, ImportPromiseState::Unresolved);
+
+        resolver.resolve_to_import(7).expect("resolve queued");
+        let Poll::Ready(Some(ActorEffect::Send(resolve))) = next(&mut actor) else {
+            panic!("resolve message")
+        };
+        assert!(matches!(
+            read_protocol_message(resolve).expect("decode resolve"),
+            ProtocolMessage::Resolve(ResolveMessage {
+                promise_id: 0,
+                resolution: PromiseResolution::Cap(CapDescriptor::ReceiverHosted(7)),
+            })
+        ));
+
+        handle
+            .receive(
+                encode_resolve(
+                    7,
+                    &PromiseResolution::Cap(CapDescriptor::SenderHosted(8)),
+                    ProtocolLimits::default(),
+                )
+                .expect("resolve chained promise"),
+            )
+            .expect("incoming resolve queued");
+        assert!(matches!(next(&mut actor), Poll::Pending));
+
+        handle
+            .receive(
+                crate::encode_call(
+                    41,
+                    CallTarget::ImportedCap(0),
+                    0xabc,
+                    3,
+                    &message(123),
+                    ProtocolLimits::default(),
+                )
+                .expect("promise call"),
+            )
+            .expect("call queued");
+        let Poll::Ready(Some(ActorEffect::Send(forwarded))) = next(&mut actor) else {
+            panic!("forwarded tail call")
+        };
+        let ProtocolMessage::Call(forwarded) =
+            read_protocol_message(forwarded).expect("decode forwarded call")
+        else {
+            panic!("call")
+        };
+        assert_eq!(forwarded.target, CallTarget::ImportedCap(7));
+        assert_eq!(forwarded.send_results_to, SendResultsTo::Yourself);
+        let Poll::Ready(Some(ActorEffect::Send(returned))) = next(&mut actor) else {
+            panic!("tail-routing return")
+        };
+        assert!(matches!(
+            read_protocol_message(returned).expect("decode return"),
+            ProtocolMessage::Return(crate::ReturnMessage {
+                payload: ReturnPayload::TakeFromOtherQuestion(_),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn release_before_resolve_suppresses_resolve_and_releases_the_id_tombstone() {
+        let (handle, mut actor) =
+            ConnectionActor::new(ActorLimits::default(), ProtocolLimits::default());
+        let (promise, resolver) = handle.new_promise().expect("promise");
+        actor
+            .describe_outgoing_capabilities(&[OutgoingCapability::Promise(promise)])
+            .expect("export promise");
+        handle
+            .receive(encode_release(0, 1, ProtocolLimits::default()).expect("release message"))
+            .expect("release queued");
+        assert!(matches!(next(&mut actor), Poll::Pending));
+        assert!(!actor.capabilities.contains_export(0));
+
+        resolver
+            .resolve_to_hosted(HostedCapability::new().expect("late hosted resolution"))
+            .expect("late resolution queued");
+        assert!(matches!(next(&mut actor), Poll::Pending));
+        assert!(!actor.terminal);
+        assert!(!actor.promise_exports.contains_key(&0));
+        assert_eq!(actor.stats().active_exports, 0);
+
+        let hosted = HostedCapability::new().expect("hosted");
+        assert_eq!(
+            actor
+                .describe_outgoing_capabilities(&[OutgoingCapability::Hosted(hosted)])
+                .expect("freed ID reusable"),
+            vec![CapDescriptor::SenderHosted(0)]
+        );
+    }
+
+    #[test]
+    fn loopback_resolution_queues_calls_until_receiver_disembargo() {
+        let (handle, mut actor) =
+            ConnectionActor::new(ActorLimits::default(), ProtocolLimits::default());
+        let hosted = HostedCapability::new().expect("hosted");
+        assert_eq!(
+            actor
+                .describe_outgoing_capabilities(&[OutgoingCapability::Hosted(hosted.clone())])
+                .expect("export hosted"),
+            vec![CapDescriptor::SenderHosted(0)]
+        );
+        assert_eq!(
+            actor.capabilities.receive(&CapDescriptor::SenderPromise(7)),
+            Ok(ReceivedCapability::PromiseImported(7))
+        );
+        actor
+            .promise_imports
+            .insert(7, ImportPromiseState::Unresolved);
+
+        handle
+            .receive(
+                encode_resolve(
+                    7,
+                    &PromiseResolution::Cap(CapDescriptor::ReceiverHosted(0)),
+                    ProtocolLimits::default(),
+                )
+                .expect("loopback resolve"),
+            )
+            .expect("resolve queued");
+        let Poll::Ready(Some(ActorEffect::Send(disembargo))) = next(&mut actor) else {
+            panic!("sender disembargo")
+        };
+        assert!(matches!(
+            read_protocol_message(disembargo).expect("decode disembargo"),
+            ProtocolMessage::Disembargo(DisembargoMessage {
+                target: CallTarget::ImportedCap(7),
+                context: DisembargoContext::SenderLoopback(0),
+            })
+        ));
+
+        let mut future = handle
+            .call_imported(7, 0xabc, 5, message(99), Vec::new())
+            .expect("loopback call queued");
+        assert!(matches!(next(&mut actor), Poll::Pending));
+        assert!(matches!(poll_future(&mut future), Poll::Pending));
+        assert_eq!(actor.stats().queued_embargo_calls, 1);
+
+        handle
+            .receive(
+                encode_disembargo(
+                    &CallTarget::ImportedCap(7),
+                    DisembargoContext::ReceiverLoopback(0),
+                    ProtocolLimits::default(),
+                )
+                .expect("receiver disembargo"),
+            )
+            .expect("receiver disembargo queued");
+        let Poll::Ready(Some(ActorEffect::DispatchLocal {
+            request:
+                IncomingRequest::Call {
+                    target: IncomingCallTarget::Hosted(target),
+                    method_id: 5,
+                    ..
+                },
+            completion,
+        })) = next(&mut actor)
+        else {
+            panic!("local dispatch after receiver disembargo")
+        };
+        assert_eq!(target, hosted);
+        completion
+            .complete(HandlerResult::Results(message(100)))
+            .expect("local completion queued");
+        assert!(matches!(next(&mut actor), Poll::Pending));
+        assert!(matches!(
+            poll_future(&mut future),
+            Poll::Ready(Ok(ReturnPayload::LocalResults { .. }))
+        ));
+        assert_eq!(actor.stats().active_embargoes, 0);
+        assert_eq!(actor.stats().queued_embargo_calls, 0);
+    }
+
+    #[test]
+    fn embargoed_call_limit_rejects_without_growing_the_queue() {
+        let limits = ActorLimits {
+            max_embargoed_calls: 0,
+            ..ActorLimits::default()
+        };
+        let (handle, mut actor) = ConnectionActor::new(limits, ProtocolLimits::default());
+        let hosted = HostedCapability::new().expect("hosted");
+        actor.promise_imports.insert(
+            7,
+            ImportPromiseState::Loopback {
+                capability: hosted.clone(),
+                embargo_id: 0,
+            },
+        );
+        actor.embargoes.insert(
+            0,
+            EmbargoState {
+                promise_id: 7,
+                capability: hosted,
+                queued_calls: VecDeque::new(),
+            },
+        );
+        let mut future = handle
+            .call_imported(7, 1, 2, message(3), Vec::new())
+            .expect("mailbox accepts call");
+        assert!(matches!(next(&mut actor), Poll::Pending));
+        assert!(matches!(
+            poll_future(&mut future),
+            Poll::Ready(Err(ConnectionError::Overloaded { capacity: 0 }))
+        ));
+        assert_eq!(actor.stats().queued_embargo_calls, 0);
+    }
+
+    #[test]
+    fn calls_received_before_resolution_route_before_the_resolve_message() {
+        let (handle, mut actor) =
+            ConnectionActor::new(ActorLimits::default(), ProtocolLimits::default());
+        let (promise, resolver) = handle.new_promise().expect("promise");
+        actor
+            .describe_outgoing_capabilities(&[OutgoingCapability::Promise(promise)])
+            .expect("export promise");
+        handle
+            .receive(
+                crate::encode_call(
+                    55,
+                    CallTarget::ImportedCap(0),
+                    0xabc,
+                    9,
+                    &message(1),
+                    ProtocolLimits::default(),
+                )
+                .expect("call before resolve"),
+            )
+            .expect("call queued");
+        assert!(matches!(next(&mut actor), Poll::Pending));
+
+        let hosted = HostedCapability::new().expect("hosted");
+        resolver
+            .resolve_to_hosted(hosted.clone())
+            .expect("resolution queued");
+        let Poll::Ready(Some(ActorEffect::Dispatch {
+            request:
+                IncomingRequest::Call {
+                    target: IncomingCallTarget::Hosted(target),
+                    method_id: 9,
+                    ..
+                },
+            ..
+        })) = next(&mut actor)
+        else {
+            panic!("queued call dispatches first")
+        };
+        assert_eq!(target, hosted);
+        let Poll::Ready(Some(ActorEffect::Send(resolve))) = next(&mut actor) else {
+            panic!("resolve follows prior call dispatch")
+        };
+        assert!(matches!(
+            read_protocol_message(resolve).expect("decode resolve"),
+            ProtocolMessage::Resolve(ResolveMessage {
+                promise_id: 0,
+                resolution: PromiseResolution::Cap(CapDescriptor::SenderHosted(1)),
+            })
+        ));
+    }
+
+    #[test]
+    fn resolve_for_released_import_releases_its_resolution_capability() {
+        let (_handle, mut actor) =
+            ConnectionActor::new(ActorLimits::default(), ProtocolLimits::default());
+        assert_eq!(
+            actor.capabilities.receive(&CapDescriptor::SenderPromise(7)),
+            Ok(ReceivedCapability::PromiseImported(7))
+        );
+        actor
+            .promise_imports
+            .insert(7, ImportPromiseState::Unresolved);
+        actor.release_import(7, 1).expect("release promise import");
+        let Poll::Ready(Some(ActorEffect::Send(release))) = next(&mut actor) else {
+            panic!("promise release")
+        };
+        assert!(matches!(
+            read_protocol_message(release).expect("decode release"),
+            ProtocolMessage::Release(crate::ReleaseMessage {
+                id: 7,
+                reference_count: 1
+            })
+        ));
+
+        actor
+            .handle
+            .receive(
+                encode_resolve(
+                    7,
+                    &PromiseResolution::Cap(CapDescriptor::SenderHosted(8)),
+                    ProtocolLimits::default(),
+                )
+                .expect("late resolve"),
+            )
+            .expect("late resolve queued");
+        let Poll::Ready(Some(ActorEffect::Send(release))) = next(&mut actor) else {
+            panic!("resolution capability release")
+        };
+        assert!(matches!(
+            read_protocol_message(release).expect("decode release"),
+            ProtocolMessage::Release(crate::ReleaseMessage {
+                id: 8,
+                reference_count: 1
+            })
+        ));
+        assert!(!actor.terminal);
+    }
+
+    #[test]
+    fn broken_promise_short_circuits_calls_and_duplicate_resolve_is_fatal() {
+        let (handle, mut actor) =
+            ConnectionActor::new(ActorLimits::default(), ProtocolLimits::default());
+        actor
+            .capabilities
+            .receive(&CapDescriptor::SenderPromise(7))
+            .expect("promise import");
+        actor
+            .promise_imports
+            .insert(7, ImportPromiseState::Unresolved);
+        let broken = RpcException::new("broken promise", ExceptionType::Failed);
+        handle
+            .receive(
+                encode_resolve(
+                    7,
+                    &PromiseResolution::Exception(broken.clone()),
+                    ProtocolLimits::default(),
+                )
+                .expect("broken resolve"),
+            )
+            .expect("broken resolve queued");
+        assert!(matches!(next(&mut actor), Poll::Pending));
+        let mut future = handle
+            .call_imported(7, 1, 2, message(3), Vec::new())
+            .expect("broken call accepted");
+        assert!(matches!(next(&mut actor), Poll::Pending));
+        assert!(matches!(
+            poll_future(&mut future),
+            Poll::Ready(Ok(ReturnPayload::Exception(exception))) if exception == broken
+        ));
+
+        handle
+            .receive(
+                encode_resolve(
+                    7,
+                    &PromiseResolution::Exception(RpcException::new(
+                        "duplicate",
+                        ExceptionType::Failed,
+                    )),
+                    ProtocolLimits::default(),
+                )
+                .expect("duplicate resolve"),
+            )
+            .expect("duplicate resolve queued");
+        assert!(matches!(
+            next(&mut actor),
+            Poll::Ready(Some(ActorEffect::Send(_)))
+        ));
+        assert!(matches!(
+            next(&mut actor),
+            Poll::Ready(Some(ActorEffect::CloseTransport))
+        ));
+        assert!(actor.terminal);
     }
 
     #[test]

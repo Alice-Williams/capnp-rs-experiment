@@ -56,7 +56,8 @@ checks a pinned-C++ calculator trace containing `getOperator()` and pipelined
 `evaluate()` calls before either source return, then has pinned C++ validate the
 native returns.
 
-M35 does not implement `Resolve`, `senderPromise`, disembargo/E-order,
-streaming flow control, cooperative cancellation of already-dispatched
-application work, reconnect, attached resources, or three-party RPC. Those
-belong to M36 and later milestones.
+M35 itself does not implement `Resolve`, `senderPromise`, or
+disembargo/E-order. M36 adds those behaviors as described in
+[promise-resolution-and-e-order.md](promise-resolution-and-e-order.md).
+Streaming flow control, cooperative cancellation of already-dispatched work,
+reconnect, attached resources, and three-party RPC remain later milestones.

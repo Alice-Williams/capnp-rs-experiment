@@ -14,8 +14,9 @@ use capnp_schema::{
 };
 
 use crate::level0::{
-    BootstrapMessage, CallMessage, FinishMessage, ReleaseMessage, ReturnMessage, read_bootstrap,
-    read_call, read_finish, read_release, read_return,
+    BootstrapMessage, CallMessage, DisembargoMessage, FinishMessage, ReleaseMessage,
+    ResolveMessage, ReturnMessage, read_bootstrap, read_call, read_disembargo, read_finish,
+    read_release, read_resolve, read_return,
 };
 
 pub const RPC_SCHEMA_SHA256: &str =
@@ -117,7 +118,9 @@ pub enum ProtocolMessage {
     Call(CallMessage),
     Return(ReturnMessage),
     Finish(FinishMessage),
+    Resolve(ResolveMessage),
     Release(ReleaseMessage),
+    Disembargo(DisembargoMessage),
     /// Includes both later-level messages and discriminants added by a newer
     /// schema revision. M32 does not assign either category semantics.
     Unsupported {
@@ -327,7 +330,9 @@ fn read_protocol_struct_with_limits(
         2 => Ok(ProtocolMessage::Call(read_call(&root, limits)?)),
         3 => Ok(ProtocolMessage::Return(read_return(&root, limits)?)),
         4 => Ok(ProtocolMessage::Finish(read_finish(&root)?)),
+        5 => Ok(ProtocolMessage::Resolve(read_resolve(&root, limits)?)),
         6 => Ok(ProtocolMessage::Release(read_release(&root)?)),
+        13 => Ok(ProtocolMessage::Disembargo(read_disembargo(&root, limits)?)),
         discriminant => Ok(ProtocolMessage::Unsupported { discriminant }),
     }
 }

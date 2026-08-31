@@ -9,11 +9,13 @@
 //! or excessive `Release` is a protocol error. Disconnect clears all four
 //! tables without emitting traffic.
 //!
-//! M35 adds `receiverAnswer` as a non-refcounted routing descriptor. Promise
-//! resolution, embargo, third-party handoff, and attached resources are
-//! intentionally not implemented here.
+//! M35 adds `receiverAnswer` as a non-refcounted routing descriptor. M36 adds
+//! `senderPromise`, exact promise references, and released-ID tombstones that
+//! prevent reuse until a late resolver is observed. Route resolution and
+//! embargo ordering remain owned exclusively by the connection actor;
+//! third-party handoff and attached resources remain later milestones.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -21,6 +23,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::{CapDescriptor, PromisedAnswer, ReleaseMessage};
 
 static NEXT_HOSTED_IDENTITY: AtomicU64 = AtomicU64::new(1);
+static NEXT_PROMISE_IDENTITY: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone)]
 pub struct HostedCapability {
@@ -66,10 +69,55 @@ impl PartialEq for HostedCapability {
 
 impl Eq for HostedCapability {}
 
+#[derive(Clone)]
+pub struct PromiseCapability {
+    identity: Arc<PromiseIdentity>,
+}
+
+#[derive(Debug)]
+struct PromiseIdentity {
+    id: u64,
+}
+
+impl PromiseCapability {
+    pub fn new() -> Result<Self, CapabilityError> {
+        let id = NEXT_PROMISE_IDENTITY
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                value.checked_add(1)
+            })
+            .map_err(|_| CapabilityError::IdentityExhausted)?;
+        Ok(Self {
+            identity: Arc::new(PromiseIdentity { id }),
+        })
+    }
+
+    pub fn identity(&self) -> u64 {
+        self.identity.id
+    }
+}
+
+impl fmt::Debug for PromiseCapability {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PromiseCapability")
+            .field("identity", &self.identity())
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for PromiseCapability {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.identity, &other.identity)
+    }
+}
+
+impl Eq for PromiseCapability {}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OutgoingCapability {
     None,
     Hosted(HostedCapability),
+    Promise(PromiseCapability),
     ReceiverAnswer(PromisedAnswer),
     /// A capability imported from this peer and now sent back to it.
     ReceiverHosted(u32),
@@ -80,8 +128,10 @@ pub enum ReceivedCapability {
     None,
     /// A settled capability hosted by the peer, addressed by its export ID.
     Imported(u32),
+    PromiseImported(u32),
     /// A capability previously exported by this connection endpoint.
     Hosted(HostedCapability),
+    ExportedPromise(PromiseCapability),
     ReceiverAnswer(PromisedAnswer),
 }
 
@@ -116,13 +166,35 @@ impl std::error::Error for CapabilityError {}
 
 #[derive(Clone)]
 struct ExportEntry {
-    capability: HostedCapability,
+    capability: ExportCapability,
     references: u64,
+}
+
+#[derive(Clone)]
+enum ExportCapability {
+    Hosted(HostedCapability),
+    Promise(PromiseCapability),
+}
+
+impl ExportCapability {
+    fn key(&self) -> ExportIdentity {
+        match self {
+            Self::Hosted(capability) => ExportIdentity::Hosted(capability.identity()),
+            Self::Promise(capability) => ExportIdentity::Promise(capability.identity()),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum ExportIdentity {
+    Hosted(u64),
+    Promise(u64),
 }
 
 #[derive(Clone, Copy)]
 struct ImportEntry {
     references: u64,
+    promise: bool,
 }
 
 /// Connection-local import/export tables. The connection actor is the sole
@@ -131,7 +203,8 @@ struct ImportEntry {
 pub struct CapabilityTables {
     imports: BTreeMap<u32, ImportEntry>,
     exports: BTreeMap<u32, ExportEntry>,
-    export_by_identity: BTreeMap<u64, u32>,
+    export_by_identity: BTreeMap<ExportIdentity, u32>,
+    reserved_export_ids: BTreeSet<u32>,
     max_imports: usize,
     max_exports: usize,
 }
@@ -142,6 +215,7 @@ impl CapabilityTables {
             imports: BTreeMap::new(),
             exports: BTreeMap::new(),
             export_by_identity: BTreeMap::new(),
+            reserved_export_ids: BTreeSet::new(),
             max_imports,
             max_exports,
         }
@@ -163,35 +237,10 @@ impl CapabilityTables {
         match capability {
             OutgoingCapability::None => Ok(CapDescriptor::None),
             OutgoingCapability::Hosted(capability) => {
-                if self.stats().export_references == u64::MAX {
-                    return Err(CapabilityError::ReferenceCountOverflow);
-                }
-                if let Some(id) = self.export_by_identity.get(&capability.identity()).copied() {
-                    let entry = self
-                        .exports
-                        .get_mut(&id)
-                        .ok_or(CapabilityError::UnknownExport(id))?;
-                    entry.references = entry
-                        .references
-                        .checked_add(1)
-                        .ok_or(CapabilityError::ReferenceCountOverflow)?;
-                    return Ok(CapDescriptor::SenderHosted(id));
-                }
-                if self.exports.len() >= self.max_exports {
-                    return Err(CapabilityError::ExportLimit {
-                        limit: self.max_exports,
-                    });
-                }
-                let id = lowest_free_id(&self.exports)?;
-                self.exports.insert(
-                    id,
-                    ExportEntry {
-                        capability: capability.clone(),
-                        references: 1,
-                    },
-                );
-                self.export_by_identity.insert(capability.identity(), id);
-                Ok(CapDescriptor::SenderHosted(id))
+                self.describe_export(ExportCapability::Hosted(capability.clone()))
+            }
+            OutgoingCapability::Promise(capability) => {
+                self.describe_export(ExportCapability::Promise(capability.clone()))
             }
             OutgoingCapability::ReceiverHosted(id) => {
                 if !self.imports.contains_key(id) {
@@ -203,6 +252,48 @@ impl CapabilityTables {
                 Ok(CapDescriptor::ReceiverAnswer(promised_answer.clone()))
             }
         }
+    }
+
+    fn describe_export(
+        &mut self,
+        capability: ExportCapability,
+    ) -> Result<CapDescriptor, CapabilityError> {
+        let key = capability.key();
+        if self.stats().export_references == u64::MAX {
+            return Err(CapabilityError::ReferenceCountOverflow);
+        }
+        if let Some(id) = self.export_by_identity.get(&key).copied() {
+            let entry = self
+                .exports
+                .get_mut(&id)
+                .ok_or(CapabilityError::UnknownExport(id))?;
+            entry.references = entry
+                .references
+                .checked_add(1)
+                .ok_or(CapabilityError::ReferenceCountOverflow)?;
+            return Ok(match capability {
+                ExportCapability::Hosted(_) => CapDescriptor::SenderHosted(id),
+                ExportCapability::Promise(_) => CapDescriptor::SenderPromise(id),
+            });
+        }
+        if self.exports.len() >= self.max_exports {
+            return Err(CapabilityError::ExportLimit {
+                limit: self.max_exports,
+            });
+        }
+        let id = lowest_free_export_id(&self.exports, &self.reserved_export_ids)?;
+        self.exports.insert(
+            id,
+            ExportEntry {
+                capability: capability.clone(),
+                references: 1,
+            },
+        );
+        self.export_by_identity.insert(key, id);
+        Ok(match capability {
+            ExportCapability::Hosted(_) => CapDescriptor::SenderHosted(id),
+            ExportCapability::Promise(_) => CapDescriptor::SenderPromise(id),
+        })
     }
 
     /// Describes a whole payload transactionally. Quota or overflow errors do
@@ -233,6 +324,11 @@ impl CapabilityTables {
                     return Err(CapabilityError::ReferenceCountOverflow);
                 }
                 if let Some(entry) = self.imports.get_mut(id) {
+                    if entry.promise {
+                        return Err(CapabilityError::UnsupportedDescriptor(
+                            "senderHosted reuses a promise import ID",
+                        ));
+                    }
                     entry.references = entry
                         .references
                         .checked_add(1)
@@ -243,14 +339,57 @@ impl CapabilityTables {
                             limit: self.max_imports,
                         });
                     }
-                    self.imports.insert(*id, ImportEntry { references: 1 });
+                    self.imports.insert(
+                        *id,
+                        ImportEntry {
+                            references: 1,
+                            promise: false,
+                        },
+                    );
                 }
                 Ok(ReceivedCapability::Imported(*id))
+            }
+            CapDescriptor::SenderPromise(id) => {
+                if self.stats().import_references == u64::MAX {
+                    return Err(CapabilityError::ReferenceCountOverflow);
+                }
+                if let Some(entry) = self.imports.get_mut(id) {
+                    if !entry.promise {
+                        return Err(CapabilityError::UnsupportedDescriptor(
+                            "senderPromise reuses a settled import ID",
+                        ));
+                    }
+                    entry.references = entry
+                        .references
+                        .checked_add(1)
+                        .ok_or(CapabilityError::ReferenceCountOverflow)?;
+                } else {
+                    if self.imports.len() >= self.max_imports {
+                        return Err(CapabilityError::ImportLimit {
+                            limit: self.max_imports,
+                        });
+                    }
+                    self.imports.insert(
+                        *id,
+                        ImportEntry {
+                            references: 1,
+                            promise: true,
+                        },
+                    );
+                }
+                Ok(ReceivedCapability::PromiseImported(*id))
             }
             CapDescriptor::ReceiverHosted(id) => self
                 .exports
                 .get(id)
-                .map(|entry| ReceivedCapability::Hosted(entry.capability.clone()))
+                .map(|entry| match &entry.capability {
+                    ExportCapability::Hosted(capability) => {
+                        ReceivedCapability::Hosted(capability.clone())
+                    }
+                    ExportCapability::Promise(capability) => {
+                        ReceivedCapability::ExportedPromise(capability.clone())
+                    }
+                })
                 .ok_or(CapabilityError::UnknownExport(*id)),
             CapDescriptor::ReceiverAnswer(promised_answer) => {
                 Ok(ReceivedCapability::ReceiverAnswer(promised_answer.clone()))
@@ -339,7 +478,10 @@ impl CapabilityTables {
                 .exports
                 .remove(&release.id)
                 .ok_or(CapabilityError::UnknownExport(release.id))?;
-            self.export_by_identity.remove(&entry.capability.identity());
+            self.export_by_identity.remove(&entry.capability.key());
+            if matches!(entry.capability, ExportCapability::Promise(_)) {
+                self.reserved_export_ids.insert(release.id);
+            }
         }
         Ok(())
     }
@@ -379,24 +521,45 @@ impl CapabilityTables {
         self.imports.contains_key(&id)
     }
 
+    pub fn is_promise_import(&self, id: u32) -> bool {
+        self.imports.get(&id).is_some_and(|entry| entry.promise)
+    }
+
+    pub fn promise_export_id(&self, identity: u64) -> Option<u32> {
+        self.export_by_identity
+            .get(&ExportIdentity::Promise(identity))
+            .copied()
+    }
+
+    pub fn contains_export(&self, id: u32) -> bool {
+        self.exports.contains_key(&id)
+    }
+
+    pub fn release_promise_reservation(&mut self, id: u32) {
+        self.reserved_export_ids.remove(&id);
+    }
+
     pub fn clear(&mut self) {
         self.imports.clear();
         self.exports.clear();
         self.export_by_identity.clear();
+        self.reserved_export_ids.clear();
     }
 }
 
-fn lowest_free_id<T>(values: &BTreeMap<u32, T>) -> Result<u32, CapabilityError> {
+fn lowest_free_export_id<T>(
+    values: &BTreeMap<u32, T>,
+    reserved: &BTreeSet<u32>,
+) -> Result<u32, CapabilityError> {
     let mut candidate = 0_u32;
-    for id in values.keys().copied() {
-        if id != candidate {
-            break;
+    loop {
+        if !values.contains_key(&candidate) && !reserved.contains(&candidate) {
+            return Ok(candidate);
         }
         candidate = candidate
             .checked_add(1)
             .ok_or(CapabilityError::ExportIdExhausted)?;
     }
-    Ok(candidate)
 }
 
 fn reference_total(mut values: impl Iterator<Item = u64>) -> u64 {
@@ -456,6 +619,55 @@ mod tests {
             Ok(ReceivedCapability::Hosted(hosted))
         );
         assert_eq!(owner.stats().export_references, 1);
+    }
+
+    #[test]
+    fn promise_descriptors_count_references_and_reserve_released_ids() {
+        let promise = PromiseCapability::new().expect("identity");
+        let mut owner = CapabilityTables::new(8, 8);
+        assert_eq!(
+            owner
+                .describe(&OutgoingCapability::Promise(promise.clone()))
+                .expect("first promise export"),
+            CapDescriptor::SenderPromise(0)
+        );
+        assert_eq!(
+            owner
+                .describe(&OutgoingCapability::Promise(promise.clone()))
+                .expect("duplicate promise export"),
+            CapDescriptor::SenderPromise(0)
+        );
+        assert_eq!(owner.promise_export_id(promise.identity()), Some(0));
+
+        let mut peer = CapabilityTables::new(8, 8);
+        assert_eq!(
+            peer.receive(&CapDescriptor::SenderPromise(0)),
+            Ok(ReceivedCapability::PromiseImported(0))
+        );
+        assert!(peer.is_promise_import(0));
+        owner
+            .apply_release(ReleaseMessage {
+                id: 0,
+                reference_count: 2,
+            })
+            .expect("release promise");
+        assert!(!owner.contains_export(0));
+
+        let hosted = HostedCapability::new().expect("hosted identity");
+        assert_eq!(
+            owner
+                .describe(&OutgoingCapability::Hosted(hosted))
+                .expect("reserved ID skipped"),
+            CapDescriptor::SenderHosted(1)
+        );
+        owner.release_promise_reservation(0);
+        let other = HostedCapability::new().expect("other hosted identity");
+        assert_eq!(
+            owner
+                .describe(&OutgoingCapability::Hosted(other))
+                .expect("released reservation reused"),
+            CapDescriptor::SenderHosted(0)
+        );
     }
 
     #[test]
