@@ -11,3 +11,4 @@ printf '%s  %s\n' 22680f70c56e3c44dc73b52bf8dfd2838a5ea44249be01609be2d362d308b5
 printf '%s  %s\n' d77d4d2e2c1e9c42ded13de54ed11b535b076ac210945b53ecf76fd7648a867a persistent.capnp | sha256sum --check
 printf '%s  %s\n' 5b0656ca3daca9ef28740c14813d5dd474fd0f9991ce99f652838f4cccf6fb30 stream.capnp | sha256sum --check
 printf '%s  %s\n' 52ead0eaa560b21e692d6f3d9966a52dfc99e19f53ae2d7c7bd2944a240d86de c++.capnp | sha256sum --check
+printf '%s  %s\n' 8d7f2199c46ececfb98d243318e875a5937ad7ba8b7f962d7399319d0bcddc48 json.capnp | sha256sum --check

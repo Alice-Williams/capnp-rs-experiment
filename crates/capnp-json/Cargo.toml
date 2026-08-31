@@ -1,6 +1,6 @@
 [package]
-name = "capnp-cli"
-description = "Native Cap'n Proto command-line tools"
+name = "capnp-json"
+description = "Bounded reflection-driven Cap'n Proto JSON codec"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,10 +12,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-capnp-codegen = { path = "../capnp-codegen" }
-capnp-compiler = { path = "../capnp-compiler" }
 capnp-io = { path = "../capnp-io" }
-capnp-json = { path = "../capnp-json" }
 capnp-message = { path = "../capnp-message" }
 capnp-schema = { path = "../capnp-schema" }
 capnp-text = { path = "../capnp-text" }

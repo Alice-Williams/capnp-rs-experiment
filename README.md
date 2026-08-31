@@ -21,9 +21,11 @@ previous prototype's implementation.
 The original engineering dossier has been decomposed into 49 dependency-ordered
 milestones under [`docs/plan`](docs/plan/README.md). The Phase 0 foundation,
 oracle corpus, benchmark harnesses, and safety/concurrency ADRs are complete.
-Implementation now proceeds through the conformance-first wire milestones.
+Implementation has completed the conformance-first wire, construction,
+reflection, code-generation, native compiler, text-tooling, and JSON-tooling
+phases. Parallel processing is the next planned phase.
 
-The repository is an eleven-crate workspace matching the intended architecture.
+The repository is a fifteen-crate workspace matching the intended architecture.
 `capnp-wire` implements M03's no_std words, little-endian scalar access, checked
 ranges, and raw pointer bitfields. `capnp-io` implements M04's bounded standard
 unpacked framing over immutable segment descriptors. `capnp-message` implements
@@ -64,6 +66,10 @@ requests, and secure schema IDs.
 
 Native [text decode, encode, and evaluation](docs/tooling/text-tools.md) cover
 standard, packed, and flat messages plus imported and nested constants.
+
+Native [reflection-driven JSON conversion](docs/tooling/json-codec.md) covers
+the C++ value policy, standard/packed/flat input and output, schema annotations,
+bounded parsing, strict-mode decoding, and type/field extension handlers.
 
 This is experimental software and is not yet suitable for production use.
 

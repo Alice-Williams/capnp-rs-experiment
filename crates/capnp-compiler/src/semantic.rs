@@ -41,6 +41,13 @@ impl Default for ModuleSources {
                 "e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/c++.capnp"
             )),
         );
+        output.insert_standard(
+            "/capnp/compat/json.capnp",
+            include_str!(concat!(
+                "../../../conformance/upstream/capnproto/",
+                "e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/json.capnp"
+            )),
+        );
         output
     }
 }
@@ -1356,6 +1363,17 @@ fn parse_annotations(tokens: &[Token]) -> Vec<AnnotationUse> {
                 let (_, value) = arguments.remove(0);
                 (*function, Some(value))
             }
+            Expression::Apply {
+                function,
+                arguments,
+                range,
+            } => (
+                *function,
+                Some(Expression::Tuple {
+                    values: arguments,
+                    range,
+                }),
+            ),
             other => (other, None),
         };
         let end = tokens

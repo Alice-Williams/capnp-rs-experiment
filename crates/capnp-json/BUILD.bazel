@@ -1,0 +1,25 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "capnp_json",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "capnp_json",
+    edition = "2024",
+    deps = [
+        "//crates/capnp-io:capnp_io",
+        "//crates/capnp-message:capnp_message",
+        "//crates/capnp-schema:capnp_schema",
+        "//crates/capnp-text:capnp_text",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+rust_test(
+    name = "capnp_json_test",
+    crate = ":capnp_json",
+    compile_data = [
+        "//conformance:compiler_requests",
+        "//conformance:cpp_wire_frames",
+        "//conformance:json_fixtures",
+    ],
+)

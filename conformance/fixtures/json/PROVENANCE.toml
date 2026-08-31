@@ -1,0 +1,15 @@
+source = "Cap'n Proto C++ capnp convert --short binary:json"
+commit = "e7c9cd96f1505b5ae486db7821006c2f5dce5b5b"
+tool_version = "Cap'n Proto version 2.0-dev"
+schema = "conformance/schemas/wire-fixture.capnp"
+type = "WireFixture"
+input = "conformance/fixtures/cpp/e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/wire-unpacked.bin"
+command = "capnp convert --short binary:json wire-fixture.capnp WireFixture"
+
+[[output]]
+path = "wire-short.json"
+description = "all wire value kinds and pointer-presence policy"
+
+[[output]]
+path = "annotation-short.json"
+description = "name, enum rename, base64, hex, flatten prefix, and discriminator/valueName"

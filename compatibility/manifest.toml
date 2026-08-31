@@ -38,6 +38,11 @@ name = "c++.capnp"
 url = "https://raw.githubusercontent.com/capnproto/capnproto/e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/c%2B%2B/src/capnp/c%2B%2B.capnp"
 sha256 = "52ead0eaa560b21e692d6f3d9966a52dfc99e19f53ae2d7c7bd2944a240d86de"
 
+[[upstream.capnproto.schemas]]
+name = "json.capnp"
+url = "https://raw.githubusercontent.com/capnproto/capnproto/e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/c%2B%2B/src/capnp/compat/json.capnp"
+sha256 = "8d7f2199c46ececfb98d243318e875a5937ad7ba8b7f962d7399319d0bcddc48"
+
 [upstream.capnproto_rust]
 role = "secondary regression and Rust ergonomics oracle"
 commit = "2228b71e55cee819c30450bb9bfd9c1f6a722429"
@@ -56,6 +61,7 @@ wire = "M10 borrowed and Arc-owned typed readers with stable coordinate referenc
 generated_api = "M21 typed data and thread-safe local interface APIs with exact pipelines"
 native_compiler = "M26 native multi-file compile and id CLI, plugin-compatible request streaming, deterministic built-in Rust output, and self-hosted generation without a system capnp compiler"
 text_tools = "M27 bounded native text encode/decode/eval with standard, packed, and flat modes and pinned C++ short-format parity"
+json = "M28 bounded reflection codec and native binary/packed/flat JSON conversion with pinned C++ policy and annotations"
 rpc_level = "M21 in-memory local dispatch, inheritance, streaming completion, and capability pipelines; network protocol deferred to M32+"
 parallel_read = "not-started"
 parallel_build = "not-started"
@@ -94,6 +100,20 @@ M24 = "complete"
 M25 = "complete"
 M26 = "complete"
 M27 = "complete"
+M28 = "complete"
+
+[evidence.M28]
+crates = ["crates/capnp-json", "crates/capnp-cli", "crates/capnp-compiler"]
+commands = ["capnp-cli convert [--short] binary:json SCHEMA TYPE", "capnp-cli convert [--short] json:binary SCHEMA TYPE", "packed and flat variants in either JSON direction"]
+policy = ["Void null and Bool", "8/16/32-bit numeric integers", "string-encoded signed and unsigned 64-bit integers", "finite and signed-zero floats", "string-encoded Infinity, -Infinity, and NaN", "Text", "byte-array Data", "known and unknown enums", "lists", "structs and groups", "active unions", "absent pointer omission", "primitive default inclusion and NonDefault mode"]
+annotations = ["field and enumerant name", "Data base64", "Data hex", "flatten with prefix", "discriminator and shared valueName"]
+extensions = "Send + Sync type and field handlers transform reflected values and canonical JSON without borrowing the builder arena"
+limits = ["input bytes", "value count", "JSON nesting with reference default 64", "message words", "binary input bytes", "packed expansion", "standard frame limits"]
+negative = ["located JSON syntax diagnostics", "invalid Unicode surrogates", "duplicate object fields", "strict unknown fields", "integer and Data range errors", "invalid base64/hex", "capability and AnyPointer without handlers", "deterministic arbitrary UTF-8 input never panics"]
+compiler_fix = "native request construction now preserves aggregate annotation arguments instead of emitting null struct pointers"
+oracle = "complete pinned wire JSON is byte-identical; default and annotation-heavy corpora interoperate in both directions with C++ 2.0-dev"
+documentation = "docs/tooling/json-codec.md"
+validation = "Rust 1.98 and 1.85 workspace tests; public API docs; Clippy -D warnings; pinned C++ 2.0-dev interoperability; fixture and upstream hashes; full Bazel gates"
 
 [evidence.M27]
 crates = ["crates/capnp-text", "crates/capnp-cli", "crates/capnp-schema"]

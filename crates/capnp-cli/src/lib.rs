@@ -1,10 +1,10 @@
-//! Native `compile`, `id`, `decode`, `encode`, and `eval` workflows.
+//! Native `compile`, `id`, `decode`, `encode`, `eval`, and `convert` workflows.
 //!
 //! The compile frontend follows the pinned C++ tool's source-prefix, import
 //! search, raw request, and `capnpc-*` stdin contract. Rust output is built in;
 //! other plugins are child processes and receive one standard request. Text
-//! tools use the same native schema frontend. JSON and RPC tools remain later
-//! milestones.
+//! tools use the same native schema frontend. JSON conversion follows the
+//! pinned C++ compatibility policy; RPC tools remain later milestones.
 
 use std::collections::BTreeMap;
 use std::env;
@@ -20,6 +20,7 @@ use capnp_compiler::request::{compile_program, emit_compiled_schema};
 use capnp_compiler::semantic::{ModuleSources, ResolveLimits, ResolvedProgram};
 use capnp_compiler::{Statement, StatementBody, Token, TokenKind, parse_schema};
 use capnp_io::{FrameLimits, FrameRead, encode_frame, pack, parse_frame, unpack};
+use capnp_json::{FormatStyle as JsonStyle, JsonCodec, JsonLimits};
 use capnp_message::ReaderLimits;
 use capnp_schema::{
     CapnpVersion, CompiledSchema, Node, NodeId, NodeKind, RequestedFile, SourceInfo,
@@ -42,6 +43,7 @@ Usage:
   capnp-cli decode [-I DIR]... [--packed|--flat] [--short] SCHEMA TYPE
   capnp-cli encode [-I DIR]... [--packed|--flat] SCHEMA TYPE
   capnp-cli eval [-I DIR]... [--short|-b|-p|--flat] SCHEMA NAME
+  capnp-cli convert [-I DIR]... [--short] FROM:TO SCHEMA TYPE
 
 Compile targets:
   -o-                 write one binary CodeGeneratorRequest to stdout
@@ -55,6 +57,9 @@ Options:
   --packed                    read or write standard packed messages
   --flat                      read or write one unframed single-segment message
   --short                     print each text value on one line
+
+Convert formats:
+  binary, packed, flat, json
   -h, --help                  show this help
 ";
 
@@ -144,8 +149,96 @@ pub fn run_with_io(
             parse_text_options(&arguments[1..], TextCommand::Eval)?,
             stdout,
         ),
+        "convert" => convert(parse_convert_options(&arguments[1..])?, stdin, stdout),
         other => Err(CliError::new(format!("unknown command `{other}`\n{USAGE}"))),
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ConvertFormat {
+    Binary,
+    Packed,
+    Flat,
+    Json,
+}
+
+#[derive(Debug)]
+struct ConvertOptions {
+    import_paths: Vec<PathBuf>,
+    from: ConvertFormat,
+    to: ConvertFormat,
+    short: bool,
+    schema_file: PathBuf,
+    target: String,
+}
+
+fn parse_convert_format(value: &str) -> Result<ConvertFormat, CliError> {
+    match value {
+        "binary" => Ok(ConvertFormat::Binary),
+        "packed" => Ok(ConvertFormat::Packed),
+        "flat" => Ok(ConvertFormat::Flat),
+        "json" => Ok(ConvertFormat::Json),
+        _ => Err(CliError::new(format!("unknown convert format `{value}`"))),
+    }
+}
+
+fn parse_convert_options(arguments: &[std::ffi::OsString]) -> Result<ConvertOptions, CliError> {
+    let mut import_paths = Vec::new();
+    let mut short = false;
+    let mut positional = Vec::new();
+    let mut index = 0;
+    while index < arguments.len() {
+        let value = arguments[index]
+            .to_str()
+            .ok_or_else(|| CliError::new("arguments must be valid UTF-8"))?;
+        if value == "-I" || value == "--import-path" {
+            index += 1;
+            let path = arguments
+                .get(index)
+                .and_then(|value| value.to_str())
+                .ok_or_else(|| CliError::new(format!("{value} requires a value")))?;
+            import_paths.push(PathBuf::from(path));
+        } else if let Some(path) = value.strip_prefix("-I").filter(|path| !path.is_empty()) {
+            import_paths.push(PathBuf::from(path));
+        } else if let Some(path) = value.strip_prefix("--import-path=") {
+            import_paths.push(PathBuf::from(path));
+        } else if value == "--short" {
+            short = true;
+        } else if value == "-h" || value == "--help" {
+            return Err(CliError::new(USAGE));
+        } else if value.starts_with('-') {
+            return Err(CliError::new(format!("unknown convert option `{value}`")));
+        } else {
+            positional.push(value.to_owned());
+        }
+        index += 1;
+    }
+    if positional.len() != 3 {
+        return Err(CliError::new("convert requires FROM:TO SCHEMA TYPE"));
+    }
+    let (from, to) = positional[0]
+        .split_once(':')
+        .ok_or_else(|| CliError::new("convert format must be FROM:TO"))?;
+    let from = parse_convert_format(from)?;
+    let to = parse_convert_format(to)?;
+    if from == to {
+        return Err(CliError::new(
+            "convert input and output formats must differ",
+        ));
+    }
+    if from != ConvertFormat::Json && to != ConvertFormat::Json {
+        return Err(CliError::new(
+            "native convert currently requires JSON as an input or output format",
+        ));
+    }
+    Ok(ConvertOptions {
+        import_paths,
+        from,
+        to,
+        short,
+        schema_file: PathBuf::from(&positional[1]),
+        target: positional[2].clone(),
+    })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -579,6 +672,92 @@ fn eval(options: TextOptions, stdout: &mut dyn Write) -> Result<(), CliError> {
     Ok(())
 }
 
+fn convert(
+    options: ConvertOptions,
+    stdin: &mut dyn Read,
+    stdout: &mut dyn Write,
+) -> Result<(), CliError> {
+    let loaded = load_tool_schema(&options.schema_file, &options.import_paths)?;
+    let type_id = resolve_type(&loaded, &options.target)?;
+    let mut codec = JsonCodec::new();
+    codec.handle_by_annotation(true);
+    codec.set_style(if options.short {
+        JsonStyle::Compact
+    } else {
+        JsonStyle::Pretty
+    });
+    if options.from == ConvertFormat::Json {
+        let input = read_bounded(stdin, JsonLimits::default().max_input_bytes, "JSON input")?;
+        let input = std::str::from_utf8(&input)
+            .map_err(|error| CliError::new(format!("JSON input is not UTF-8: {error}")))?;
+        let messages = codec
+            .decode_structs(&loaded.schema, type_id, input)
+            .map_err(|error| CliError::new(format!("JSON decode: {error}")))?;
+        let mode = match options.to {
+            ConvertFormat::Binary => MessageMode::Standard,
+            ConvertFormat::Packed => MessageMode::Packed,
+            ConvertFormat::Flat => MessageMode::Flat,
+            ConvertFormat::Json => unreachable!("equal formats were rejected"),
+        };
+        return write_encoded_messages(messages, mode, stdout);
+    }
+
+    debug_assert_eq!(options.to, ConvertFormat::Json);
+    let input = read_bounded(stdin, 256 * 1024 * 1024, "binary input")?;
+    let unpacked;
+    let input = if options.from == ConvertFormat::Packed {
+        unpacked = unpack(&input, 256 * 1024 * 1024)
+            .map_err(|error| CliError::new(format!("packed input: {error}")))?;
+        unpacked.as_slice()
+    } else {
+        input.as_slice()
+    };
+    if options.from == ConvertFormat::Flat {
+        if input.is_empty() || input.len() % 8 != 0 {
+            return Err(CliError::new(
+                "flat input must be a non-empty whole number of words",
+            ));
+        }
+        let json = codec
+            .encode_message(
+                Arc::clone(&loaded.schema),
+                type_id,
+                [Arc::<[u8]>::from(input)],
+                ReaderLimits::default(),
+            )
+            .map_err(|error| CliError::new(format!("JSON encode: {error}")))?;
+        writeln!(stdout, "{json}")?;
+        return Ok(());
+    }
+    let mut remaining = input;
+    while !remaining.is_empty() {
+        let FrameRead::Message {
+            frame,
+            remaining: rest,
+        } = parse_frame(remaining, FrameLimits::default())
+            .map_err(|error| CliError::new(format!("standard frame: {error}")))?
+        else {
+            break;
+        };
+        let segments = frame
+            .segments()
+            .iter()
+            .map(|segment| Arc::<[u8]>::from(segment.bytes()))
+            .collect::<Vec<_>>();
+        let json = codec
+            .encode_message(
+                Arc::clone(&loaded.schema),
+                type_id,
+                segments,
+                ReaderLimits::default(),
+            )
+            .map_err(|error| CliError::new(format!("JSON encode: {error}")))?;
+        writeln!(stdout, "{json}")?;
+        remaining = rest;
+    }
+    Ok(())
+}
+
 fn read_bounded(
     input: &mut dyn Read,
     limit: usize,
@@ -940,7 +1119,7 @@ impl SourceLoader {
                 self.load(resolved, candidate)?;
             } else if !matches!(
                 resolved.as_str(),
-                "/capnp/c++.capnp" | "/capnp/stream.capnp"
+                "/capnp/c++.capnp" | "/capnp/stream.capnp" | "/capnp/compat/json.capnp"
             ) {
                 return Err(CliError::new(format!(
                     "{} imports `{requested}`, which was not found in any import path",
@@ -1336,6 +1515,57 @@ mod tests {
         )
         .expect("import-qualified constant evaluates");
         assert_eq!(output, b"\"constant generic struct\"\n");
+        fs::remove_dir_all(root).expect("temporary cleanup");
+    }
+
+    #[test]
+    fn convert_honors_json_annotations_in_both_directions() {
+        let root = temporary("json-annotations");
+        let schema = root.join("json-fixture.capnp");
+        fs::write(
+            &schema,
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../conformance/schemas/json-fixture.capnp"
+            )),
+        )
+        .expect("JSON schema");
+        let json = concat!(
+            "{\"external_name\":\"x\",\"encoded\":\"AAEC/v8=\",",
+            "\"hexed\":\"deadbeef\",\"detail_count\":7,",
+            "\"detail_display_name\":\"shown\",\"tone\":\"LOUD\",",
+            "\"kind\":\"amount64\",\"value\":\"9223372036854775807\"}"
+        );
+        let mut binary = Vec::new();
+        run_with_io(
+            args(&[
+                "convert",
+                "--short",
+                "json:binary",
+                schema.to_str().expect("UTF-8 path"),
+                "JsonFixture",
+            ]),
+            &mut io::Cursor::new(json.as_bytes()),
+            &mut binary,
+        )
+        .expect("annotated JSON encodes");
+        let mut output = Vec::new();
+        run_with_io(
+            args(&[
+                "convert",
+                "--short",
+                "binary:json",
+                schema.to_str().expect("UTF-8 path"),
+                "JsonFixture",
+            ]),
+            &mut io::Cursor::new(binary),
+            &mut output,
+        )
+        .expect("annotated JSON decodes");
+        assert_eq!(
+            String::from_utf8(output).expect("UTF-8 JSON"),
+            format!("{json}\n")
+        );
         fs::remove_dir_all(root).expect("temporary cleanup");
     }
 }

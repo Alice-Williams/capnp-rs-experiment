@@ -265,6 +265,7 @@ impl<'a> ModelCompiler<'a> {
             requested_files.clone(),
         )?;
         self.fill_aggregate_constants(&provisional, &mut nodes)?;
+        self.fill_aggregate_annotations(&provisional, &mut nodes)?;
         Ok(CompiledSchema::from_parts(
             version,
             nodes,
@@ -1054,6 +1055,150 @@ impl<'a> ModelCompiler<'a> {
             }
         }
         Ok(())
+    }
+
+    fn fill_aggregate_annotations(
+        &self,
+        schema: &CompiledSchema,
+        nodes: &mut [Node],
+    ) -> Result<(), RequestError> {
+        for module in &self.program.modules {
+            let file_id = module
+                .file_id
+                .ok_or_else(|| RequestError::MissingModel("file ID".to_owned()))?;
+            let file = nodes
+                .iter_mut()
+                .find(|node| node.id == file_id)
+                .ok_or_else(|| RequestError::MissingModel(format!("file node {file_id:#x}")))?;
+            file.annotations = self.filled_annotations(schema, module, &module.annotations)?;
+
+            for declaration in &module.declarations {
+                if self.is_included_node(module, declaration) {
+                    let id = self.id(module, &declaration.qualified_name)?;
+                    if let Some(node) = nodes.iter_mut().find(|node| node.id == id) {
+                        node.annotations =
+                            self.filled_annotations(schema, module, &declaration.annotations)?;
+                    }
+                }
+            }
+
+            for layout in &self.layouts.structs {
+                if layout.module != module.path {
+                    continue;
+                }
+                let id = layout.id.ok_or_else(|| {
+                    RequestError::MissingModel(format!("struct ID for {}", layout.qualified_name))
+                })?;
+                let node = nodes
+                    .iter_mut()
+                    .find(|node| node.id == id)
+                    .ok_or_else(|| RequestError::MissingModel(format!("struct node {id:#x}")))?;
+                let NodeKind::Struct(structure) = &mut node.kind else {
+                    return Err(RequestError::Unsupported("layout node is not a struct"));
+                };
+                for (field, compiled) in structure.fields.iter_mut().zip(&layout.fields) {
+                    let source = self.declaration(module, &compiled.qualified_name)?;
+                    field.annotations =
+                        self.filled_annotations(schema, module, &source.annotations)?;
+                }
+            }
+
+            for declaration in &module.declarations {
+                match declaration.kind {
+                    DeclarationKind::Enum => {
+                        let id = self.id(module, &declaration.qualified_name)?;
+                        let Some(Node {
+                            kind: NodeKind::Enum(enumeration),
+                            ..
+                        }) = nodes.iter_mut().find(|node| node.id == id)
+                        else {
+                            continue;
+                        };
+                        for enumerant in &mut enumeration.enumerants {
+                            let source = module
+                                .declarations
+                                .iter()
+                                .find(|item| {
+                                    item.parent.as_deref() == Some(&declaration.qualified_name)
+                                        && item.kind == DeclarationKind::Enumerant
+                                        && item.name == enumerant.name
+                                })
+                                .ok_or_else(|| {
+                                    RequestError::MissingModel(format!(
+                                        "enumerant {}.{}",
+                                        declaration.qualified_name, enumerant.name
+                                    ))
+                                })?;
+                            enumerant.annotations =
+                                self.filled_annotations(schema, module, &source.annotations)?;
+                        }
+                    }
+                    DeclarationKind::Interface => {
+                        let id = self.id(module, &declaration.qualified_name)?;
+                        let Some(Node {
+                            kind: NodeKind::Interface(interface),
+                            ..
+                        }) = nodes.iter_mut().find(|node| node.id == id)
+                        else {
+                            continue;
+                        };
+                        for method in &mut interface.methods {
+                            let source = module
+                                .declarations
+                                .iter()
+                                .find(|item| {
+                                    item.parent.as_deref() == Some(&declaration.qualified_name)
+                                        && item.kind == DeclarationKind::Method
+                                        && item.name == method.name
+                                })
+                                .ok_or_else(|| {
+                                    RequestError::MissingModel(format!(
+                                        "method {}.{}",
+                                        declaration.qualified_name, method.name
+                                    ))
+                                })?;
+                            method.annotations =
+                                self.filled_annotations(schema, module, &source.annotations)?;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn filled_annotations(
+        &self,
+        schema: &CompiledSchema,
+        module: &ResolvedModule,
+        uses: &[AnnotationUse],
+    ) -> Result<Vec<Annotation>, RequestError> {
+        let mut output = self.annotations(module, None, uses)?;
+        for (annotation, application) in output.iter_mut().zip(uses) {
+            let Some(expression) = &application.value else {
+                continue;
+            };
+            let (target_module, declaration) =
+                self.target_declaration(module, &application.name)?;
+            let ty = self.ty(
+                target_module,
+                declaration
+                    .expression
+                    .as_ref()
+                    .ok_or(RequestError::Unsupported("annotation without a value type"))?,
+            )?;
+            annotation.value = match (&ty, expression) {
+                (Type::List(element), Expression::List { .. }) => {
+                    Value::List(self.build_list_pointer(schema, module, element, expression)?)
+                }
+                (Type::Struct { type_id, brand }, Expression::Tuple { .. }) => Value::Struct(
+                    self.build_struct_pointer(schema, module, *type_id, brand.clone(), expression)?,
+                ),
+                _ => continue,
+            };
+        }
+        Ok(output)
     }
 
     fn reorder_nodes(&self, nodes: &mut Vec<Node>) -> Result<(), RequestError> {

@@ -9,6 +9,7 @@ rust_library(
         "//crates/capnp-codegen:capnp_codegen",
         "//crates/capnp-compiler:capnp_compiler",
         "//crates/capnp-io:capnp_io",
+        "//crates/capnp-json:capnp_json",
         "//crates/capnp-message:capnp_message",
         "//crates/capnp-schema:capnp_schema",
         "//crates/capnp-text:capnp_text",
