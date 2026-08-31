@@ -22,10 +22,10 @@ long-running release gate.
 | Reflection, dynamic values, generated data/interface APIs | M17–M21 | implemented | pinned compiler requests and C++/Rust cross-read fixtures | none known |
 | Native parser, semantic/layout compiler, request/codegen, CLI | M22–M26 | implemented | pinned C++ requests, self-hosted generation, multi-file CLI tests, compiled nested-interface declaration regression | none known |
 | Text and JSON tools | M27–M28 | implemented | pinned C++ text corpus and byte-exact JSON policy fixtures | production application JSON policy remains caller-owned |
-| Parallel read/build/batch scheduling | M29–M31 | implemented | deterministic concurrency tests and checked-in four-core results | rerun performance artifacts at the release commit |
+| Parallel read/build/batch scheduling | M29–M31 | implemented | deterministic concurrency tests and source-bound M48 four-core results | none known |
 | RPC schema, transport, Level 0 tables, capability lifetime | M32–M34 | implemented | lossless schema/wire tests and pinned capability interop | activation follows M40 |
 | Pipelines, promise resolution, E-order | M35–M36 | implemented | pinned calculator/resolve transcripts and actor race tests | activation follows M40 |
-| Streaming, cancellation, reconnect, scheduling | M37–M39 | implemented | pinned C++ flow/lifecycle cases, fault tests, checked-in scheduling results | activation follows M40 |
+| Streaming, cancellation, reconnect, scheduling | M37–M39 | implemented | pinned C++ flow/lifecycle cases, fault tests, source-bound M48 scheduling results | activation follows M40 |
 | Level-1 v1 release | M40 | blocked | interop, fuzz, security and performance gates pass; 12,420-second interim soak retained | required 86,400-second same-commit soak has not passed |
 | Local capabilities, membranes, attached resources | M41–M43 | candidate | exact pinned C++ corpora plus native compile/lifetime/quota tests | activate after M40; attached OS handles are Unix-only |
 | Authenticated Level 3 handoff | M44 | candidate | six pinned C++ cases and authenticated native router simulations | activate after M40 |
@@ -33,7 +33,7 @@ long-running release gate.
 | Persistent capabilities | M46 | candidate | pinned interface plus restart, sealing, expiry, tamper and revocation model | realm database, cryptography, clock, owner authentication and dialer remain application policy |
 | ByteStream, JSON-RPC, HTTP/CONNECT, WebSocket | M47 | candidate | exact pinned C++ case inventory plus bounded native lifecycle tests | activate after M40–M46 |
 | Address-book, calculator and full-platform examples | M47 | candidate | canonical nested sample schemas, native/C++ address-book cross-read and calculator pipeline/callback/platform scenarios | activate after M40–M46 |
-| Maximum-parity release | M48 | in progress | this audit and executable gates | multi-day full-platform fault/soak, release-commit performance rerun, security gate and every predecessor activation |
+| Maximum-parity release | M48 | in progress | this audit, executable gates, and fresh release-commit performance evidence | multi-day full-platform fault/soak, security gate and every predecessor activation |
 
 ## C++ facilities that are Rust-inapplicable
 
@@ -61,9 +61,7 @@ Rust-native implementation should not reproduce.
    development evidence, not a release result.
 2. M48 needs a multi-day full-platform fault/soak result exercising the
    capability layers and compatibility adapters, bound to exact source hashes.
-3. Performance artifacts must be regenerated and accepted on the release
-   commit and hardware; historical artifacts cannot excuse a regression.
-4. The final security gate must pass Miri, Loom, bounded fuzz, unsafe-code,
+3. The final security gate must pass Miri, Loom, bounded fuzz, unsafe-code,
    shell, MSRV, Cargo, rustdoc, Clippy, Bazel, and all pinned-oracle checks.
 
 The former nested-interface declaration compiler blocker is resolved. Named
@@ -98,3 +96,9 @@ an explicit result directory, bind each artifact to the current benchmark and
 implementation source hashes, and require the producing commit to remain an
 ancestor. M48 uses fresh M29 parallel-read, M30 partitioned-build, M31 ordered
 batch, and M39 scheduling runs from one named result root.
+
+The performance blocker is resolved by
+`benchmarks/results/2026-08-31-m48-g-drive-docker`. The aggregate verifier
+passes all four qualification gates. Rejected noisy/pre-fix attempts are kept
+beside the accepted results and explained in that result root's README rather
+than being discarded or mistaken for release evidence.

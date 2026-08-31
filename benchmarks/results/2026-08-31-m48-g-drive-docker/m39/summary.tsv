@@ -1,0 +1,5 @@
+policy	workers	median_jobs_per_second	median_p50_us	median_p99_us	median_max_key_run
+concurrent	1	189.371	168577	337751	1
+concurrent	4	718.810	45544	88942	2
+serial	4	191.454	166710	334066	1
+keyed	4	692.847	45976	92257	1
