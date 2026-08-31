@@ -45,8 +45,12 @@ fn fill_partition(
     partition: &mut PrimitiveBuildPartition<'_, u64>,
     rounds: u32,
 ) -> Result<(), capnp_message::ParallelBuildError> {
-    for index in partition.range() {
-        partition.set_global(index, mix(u64::from(index), rounds))?;
+    let start = partition.range().start;
+    for local_index in 0..partition.len() {
+        let global_index = start
+            .checked_add(local_index)
+            .ok_or(capnp_message::ParallelBuildError::RangeOverflow)?;
+        partition.set(local_index, mix(u64::from(global_index), rounds))?;
     }
     Ok(())
 }
