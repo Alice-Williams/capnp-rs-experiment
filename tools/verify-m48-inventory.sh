@@ -29,7 +29,7 @@ audit=docs/release/maximum-parity-audit.md
 for phrase in \
   '86,400-second' \
   'multi-day full-platform fault/soak' \
-  'nested-interface declaration compiler gap' \
+  'former nested-interface declaration compiler blocker is resolved' \
   'C++ facilities that are Rust-inapplicable' \
   'Performance artifacts' \
   'final security gate'

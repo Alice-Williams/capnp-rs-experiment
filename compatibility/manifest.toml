@@ -59,7 +59,7 @@ rules_shell = "0.8.0"
 [support]
 wire = "M10 borrowed and Arc-owned typed readers with stable coordinate references"
 generated_api = "M37 typed data, exact pipelines, and eager ordered local streaming dispatch"
-native_compiler = "M26 native multi-file compile and id CLI, plugin-compatible request streaming, deterministic built-in Rust output, and self-hosted generation without a system capnp compiler"
+native_compiler = "M26 native multi-file compile and id CLI, plugin-compatible request streaming, deterministic built-in Rust output, self-hosted generation without a system capnp compiler, and canonical named declarations nested in interfaces"
 text_tools = "M27 bounded native text encode/decode/eval with standard, packed, and flat modes and pinned C++ short-format parity"
 json = "M28 bounded reflection codec and native binary/packed/flat JSON conversion with pinned C++ policy and annotations"
 rpc_level = "M38 cooperative cancellation, clean transport-complete shutdown, disconnect propagation, and generation-safe capability recreation, layered over M37 flow control"
@@ -136,10 +136,10 @@ M47 = "implementation candidate; activation awaits M40-M46 activation"
 crates = ["crates/capnp-compat", "crates/capnp-examples"]
 sources = ["pinned byte-stream.capnp implementation and 12-case C++ corpus", "pinned json-rpc.capnp implementation and 3-case C++ corpus", "pinned http-over-capnp.capnp and websocket-rpc 14-case C++ corpus", "pinned addressbook and calculator sample schemas/programs"]
 adapters = ["explicit-end ByteStream with bounded path shortening and cancellation", "bounded JSON-RPC syntax, arbitrary incoming ID correlation, notifications, errors, and Content-Length framing", "all 28 HTTP methods, header/body policies, response callbacks, CONNECT/TLS, WebSocket ordering, byte accounting, cancellation, and lifetime retention"]
-examples = ["native compiler and code generator build checked-in schemas without a system capnp compiler", "address-book nested lists, text, enum, union, standard and packed persistence, and pinned C++ decode", "calculator server-created functions, client callback, recursive expressions, promised Value pipeline, and concurrent dispatch", "ordered streaming, explicit cancellation, authenticated direct-handoff planning, distributed equality, and sealed SturdyRef restart restoration"]
+examples = ["native compiler and code generator build canonical nested sample schemas without a system capnp compiler", "address-book nested lists, text, enum, union, standard and packed persistence, and pinned C++ decode", "calculator server-created functions, client callback, recursive expressions, promised Value pipeline, and concurrent dispatch", "ordered streaming, explicit cancellation, authenticated direct-handoff planning, distributed equality, and sealed SturdyRef restart restoration"]
 oracle_checks = ["tools/verify-m47-byte-stream.sh: 12 pinned C++ plus 6 native cases", "tools/verify-m47-json-rpc.sh: 3 pinned C++ plus 7 native cases", "tools/verify-m47-http-websocket.sh: 12 HTTP and 2 WebSocket pinned C++ plus 12 native cases", "tools/verify-m47-examples.sh: native scenarios, pinned C++ address-book decode, and pinned calculator pipeline trace"]
 documentation = ["docs/compatibility/m47-oracle-inventory.md", "docs/compatibility/byte-stream.md", "docs/compatibility/json-rpc.md", "docs/compatibility/http-websocket.md", "docs/compatibility/examples.md"]
-limitations = ["activation awaits the M40 release gate and M41-M46 activation", "adapters are executor-neutral protocol boundaries, not a general web server, URL/TLS stack, production JSON parser, database, or network identity system", "native compiler currently requires pinned nested sample declarations to be flattened to file scope while preserving explicit wire IDs"]
+limitations = ["activation awaits the M40 release gate and M41-M46 activation", "adapters are executor-neutral protocol boundaries, not a general web server, URL/TLS stack, production JSON parser, database, or network identity system"]
 validation = "all focused pinned C++ and native verifiers; workspace Cargo all-target tests and doctests; rustdoc and Clippy with warnings denied; shell syntax; complete 30-test Bazel suite"
 
 [evidence.M46]

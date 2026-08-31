@@ -7,7 +7,7 @@ use capnp_io::{FrameLimits, FrameRead, encode_frame, pack, parse_frame, unpack};
 use capnp_message::{ExclusiveArena, OwnedMessage, ReaderLimits};
 
 use crate::addressbook::employment::Which;
-use crate::addressbook::{PhoneType, address_book, person, phone_number};
+use crate::addressbook::{Type_, address_book, person, phone_number};
 use crate::{ExampleResult, addressbook_schema};
 
 const MESSAGE_WORD_LIMIT: u32 = 4096;
@@ -62,7 +62,7 @@ fn build_message(schema: &capnp_schema::CompiledSchema) -> ExampleResult<Arc<Own
     let mut phones = alice.init_phones(1)?;
     let mut phone = phone_number::Builder::from_dynamic(phones.struct_element(0)?);
     phone.set_number("555-1212")?;
-    phone.set_type_(PhoneType::Mobile)?;
+    phone.set_type_(Type_::Mobile)?;
     alice.employment()?.set_school("MIT")?;
 
     let mut bob = person::Builder::from_dynamic(people.struct_element(1)?);
@@ -72,10 +72,10 @@ fn build_message(schema: &capnp_schema::CompiledSchema) -> ExampleResult<Arc<Own
     let mut phones = bob.init_phones(2)?;
     let mut home = phone_number::Builder::from_dynamic(phones.struct_element(0)?);
     home.set_number("555-4567")?;
-    home.set_type_(PhoneType::Home)?;
+    home.set_type_(Type_::Home)?;
     let mut work = phone_number::Builder::from_dynamic(phones.struct_element(1)?);
     work.set_number("555-7654")?;
-    work.set_type_(PhoneType::Work)?;
+    work.set_type_(Type_::Work)?;
     bob.employment()?.set_unemployed(())?;
 
     Ok(OwnedMessage::new(

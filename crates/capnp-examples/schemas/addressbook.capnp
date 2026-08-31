@@ -3,22 +3,22 @@
 
 @0x9eb32e19f86ee174;
 
-enum PhoneType @0x91e0bd04d585062f {
-  mobile @0;
-  home @1;
-  work @2;
-}
-
-struct PhoneNumber @0x814e90b29c9e8ad0 {
-  number @0 :Text;
-  type @1 :PhoneType;
-}
-
 struct Person @0x98808e9832e8bc18 {
   id @0 :UInt32;
   name @1 :Text;
   email @2 :Text;
   phones @3 :List(PhoneNumber);
+
+  struct PhoneNumber @0x814e90b29c9e8ad0 {
+    number @0 :Text;
+    type @1 :Type;
+
+    enum Type @0x91e0bd04d585062f {
+      mobile @0;
+      home @1;
+      work @2;
+    }
+  }
 
   employment :union {
     unemployed @4 :Void;

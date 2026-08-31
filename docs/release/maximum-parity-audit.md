@@ -20,7 +20,7 @@ long-running release gate.
 | Exclusive/multi-segment builders, graph copy/orphans, canonicalization | M11–M14 | implemented | pinned C++ decode/canonical fixtures, compile-fail alias tests | none known |
 | Packed, sync/async I/O, mmap/caller storage, feature matrix | M15–M16 | implemented | byte-exact C++ interop and arbitrary chunk boundaries | none known |
 | Reflection, dynamic values, generated data/interface APIs | M17–M21 | implemented | pinned compiler requests and C++/Rust cross-read fixtures | none known |
-| Native parser, semantic/layout compiler, request/codegen, CLI | M22–M26 | implemented with recorded source-shape gap | pinned C++ requests, self-hosted generation, multi-file CLI tests | declarations nested in interfaces are not yet classified correctly by the native semantic resolver |
+| Native parser, semantic/layout compiler, request/codegen, CLI | M22–M26 | implemented | pinned C++ requests, self-hosted generation, multi-file CLI tests, compiled nested-interface declaration regression | none known |
 | Text and JSON tools | M27–M28 | implemented | pinned C++ text corpus and byte-exact JSON policy fixtures | production application JSON policy remains caller-owned |
 | Parallel read/build/batch scheduling | M29–M31 | implemented | deterministic concurrency tests and checked-in four-core results | rerun performance artifacts at the release commit |
 | RPC schema, transport, Level 0 tables, capability lifetime | M32–M34 | implemented | lossless schema/wire tests and pinned capability interop | activation follows M40 |
@@ -32,7 +32,7 @@ long-running release gate.
 | Level 4 distributed equality | M45 | candidate | pinned wire surface and adversarial native network model | no pinned C++ behavioral implementation exists; activate after M40/M44 |
 | Persistent capabilities | M46 | candidate | pinned interface plus restart, sealing, expiry, tamper and revocation model | realm database, cryptography, clock, owner authentication and dialer remain application policy |
 | ByteStream, JSON-RPC, HTTP/CONNECT, WebSocket | M47 | candidate | exact pinned C++ case inventory plus bounded native lifecycle tests | activate after M40–M46 |
-| Address-book, calculator and full-platform examples | M47 | candidate | native/C++ address-book cross-read and calculator pipeline/callback/platform scenarios | nested sample declarations use explicit pinned IDs at file scope until the compiler gap is fixed |
+| Address-book, calculator and full-platform examples | M47 | candidate | canonical nested sample schemas, native/C++ address-book cross-read and calculator pipeline/callback/platform scenarios | activate after M40–M46 |
 | Maximum-parity release | M48 | in progress | this audit and executable gates | multi-day full-platform fault/soak, release-commit performance rerun, security gate and every predecessor activation |
 
 ## C++ facilities that are Rust-inapplicable
@@ -65,9 +65,11 @@ Rust-native implementation should not reproduce.
    commit and hardware; historical artifacts cannot excuse a regression.
 4. The final security gate must pass Miri, Loom, bounded fuzz, unsafe-code,
    shell, MSRV, Cargo, rustdoc, Clippy, Bazel, and all pinned-oracle checks.
-5. The nested-interface declaration compiler gap must either be implemented or
-   remain an explicit release limitation with a regression test that prevents
-   incorrect silent compilation.
+
+The former nested-interface declaration compiler blocker is resolved. Named
+declarations now take precedence over contextual methods, a compiled-schema
+regression covers the distinction, and the native examples use the canonical
+pinned C++ nesting rather than flattened substitutes.
 
 The executable inventory check is `tools/verify-m48-inventory.sh`. It verifies
 that the manifest retains the required milestone/evidence states and that this

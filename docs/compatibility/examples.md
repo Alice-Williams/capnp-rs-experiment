@@ -26,15 +26,16 @@ shortcut, and a sealed SturdyRef restored after replacing the connection
 resolver. A restored reference preserves stable object identity but receives
 fresh connection state.
 
-## Native compiler source-shape limitation
+## Canonical nested source shape
 
-The pinned C++ schemas nest `PhoneNumber`/`PhoneType` inside `Person` and
+The pinned C++ schemas nest `PhoneNumber`/`Type` inside `Person` and
 `Expression`/`Value`/`Function`/`Operator` inside `Calculator`. The current
-native semantic resolver does not yet classify declarations nested in an
-interface correctly. M47 therefore keeps those declarations at file scope and
-spells every pinned type ID explicitly. This preserves their wire identities
-and generated APIs while recording the remaining source-language parity gap;
-it is not a claim that nested-interface declaration resolution is complete.
+native semantic resolver classifies named declarations before contextual
+interface methods, so these schemas retain the pinned sample's original nested
+shape. A compiled-schema regression covers nested structs, enums, interfaces,
+and methods inside an interface. The examples also spell the pinned derived
+type IDs explicitly so accidental source movement cannot silently change their
+wire identities.
 
 Run all scenarios with:
 

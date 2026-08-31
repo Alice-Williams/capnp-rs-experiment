@@ -1051,7 +1051,9 @@ fn parse_declaration(
     ) && tokens.get(1).and_then(identifier).is_some();
     let contextual = match parent_kind {
         Some(DeclarationKind::Enum) => Some((DeclarationKind::Enumerant, 0)),
-        Some(DeclarationKind::Interface) => Some((DeclarationKind::Method, 0)),
+        Some(DeclarationKind::Interface) if !begins_named_declaration => {
+            Some((DeclarationKind::Method, 0))
+        }
         Some(DeclarationKind::Struct | DeclarationKind::Union | DeclarationKind::Group)
             if !begins_named_declaration
                 && tokens.iter().any(|token| operator(token) == Some(":")) =>
@@ -1779,7 +1781,8 @@ fn reaches_cycle(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use capnp_schema::{CompiledSchema, LoadLimits, NodeKind, Value};
+    use crate::request::compile_program;
+    use capnp_schema::{CapnpVersion, CompiledSchema, LoadLimits, NodeKind, Value};
 
     const WIRE: &str = include_str!("../../../conformance/schemas/wire-fixture.capnp");
     const LANGUAGE: &str = include_str!("../../../conformance/schemas/language-fixture.capnp");
@@ -1803,6 +1806,79 @@ mod tests {
         sources.insert_explicit("/schemas/language-fixture.capnp", LANGUAGE);
         sources.insert_explicit("/schemas/import-fixture.capnp", IMPORTS);
         sources
+    }
+
+    #[test]
+    fn named_declarations_nested_in_interfaces_are_not_methods() {
+        let mut sources = ModuleSources::default();
+        sources.insert_explicit(
+            "/nested-interface.capnp",
+            r#"
+                @0x8000000000000100;
+                interface Outer @0x8000000000000101 {
+                    struct Payload @0x8000000000000102 {
+                        value @0 :UInt64;
+                    }
+                    enum Choice @0x8000000000000103 {
+                        first @0;
+                        second @1;
+                    }
+                    interface Callback @0x8000000000000104 {
+                        call @0 (value :Payload) -> (result :Payload);
+                    }
+                    consume @0 (payload :Payload, choice :Choice, callback :Callback)
+                        -> (result :Payload);
+                }
+            "#,
+        );
+        let program = sources.resolve("/nested-interface.capnp", ResolveLimits::default());
+        assert!(program.is_valid(), "{:#?}", program.diagnostics);
+        let module = program
+            .module("/nested-interface.capnp")
+            .expect("nested interface module");
+        for (name, kind) in [
+            ("Outer.Payload", DeclarationKind::Struct),
+            ("Outer.Choice", DeclarationKind::Enum),
+            ("Outer.Callback", DeclarationKind::Interface),
+            ("Outer.consume", DeclarationKind::Method),
+            ("Outer.Callback.call", DeclarationKind::Method),
+        ] {
+            assert_eq!(
+                module
+                    .declarations
+                    .iter()
+                    .find(|declaration| declaration.qualified_name == name)
+                    .map(|declaration| declaration.kind),
+                Some(kind),
+                "wrong declaration kind for {name}"
+            );
+        }
+
+        let schema = compile_program(
+            &program,
+            CapnpVersion {
+                major: 1,
+                minor: 0,
+                micro: 2,
+            },
+        )
+        .expect("compile nested interface declarations");
+        let outer = schema
+            .node(0x8000_0000_0000_0101)
+            .expect("compiled outer interface");
+        assert!(matches!(outer.kind, NodeKind::Interface(_)));
+        assert!(matches!(
+            schema.nested(outer.id, "Payload").map(|node| &node.kind),
+            Some(NodeKind::Struct(_))
+        ));
+        assert!(matches!(
+            schema.nested(outer.id, "Choice").map(|node| &node.kind),
+            Some(NodeKind::Enum(_))
+        ));
+        assert!(matches!(
+            schema.nested(outer.id, "Callback").map(|node| &node.kind),
+            Some(NodeKind::Interface(_))
+        ));
     }
 
     #[test]
