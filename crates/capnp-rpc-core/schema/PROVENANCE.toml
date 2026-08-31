@@ -1,0 +1,9 @@
+generator = "capnp-cli 0.1.0 native compile -o-"
+generator_commit = "e03575d"
+generated_at = "2026-08-31"
+source_commit = "e7c9cd96f1505b5ae486db7821006c2f5dce5b5b"
+sources = ["rpc.capnp", "rpc-twoparty.capnp", "c++.capnp"]
+sha256 = "27b307bbb70969b24bdbb53ef1adfc5f6996bd4065e7b3862ee0c8f4467e7ef0"
+
+[reproduce]
+command = "cargo run -p capnp-cli -- compile --src-prefix conformance/upstream/capnproto/e7c9cd96f1505b5ae486db7821006c2f5dce5b5b -I conformance/upstream/capnproto/e7c9cd96f1505b5ae486db7821006c2f5dce5b5b -o- conformance/upstream/capnproto/e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/rpc.capnp conformance/upstream/capnproto/e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/rpc-twoparty.capnp"

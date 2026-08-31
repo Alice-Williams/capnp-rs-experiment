@@ -87,7 +87,7 @@ wire safety or protocol ordering.
 
 ### Phase 6 — Thread-safe two-party RPC Level 1
 
-- [M32 — RPC schema binding and transport envelope](milestones/M32-rpc-schema-binding-and-transport-envelope.md)
+- [M32 — RPC schema binding and transport envelope](milestones/M32-rpc-schema-binding-and-transport-envelope.md) — complete
 - [M33 — Connection actor and Level-0 tables](milestones/M33-connection-actor-and-level-0-tables.md)
 - [M34 — Capability import/export and lifetime](milestones/M34-capability-import-export-and-lifetime.md)
 - [M35 — Promise pipelining and promised answers](milestones/M35-promise-pipelining-and-promised-answers.md)

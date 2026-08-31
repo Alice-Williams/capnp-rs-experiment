@@ -2,8 +2,9 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 rust_library(
     name = "capnp_rpc_core",
-    srcs = ["src/lib.rs"],
+    srcs = glob(["src/**/*.rs"]),
     crate_name = "capnp_rpc_core",
+    compile_data = ["schema/rpc-protocol-request.bin"],
     edition = "2024",
     deps = [
         "//crates/capnp-message:capnp_message",
@@ -16,4 +17,3 @@ rust_test(
     name = "capnp_rpc_core_test",
     crate = ":capnp_rpc_core",
 )
-

@@ -23,8 +23,9 @@ milestones under [`docs/plan`](docs/plan/README.md). The Phase 0 foundation,
 oracle corpus, benchmark harnesses, and safety/concurrency ADRs are complete.
 Implementation has completed the conformance-first wire, construction,
 reflection, code-generation, native compiler, text-tooling, and JSON-tooling
-phases. The first parallel-processing milestone adds zero-copy immutable list
-partitioning and retained-subtree work planning.
+phases plus all three parallel-processing milestones. The RPC phase now has a
+pinned, revision-tolerant schema binding and bounded executor-neutral transport
+envelope; the connection actor and protocol tables remain the next milestone.
 
 The repository is a fifteen-crate workspace matching the intended architecture.
 `capnp-wire` implements M03's no_std words, little-endian scalar access, checked
@@ -85,6 +86,11 @@ Bounded [ordered batch pipelines](docs/tooling/batch-pipeline.md) run independen
 message transform/build/pack work concurrently, keep slow-writer memory within
 explicit item/byte reservations, and emit each stream in input order without a
 persistent pool for single-message paths.
+
+The [RPC transport envelope](docs/rpc/transport-envelope.md) owns complete
+messages and move-only ancillary resources, applies exact portable queue
+quotas, and exchanges pinned `abort` / `unimplemented` control messages without
+depending on an async executor.
 
 This is experimental software and is not yet suitable for production use.
 
