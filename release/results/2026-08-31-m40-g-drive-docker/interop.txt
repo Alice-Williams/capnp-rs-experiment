@@ -1,0 +1,11 @@
+command=bash tools/verify-m40-level1-interop.sh
+schema_pins=PASS: schema.capnp rpc.capnp rpc-twoparty.capnp persistent.capnp stream.capnp c++.capnp json.capnp
+serialization=PASS: M11 native-to-C++ decode, M14 canonical byte equality, M15 packed both directions
+generated_data=PASS: M19 native generated data decoded by C++; pinned C++ requests/fixtures consumed by native generated readers
+rpc_capabilities=PASS: M34 pinned C++ -> native -> pinned C++
+rpc_pipeline=PASS: M35 pinned C++ calculator pipeline -> native -> pinned C++
+rpc_resolution=PASS: M36 pinned C++ resolution/disembargo -> native -> pinned C++
+rpc_flow=PASS: 10 pinned C++ fixed/adaptive cases and native behavioral suite
+rpc_lifecycle=PASS: 9 pinned C++ lifecycle cases, 6 reconnect cases, and native actor/reconnect/shutdown suites
+native_rpc=PASS: 45 capnp-rpc-core tests and 24 capnp-rpc tests
+result=M40 Level-1 serialization/generated-data/RPC interoperability matrix OK

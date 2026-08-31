@@ -1,0 +1,15 @@
+format_version=1
+candidate=1.0.0-rc.1
+base_git_commit=9f23b0fe71a7fe4bc9c3852042c4d7d87821baa5
+environment=Debian Trixie dev container under Docker Desktop
+kernel=Linux 6.18.33.2-microsoft-standard-WSL2 x86_64
+cpu_model=Intel(R) Core(TM) i7-6700K CPU @ 4.00GHz
+logical_cpus=8
+memory_bytes=25157029888
+rustc=rustc 1.98.0 (88d9e12ae 2026-08-18)
+msrv=rustc 1.85.0
+rpc_decoder_fuzz_sha256=594bafbc5f8be0d96630e07572c1f7a2ec901d69575af637cabb3e21b0b4689c
+level1_soak_sha256=0faa99825f7d0d895cbde958b966949918b3e4f5665b45ec1ba8a269db515365
+fuzz_runner_sha256=b347ba5e210402ddbfae741830cb66bad244c9a8bdd6f0f269a7091e4a5f669c
+soak_runner_sha256=21c66eba6027370fdee9dc7f22b5d0ed666a16426caa8d48d63ef2aeffcd650f
+interop_runner_sha256=4afab8da574826861515710725bb63c88cab1e3153fa592971be07c83c71aac8

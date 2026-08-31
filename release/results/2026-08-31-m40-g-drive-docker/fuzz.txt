@@ -1,0 +1,3 @@
+command=M40_FUZZ_MIN_CASES=100000 M40_FUZZ_SECONDS=60 bash tools/run-m40-rpc-fuzz.sh
+m40-rpc-decoder-fuzz-ok cases=96482793 accepted=8927706 rejected=87555087 seed=7868967635423093585 elapsed_ms=60000
+gate=PASS: at least 100000 cases and 60 wall-clock seconds; no panic, abort, hang, or decoder limit escape

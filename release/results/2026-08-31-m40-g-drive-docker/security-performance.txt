@@ -1,0 +1,10 @@
+performance=M29 immutable read gate PASS: qualifying four-worker speedup >= 3.0x
+performance=M30 partitioned construction gate PASS: qualifying four-worker speedup >= 2.5x
+performance=M31 ordered batch gate PASS: qualifying four-worker speedup >= 3.0x
+performance=M39 same-connection CPU gate PASS: 3.853x four-to-one throughput; p99 and keyed fairness recorded
+security=workspace unsafe_code is forbidden and no unsafe block exists
+security=exact shared traversal Loom gate PASS
+security=27 actor lifecycle/state-machine tests PASS
+validation=Rust 1.98 workspace all-targets, doctests, strict Clippy PASS
+validation=Rust 1.85 workspace all-targets PASS
+validation=30 Bazel tests and all shell syntax checks PASS
