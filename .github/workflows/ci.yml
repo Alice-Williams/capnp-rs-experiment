@@ -91,10 +91,8 @@ jobs:
   pinned-compatibility-oracles:
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    env:
-      CAPNP_ORACLE_ROOT: ${{ runner.temp }}/capnp-oracles
     steps:
       - uses: actions/checkout@v4
 
       - name: Verify every pinned C++ compatibility surface
-        run: bash tools/verify-m48-oracles.sh
+        run: CAPNP_ORACLE_ROOT="${RUNNER_TEMP}/capnp-oracles" bash tools/verify-m48-oracles.sh
