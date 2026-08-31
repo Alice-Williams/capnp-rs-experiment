@@ -43,11 +43,12 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     let platform = platform_example::run()?;
     println!(
-        "platform: stream={} ends={} cancellations={} handoff={} restart={}->{} object={}",
+        "platform: stream={} ends={} cancellations={} handoff={} equality={} restart={}->{} object={}",
         String::from_utf8_lossy(&platform.streamed_bytes),
         platform.clean_ends,
         platform.cancellations,
         platform.direct_handoff,
+        platform.distributed_equality,
         platform.original_connection,
         platform.restored_connection,
         platform.restored_object

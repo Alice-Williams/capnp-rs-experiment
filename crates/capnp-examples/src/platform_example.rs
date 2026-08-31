@@ -8,12 +8,16 @@ use std::sync::{Arc, Mutex};
 use capnp_compat::{ByteSink, ByteStream};
 use capnp_message::{ExclusiveArena, ReaderLimits};
 use capnp_rpc::{
-    AuthenticatedOwner, AuthenticatedVatId, GrantRecord, HandoffPlan, IntroducedConnection,
-    Introduction, IssuedGrant, Level3Limits, Level3Network, Level3Router, PersistenceLimits,
-    PersistenceManager, PersistenceRealm, PersistentResolver, PersistentStore, RealmIssuedGrant,
-    RealmValidatedSturdyRef, SaveOptions, StoredGrant, SturdyRef, ValidatedSturdyRef,
+    AuthenticatedOwner, AuthenticatedVatId, DistributedJoin, GrantRecord, HandoffPlan,
+    IntroducedConnection, Introduction, IssuedGrant, JoinCandidate, JoinLimits, JoinNetwork,
+    JoinStart, JoinedCapability, Level3Limits, Level3Network, Level3Router, NewJoin,
+    PersistenceLimits, PersistenceManager, PersistenceRealm, PersistentResolver, PersistentStore,
+    RealmIssuedGrant, RealmValidatedSturdyRef, SaveOptions, StoredGrant, SturdyRef,
+    ValidatedSturdyRef,
 };
-use capnp_rpc_core::{ThirdPartyCompletion, ThirdPartyToAwait, ThirdPartyToContact};
+use capnp_rpc_core::{
+    JoinKeyPart, JoinResult, ThirdPartyCompletion, ThirdPartyToAwait, ThirdPartyToContact,
+};
 use capnp_schema::OpaquePointer;
 
 use crate::ExampleResult;
@@ -25,6 +29,7 @@ pub struct PlatformRun {
     pub clean_ends: usize,
     pub cancellations: usize,
     pub direct_handoff: bool,
+    pub distributed_equality: bool,
     pub restored_object: u64,
     pub original_connection: u64,
     pub restored_connection: u64,
@@ -45,6 +50,11 @@ pub fn run() -> ExampleResult<PlatformRun> {
     let direct_handoff = matches!(
         router.plan_introduction(&1, &2)?,
         HandoffPlan::Introduce { .. }
+    );
+    let mut equality = DistributedJoin::new(DemoJoinNetwork, JoinLimits::default());
+    let distributed_equality = matches!(
+        equality.begin(vec![JoinCandidate::Local(7), JoinCandidate::Local(7)])?,
+        JoinStart::Direct(JoinedCapability::Local(7))
     );
 
     let original = DurableCapability {
@@ -80,6 +90,7 @@ pub fn run() -> ExampleResult<PlatformRun> {
         clean_ends: recording.ends,
         cancellations: recording.cancellations,
         direct_handoff,
+        distributed_equality,
         restored_object: restored.object,
         original_connection: original.connection,
         restored_connection: restored.connection,
@@ -140,6 +151,76 @@ impl fmt::Display for DemoError {
 }
 
 impl std::error::Error for DemoError {}
+
+#[derive(Debug)]
+struct DemoJoinNetwork;
+
+impl JoinNetwork for DemoJoinNetwork {
+    type Connection = u8;
+    type VatId = &'static str;
+    type Object = u64;
+    type JoinSession = ();
+    type Error = DemoError;
+
+    fn authenticated_peer(
+        &self,
+        _connection: &Self::Connection,
+    ) -> Result<AuthenticatedVatId<Self::VatId>, Self::Error> {
+        Err(DemoError::Unsupported)
+    }
+
+    fn begin_join(&mut self, _count: usize) -> Result<NewJoin<Self::JoinSession>, Self::Error> {
+        Err(DemoError::Unsupported)
+    }
+
+    fn accept_join_part(
+        &mut self,
+        _source: &Self::Connection,
+        _object: &Self::Object,
+        _part: &JoinKeyPart,
+    ) -> Result<JoinResult, Self::Error> {
+        Err(DemoError::Unsupported)
+    }
+
+    fn forward_join_part(
+        &mut self,
+        _source: &Self::Connection,
+        _destination: &Self::Connection,
+        _part: &JoinKeyPart,
+    ) -> Result<JoinKeyPart, Self::Error> {
+        Err(DemoError::Unsupported)
+    }
+
+    fn relay_join_result(
+        &mut self,
+        _source: &Self::Connection,
+        _destination: &Self::Connection,
+        _result: &JoinResult,
+    ) -> Result<JoinResult, Self::Error> {
+        Err(DemoError::Unsupported)
+    }
+
+    fn add_join_result(
+        &mut self,
+        _session: &Self::JoinSession,
+        _path_index: usize,
+        _source: &Self::Connection,
+        _result: &JoinResult,
+    ) -> Result<(), Self::Error> {
+        Err(DemoError::Unsupported)
+    }
+
+    fn connect_join(
+        &mut self,
+        _session: &Self::JoinSession,
+    ) -> Result<IntroducedConnection<Self::Connection>, Self::Error> {
+        Err(DemoError::Unsupported)
+    }
+
+    fn cancel_join(&mut self, _session: &Self::JoinSession) -> Result<(), Self::Error> {
+        Err(DemoError::Unsupported)
+    }
+}
 
 #[derive(Debug, Default)]
 struct DemoNetwork {
@@ -400,6 +481,7 @@ mod tests {
         assert_eq!(result.clean_ends, 1);
         assert_eq!(result.cancellations, 1);
         assert!(result.direct_handoff);
+        assert!(result.distributed_equality);
         assert_eq!(result.restored_object, 7);
         assert_eq!(result.original_connection, 44);
         assert_eq!(result.restored_connection, 900);

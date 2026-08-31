@@ -18,7 +18,7 @@ printf '%s\n' "$output"
 grep -Fq 'address-book: 123|Alice|' <<<"$output"
 grep -Fq 'address-book: 456|Bob|' <<<"$output"
 grep -Fq 'calculator: operator=42 callback=42 defined=42 concurrent=[11.0, 31.0] callback-calls=2' <<<"$output"
-grep -Fq 'platform: stream=ordered stream discarded ends=1 cancellations=1 handoff=true restart=44->900 object=7' <<<"$output"
+grep -Fq 'platform: stream=ordered stream discarded ends=1 cancellations=1 handoff=true equality=true restart=44->900 object=7' <<<"$output"
 
 decoded=$(
   "$capnp" decode \

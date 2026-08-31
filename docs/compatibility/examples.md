@@ -21,9 +21,10 @@ and concurrent dispatch.
 
 The platform scenario composes the existing runtime facilities without adding
 wire behavior: ordered `ByteStream` writes, explicit cancellation, authenticated
-direct-handoff planning, and a sealed SturdyRef restored after replacing the
-connection resolver. A restored reference preserves stable object identity but
-receives fresh connection state.
+direct-handoff planning, distributed equality's identical-local-object
+shortcut, and a sealed SturdyRef restored after replacing the connection
+resolver. A restored reference preserves stable object identity but receives
+fresh connection state.
 
 ## Native compiler source-shape limitation
 
