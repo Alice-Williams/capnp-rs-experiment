@@ -14,15 +14,36 @@ for number in range(0, 40):
     name = f"M{number:02d}"
     if milestones.get(name) != "complete":
         raise SystemExit(f"{name} is not recorded complete")
-if "M40" in milestones:
-    raise SystemExit("M40 must not be recorded complete before its 24-hour soak")
-for number in range(41, 48):
-    name = f"M{number:02d}"
-    state = milestones.get(name, "")
-    if not state.startswith("implementation candidate"):
-        raise SystemExit(f"{name} is not recorded as an implementation candidate")
-    if name not in manifest.get("evidence", {}):
-        raise SystemExit(f"{name} evidence is missing")
+
+evidence = manifest.get("evidence", {})
+m40_state = milestones.get("M40")
+m48_state = milestones.get("M48")
+if m40_state is None:
+    if m48_state is not None:
+        raise SystemExit("M48 cannot be recorded before M40 activation")
+    for number in range(41, 48):
+        name = f"M{number:02d}"
+        state = milestones.get(name, "")
+        if not state.startswith("implementation candidate"):
+            raise SystemExit(f"{name} is not recorded as an implementation candidate")
+        if name not in evidence:
+            raise SystemExit(f"{name} evidence is missing")
+    print("M48 inventory phase: implementation candidates await M40 activation")
+elif m40_state == "complete":
+    for number in range(41, 48):
+        name = f"M{number:02d}"
+        if milestones.get(name) != "complete":
+            raise SystemExit(f"{name} must activate atomically after M40")
+        if name not in evidence:
+            raise SystemExit(f"{name} evidence is missing")
+    if m48_state not in (None, "complete"):
+        raise SystemExit("M48 must be absent while in progress or recorded complete")
+    if m48_state == "complete" and "M48" not in evidence:
+        raise SystemExit("M48 completion evidence is missing")
+    phase = "maximum-parity release complete" if m48_state == "complete" else "M40-M47 activated; M48 release pending"
+    print(f"M48 inventory phase: {phase}")
+else:
+    raise SystemExit("M40 must be absent before its soak or recorded complete after it passes")
 PY
 
 audit=docs/release/maximum-parity-audit.md

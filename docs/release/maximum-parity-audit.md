@@ -78,8 +78,11 @@ pinned C++ nesting rather than flattened substitutes.
 
 The executable inventory check is `tools/verify-m48-inventory.sh`. It verifies
 that the manifest retains the required milestone/evidence states and that this
-audit continues to name every blocker; it never converts a candidate into a
-release merely because the fast test suite passes.
+audit continues to name every blocker. It accepts exactly three dependency-
+consistent phases: M41–M47 candidates while M40 is pending, atomic M40–M47
+activation while M48 remains absent, or M00–M48 complete with M48 evidence.
+Partial activation is rejected, and the verifier never converts a candidate
+into a release merely because the fast test suite passes.
 
 The authoritative M40 run must use `tools/run-m40-release-soak.sh` with a new
 `M40_SOAK_RESULT_DIR`. The wrapper refuses dirty worktrees, reused result
