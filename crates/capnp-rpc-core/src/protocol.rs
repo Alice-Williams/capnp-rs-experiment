@@ -16,10 +16,10 @@ use capnp_schema::{
 };
 
 use crate::level0::{
-    AcceptMessage, BootstrapMessage, CallMessage, DisembargoMessage, FinishMessage, ProvideMessage,
-    ReleaseMessage, ResolveMessage, ReturnMessage, ThirdPartyAnswerMessage,
+    AcceptMessage, BootstrapMessage, CallMessage, DisembargoMessage, FinishMessage, JoinMessage,
+    ProvideMessage, ReleaseMessage, ResolveMessage, ReturnMessage, ThirdPartyAnswerMessage,
     bind_attached_resources, read_accept, read_bootstrap, read_call, read_disembargo, read_finish,
-    read_provide, read_release, read_resolve, read_return, read_third_party_answer,
+    read_join, read_provide, read_release, read_resolve, read_return, read_third_party_answer,
 };
 use crate::{OwnedResource, ResourceBindingStats, ReturnPayload};
 
@@ -130,6 +130,7 @@ pub enum ProtocolMessage {
     Provide(ProvideMessage),
     Accept(AcceptMessage),
     ThirdPartyAnswer(ThirdPartyAnswerMessage),
+    Join(JoinMessage),
     /// Includes both later-level messages and discriminants added by a newer
     /// schema revision. The M40 Level-1 boundary assigns neither semantics.
     Unsupported {
@@ -391,6 +392,7 @@ fn read_protocol_struct_with_limits(
         14 => Ok(ProtocolMessage::ThirdPartyAnswer(read_third_party_answer(
             &root, limits,
         )?)),
+        12 => Ok(ProtocolMessage::Join(read_join(&root, limits)?)),
         discriminant => Ok(ProtocolMessage::Unsupported { discriminant }),
     }
 }

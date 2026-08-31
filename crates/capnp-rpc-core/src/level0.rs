@@ -30,7 +30,7 @@ pub enum CallTarget {
     PromisedAnswer(PromisedAnswer),
 }
 
-macro_rules! third_party_token {
+macro_rules! opaque_token {
     ($name:ident) => {
         #[derive(Clone, Debug, Eq, PartialEq)]
         pub struct $name(OpaquePointer);
@@ -55,9 +55,11 @@ macro_rules! third_party_token {
     };
 }
 
-third_party_token!(ThirdPartyToContact);
-third_party_token!(ThirdPartyToAwait);
-third_party_token!(ThirdPartyCompletion);
+opaque_token!(ThirdPartyToContact);
+opaque_token!(ThirdPartyToAwait);
+opaque_token!(ThirdPartyCompletion);
+opaque_token!(JoinKeyPart);
+opaque_token!(JoinResult);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ThirdPartyCapDescriptor {
@@ -251,6 +253,13 @@ pub struct AcceptMessage {
 pub struct ThirdPartyAnswerMessage {
     pub completion: ThirdPartyCompletion,
     pub answer_id: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct JoinMessage {
+    pub question_id: u32,
+    pub target: CallTarget,
+    pub key_part: JoinKeyPart,
 }
 
 #[derive(Clone, Debug)]
@@ -697,6 +706,49 @@ pub fn encode_return_await_from_third_party(
     owned(arena, limits)
 }
 
+pub fn encode_join(
+    message: &JoinMessage,
+    limits: ProtocolLimits,
+) -> Result<Arc<OwnedMessage>, ProtocolError> {
+    let schema = protocol_schema()?;
+    let mut arena = arena(limits)?;
+    {
+        let mut root =
+            capnp_schema::DynamicStructBuilder::root(&schema, &mut arena, MESSAGE_TYPE_ID)?;
+        let mut join = root.init_struct("join")?;
+        join.set("questionId", DynamicInput::UInt32(message.question_id))?;
+        {
+            let mut target = join.init_struct("target")?;
+            write_message_target(&mut target, &message.target, limits)?;
+        }
+        join.set(
+            "keyPart",
+            DynamicInput::Pointer(message.key_part.as_opaque()),
+        )?;
+    }
+    owned(arena, limits)
+}
+
+pub fn encode_join_result(
+    answer_id: u32,
+    result: &JoinResult,
+    limits: ProtocolLimits,
+) -> Result<Arc<OwnedMessage>, ProtocolError> {
+    let schema = protocol_schema()?;
+    let mut arena = arena(limits)?;
+    {
+        let mut root =
+            capnp_schema::DynamicStructBuilder::root(&schema, &mut arena, MESSAGE_TYPE_ID)?;
+        let mut returned = root.init_struct("return")?;
+        returned.set("answerId", DynamicInput::UInt32(answer_id))?;
+        returned.set("releaseParamCaps", DynamicInput::Bool(true))?;
+        let mut payload = returned.init_struct("results")?;
+        payload.set("content", DynamicInput::Pointer(result.as_opaque()))?;
+        payload.init_list("capTable", 0)?;
+    }
+    owned(arena, limits)
+}
+
 pub fn encode_finish(
     question_id: u32,
     limits: ProtocolLimits,
@@ -932,6 +984,37 @@ pub(crate) fn read_third_party_answer(
         )?),
         answer_id,
     })
+}
+
+pub(crate) fn read_join(
+    root: &DynamicStruct,
+    limits: ProtocolLimits,
+) -> Result<JoinMessage, ProtocolError> {
+    let join = structure(root.get("join")?, "join")?;
+    let target = structure(join.get("target")?, "join.target")?;
+    Ok(JoinMessage {
+        question_id: uint32(join.get("questionId")?, "join.questionId")?,
+        target: read_message_target(&target, limits)?,
+        key_part: JoinKeyPart::from_opaque(opaque_pointer(
+            join.get("keyPart")?,
+            "join.keyPart",
+            limits,
+        )?),
+    })
+}
+
+pub fn read_join_result(
+    returned: &ReturnMessage,
+    limits: ProtocolLimits,
+) -> Result<JoinResult, ProtocolError> {
+    let ReturnPayload::Results(payload) = &returned.payload else {
+        return Err(ProtocolError::FieldType("return.results"));
+    };
+    Ok(JoinResult::from_opaque(
+        payload
+            .content
+            .to_opaque(crate::protocol::reader_limits(limits))?,
+    ))
 }
 
 pub(crate) fn read_finish(root: &DynamicStruct) -> Result<FinishMessage, ProtocolError> {
@@ -1660,6 +1743,60 @@ mod tests {
                 requested: 4,
                 limit: 3,
             })
+        ));
+    }
+
+    #[test]
+    fn level_four_join_and_join_result_round_trip_opaque_network_values() {
+        let limits = ProtocolLimits::default();
+        let join = JoinMessage {
+            question_id: 71,
+            target: CallTarget::ImportedCap(9),
+            key_part: JoinKeyPart::from_opaque(opaque_token(0x45)),
+        };
+        let ProtocolMessage::Join(actual) =
+            read_protocol_message(encode_join(&join, limits).expect("join")).expect("join reads")
+        else {
+            panic!("Join")
+        };
+        assert_eq!(actual.question_id, 71);
+        assert_eq!(actual.target, CallTarget::ImportedCap(9));
+        assert_eq!(token_value(actual.key_part.as_opaque()), 0x45);
+
+        let result = JoinResult::from_opaque(opaque_token(0x46));
+        let ProtocolMessage::Return(returned) =
+            read_protocol_message(encode_join_result(71, &result, limits).expect("join result"))
+                .expect("join result reads")
+        else {
+            panic!("Return")
+        };
+        assert_eq!(returned.answer_id, 71);
+        assert!(returned.release_param_caps);
+        assert_eq!(
+            token_value(
+                read_join_result(&returned, limits)
+                    .expect("typed join result")
+                    .as_opaque()
+            ),
+            0x46
+        );
+        let ProtocolMessage::Return(exception) = read_protocol_message(
+            encode_return(
+                71,
+                &HandlerResult::Exception(RpcException::new(
+                    "not equal",
+                    crate::ExceptionType::Failed,
+                )),
+                limits,
+            )
+            .expect("exception"),
+        )
+        .expect("exception reads") else {
+            panic!("Return")
+        };
+        assert!(matches!(
+            read_join_result(&exception, limits),
+            Err(ProtocolError::FieldType("return.results"))
         ));
     }
 

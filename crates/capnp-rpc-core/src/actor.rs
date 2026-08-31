@@ -1571,7 +1571,8 @@ impl ConnectionActor {
             ProtocolMessage::Disembargo(message) => self.incoming_disembargo(message),
             ProtocolMessage::Provide(_)
             | ProtocolMessage::Accept(_)
-            | ProtocolMessage::ThirdPartyAnswer(_) => self.reply_unimplemented(&raw),
+            | ProtocolMessage::ThirdPartyAnswer(_)
+            | ProtocolMessage::Join(_) => self.reply_unimplemented(&raw),
             ProtocolMessage::Abort(exception) => {
                 self.transition_terminal(ConnectionError::RemoteAbort(exception), false);
             }

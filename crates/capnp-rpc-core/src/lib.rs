@@ -34,14 +34,16 @@ pub use capability::{
 };
 pub use level0::{
     AcceptMessage, BootstrapMessage, CallMessage, CallTarget, CapDescriptor, DisembargoContext,
-    DisembargoMessage, FinishMessage, HandlerResult, Payload, PipelineOp, PromiseResolution,
-    PromisedAnswer, ProvideMessage, ReleaseMessage, ResolveMessage, ResourceBindingStats,
-    ReturnMessage, ReturnPayload, SendResultsTo, ThirdPartyAnswerMessage, ThirdPartyCapDescriptor,
-    ThirdPartyCompletion, ThirdPartyToAwait, ThirdPartyToContact, bind_attached_resources,
-    encode_accept, encode_bootstrap, encode_call, encode_call_with_capabilities,
-    encode_call_with_options, encode_disembargo, encode_finish, encode_finish_with_options,
-    encode_finish_with_release, encode_provide, encode_release, encode_resolve, encode_return,
+    DisembargoMessage, FinishMessage, HandlerResult, JoinKeyPart, JoinMessage, JoinResult, Payload,
+    PipelineOp, PromiseResolution, PromisedAnswer, ProvideMessage, ReleaseMessage, ResolveMessage,
+    ResourceBindingStats, ReturnMessage, ReturnPayload, SendResultsTo, ThirdPartyAnswerMessage,
+    ThirdPartyCapDescriptor, ThirdPartyCompletion, ThirdPartyToAwait, ThirdPartyToContact,
+    bind_attached_resources, encode_accept, encode_bootstrap, encode_call,
+    encode_call_with_capabilities, encode_call_with_options, encode_disembargo, encode_finish,
+    encode_finish_with_options, encode_finish_with_release, encode_join, encode_join_result,
+    encode_provide, encode_release, encode_resolve, encode_return,
     encode_return_await_from_third_party, encode_return_with_options, encode_third_party_answer,
+    read_join_result,
 };
 pub use protocol::{
     EXCEPTION_TYPE_ID, ExceptionType, MESSAGE_TYPE_ID, ProtocolError, ProtocolLimits,

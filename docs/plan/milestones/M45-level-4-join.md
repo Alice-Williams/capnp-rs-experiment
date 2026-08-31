@@ -1,6 +1,6 @@
 # M45 — Level-4 Join and distributed equality
 
-- Status: planned
+- Status: in progress on `dev/m45-level4-join`
 - Phase: 7
 - Depends on: M44
 
@@ -23,4 +23,3 @@ Threat model and model tests cover direct/proxy/forward/revoke/malicious paths; 
 ## Scope boundary
 
 Later milestone behavior may be anticipated in types only where required to avoid a known compatibility dead end. It must not be implemented or claimed here.
-
