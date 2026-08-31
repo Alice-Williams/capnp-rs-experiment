@@ -1,6 +1,6 @@
 # M47 — C++ compatibility adapters and examples
 
-- Status: planned
+- Status: in progress on `dev/m47-compatibility-adapters`
 - Phase: 7
 - Depends on: M28, M41, M42, M43, M44, M45, M46
 
@@ -23,4 +23,3 @@ Pinned adapter behaviors and interop pass; examples cover pipelines, callbacks, 
 ## Scope boundary
 
 Later milestone behavior may be anticipated in types only where required to avoid a known compatibility dead end. It must not be implemented or claimed here.
-
