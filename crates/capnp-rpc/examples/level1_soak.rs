@@ -1,6 +1,7 @@
 use std::error::Error;
 use std::future::Future;
 use std::io;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
@@ -20,6 +21,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut minimum_sessions = DEFAULT_SESSIONS;
     let mut duration = Duration::from_secs(DEFAULT_SECONDS);
     let mut seed = 0x6d34_305f_736f_616b_u64;
+    let mut result_file = None;
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
         let value = arguments
@@ -29,11 +31,19 @@ fn main() -> Result<(), Box<dyn Error>> {
             "--minimum-sessions" => minimum_sessions = value.parse()?,
             "--duration-seconds" => duration = Duration::from_secs(value.parse()?),
             "--seed" => seed = value.parse()?,
+            "--result-file" => result_file = Some(PathBuf::from(value)),
             _ => return Err(format!("unknown argument: {argument}").into()),
         }
     }
 
     let started = Instant::now();
+    write_status(
+        result_file.as_deref(),
+        &format!(
+            "status=RUNNING\nseed={seed}\nminimum_sessions={minimum_sessions}\nduration_seconds={}\nelapsed_seconds=0\nsessions=0\n",
+            duration.as_secs()
+        ),
+    )?;
     let mut random = Random::new(seed);
     let warmup_sessions = minimum_sessions.clamp(1_000, 10_000);
     for _ in 0..warmup_sessions {
@@ -56,6 +66,15 @@ fn main() -> Result<(), Box<dyn Error>> {
                 started.elapsed().as_secs(),
                 resident_kib()
             );
+            write_status(
+                result_file.as_deref(),
+                &format!(
+                    "status=RUNNING\nseed={seed}\nminimum_sessions={minimum_sessions}\nduration_seconds={}\nelapsed_seconds={}\nsessions={sessions}\nrss_kib={}\n",
+                    duration.as_secs(),
+                    started.elapsed().as_secs(),
+                    resident_kib()
+                ),
+            )?;
             next_report += Duration::from_secs(60);
         }
     }
@@ -69,10 +88,25 @@ fn main() -> Result<(), Box<dyn Error>> {
         .into());
     }
 
-    println!(
+    let summary = format!(
         "m40-level1-soak-ok sessions={sessions} warmup_sessions={warmup_sessions} seed={seed} elapsed_seconds={} baseline_rss_kib={baseline_rss_kib} maximum_rss_kib={maximum_rss_kib} final_rss_kib={final_rss_kib}",
         started.elapsed().as_secs()
     );
+    write_status(
+        result_file.as_deref(),
+        &format!(
+            "status=PASS\n{summary}\ngate=PASS: at least {minimum_sessions} sessions and {} wall-clock seconds; every disconnected session released all connection-owned state\n",
+            duration.as_secs()
+        ),
+    )?;
+    println!("{summary}");
+    Ok(())
+}
+
+fn write_status(path: Option<&Path>, contents: &str) -> Result<(), Box<dyn Error>> {
+    if let Some(path) = path {
+        std::fs::write(path, contents)?;
+    }
     Ok(())
 }
 
