@@ -513,7 +513,11 @@ mod tests {
             .set_bytes(&[1, 2, 3, 4])
             .expect("write bytes");
         let streaming = byte_client.write(owned_arena(write_arena));
-        assert_eq!(writes.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            writes.load(Ordering::SeqCst),
+            1,
+            "streaming dispatch is eager to preserve call order"
+        );
         block_on(streaming.completion()).expect("streaming completion");
         assert_eq!(writes.load(Ordering::SeqCst), 1);
     }

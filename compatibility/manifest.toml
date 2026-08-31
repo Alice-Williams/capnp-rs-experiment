@@ -58,11 +58,12 @@ rules_shell = "0.8.0"
 
 [support]
 wire = "M10 borrowed and Arc-owned typed readers with stable coordinate references"
-generated_api = "M21 typed data and thread-safe local interface APIs with exact pipelines"
+generated_api = "M37 typed data, exact pipelines, and eager ordered local streaming dispatch"
 native_compiler = "M26 native multi-file compile and id CLI, plugin-compatible request streaming, deterministic built-in Rust output, and self-hosted generation without a system capnp compiler"
 text_tools = "M27 bounded native text encode/decode/eval with standard, packed, and flat modes and pinned C++ short-format parity"
 json = "M28 bounded reflection codec and native binary/packed/flat JSON conversion with pinned C++ policy and annotations"
-rpc_level = "M36 senderPromise and Resolve, permanently frozen forwarding routes, exact release races, bounded loopback embargo/disembargo, and local route shortening, layered over M35 promised-answer pipelines and two-party tail routing"
+rpc_level = "M37 fixed/adaptive streaming flow control and aggregate incoming-call quotas, layered over M36 senderPromise resolution, frozen forwarding routes, exact releases, and loopback embargo/disembargo"
+flow_control = "M37 executor-neutral send-now/ack/readiness split with fixed extended windows, adaptive BDP windows, bounded in-flight bytes and waiters, and pinned C++ behavioral parity"
 parallel_read = "M29 zero-copy Arc-owned list partitions and deterministic retained-subtree work plans for scoped or external executors"
 parallel_build = "M30 disjoint primitive partitions plus sealed single-segment worker fragments with deterministic far-link finalization"
 batch_pipeline = "M31 bounded reservation-window scheduling for ordered concurrent process/build/pack work with no-pool single-item paths"
@@ -110,6 +111,20 @@ M33 = "complete"
 M34 = "complete"
 M35 = "complete"
 M36 = "complete"
+M37 = "complete"
+
+[evidence.M37]
+crates = ["crates/capnp-rpc", "crates/capnp-rpc-core", "crates/capnp-generated-fixture"]
+sources = ["pinned stream.capnp SHA-256 5b0656ca3daca9ef28740c14813d5dd474fd0f9991ce99f652838f4cccf6fb30", "Cap'n Proto rpc.h RpcFlowController contract", "Cap'n Proto rpc.c++ fixed/adaptive implementations", "Cap'n Proto rpc-test.c++ lines 2674-3060"]
+streaming = ["generated local streaming calls dispatch eagerly before returning", "each FlowController serializes send closure invocation", "independent controllers remain concurrent", "dropping FlowReady never cancels or removes the in-flight send"]
+fixed_window = ["messages send immediately", "largest-message allowance", "strict extended-window threshold", "one acknowledgement releases all currently eligible waiters"]
+adaptive_window = ["send snapshots retain time/delivery/window/fullness", "minimum RTT and delivered-rate BDP estimate", "2x startup growth", "three-round plateau exit", "1.25x steady growth collar", "7/8 saturated decay", "no application-limited shrink", "64 KiB to 1 GiB default clamps"]
+limits = ["per-message bytes", "aggregate in-flight bytes", "blocked sender count", "active incoming answer count", "aggregate incoming call wire bytes"]
+lifecycle = ["acknowledgement failure poisons and wakes the stream", "close/destruction wakes blocked readiness and all-acked waits", "incoming answer byte charges survive pipeline/tail retention and release exactly on final removal or disconnect"]
+oracle_check = "tools/verify-m37-flow-control.sh builds with Clang and runs the 10 exact pinned C++ fixed/adaptive tests, then runs the native behavioral port"
+documentation = "docs/rpc/streaming-and-flow-control.md"
+limitations = ["caller/driver supplies monotonic timestamps and drives acknowledgements", "flow controllers are per capability stream rather than a global transport window", "cooperative cancellation and reconnect remain M38", "attached resources remain M43", "three-party routing remains M44+"]
+validation = "11 capnp-rpc tests, 37 capnp-rpc-core tests, eager generated-client fixture, 10 pinned C++ flow tests, Rust 1.98 and 1.85 workspace tests, doctests, Clippy -D warnings, shell syntax, complete 28-test Bazel suite"
 
 [evidence.M36]
 crates = ["crates/capnp-schema", "crates/capnp-rpc-core"]

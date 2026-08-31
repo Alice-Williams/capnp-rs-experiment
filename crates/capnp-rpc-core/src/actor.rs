@@ -8,7 +8,9 @@
 //! forwarding routes, and bounded loopback embargoes. A call already ordered
 //! before `Resolve` is routed before that message is emitted; a loopback route
 //! cannot dispatch locally until the matching receiver disembargo arrives.
-//! Streaming, cancellation, and reconnect remain later milestones.
+//! M37 adds aggregate incoming-call byte accounting to the existing
+//! answer-count bound. Streaming flow controllers live in `capnp-rpc`;
+//! cancellation and reconnect remain later milestones.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
@@ -30,7 +32,7 @@ use crate::level0::{
 };
 use crate::protocol::{
     ExceptionType, ProtocolLimits, ProtocolMessage, RpcException, encode_abort,
-    encode_unimplemented, read_protocol_message_with_limits, read_protocol_struct,
+    encode_unimplemented, message_bytes, read_protocol_message_with_limits, read_protocol_struct,
 };
 use capnp_message::{OwnedMessage, OwnedPointerRef};
 use capnp_schema::DynamicAnyPointer;
@@ -72,6 +74,7 @@ pub struct ActorLimits {
     pub mailbox_capacity: usize,
     pub max_questions: usize,
     pub max_answers: usize,
+    pub max_incoming_call_bytes: u64,
     pub max_imports: usize,
     pub max_exports: usize,
     pub max_embargoes: usize,
@@ -84,6 +87,7 @@ impl Default for ActorLimits {
             mailbox_capacity: 256,
             max_questions: 4096,
             max_answers: 4096,
+            max_incoming_call_bytes: 256 * 1024 * 1024,
             max_imports: 4096,
             max_exports: 4096,
             max_embargoes: 4096,
@@ -96,6 +100,7 @@ impl Default for ActorLimits {
 pub struct ConnectionStats {
     pub active_questions: usize,
     pub active_answers: usize,
+    pub incoming_call_bytes: u64,
     pub allocated_questions: u64,
     pub reused_question_ids: u64,
     pub dispatched_handlers: u64,
@@ -114,6 +119,7 @@ pub enum ConnectionError {
     Overloaded { capacity: usize },
     QuestionLimit { limit: usize },
     AnswerLimit { limit: usize },
+    IncomingCallByteLimit { requested: u64, limit: u64 },
     DuplicateAnswer(u32),
     UnknownQuestion(u32),
     StaleTarget(QuestionKey),
@@ -575,7 +581,7 @@ impl ConnectionActor {
                 handle,
                 protocol_limits,
                 questions: QuestionTable::new(limits.max_questions),
-                answers: AnswerTable::new(limits.max_answers),
+                answers: AnswerTable::new(limits.max_answers, limits.max_incoming_call_bytes),
                 capabilities: CapabilityTables::new(limits.max_imports, limits.max_exports),
                 promise_imports: BTreeMap::new(),
                 promise_exports: BTreeMap::new(),
@@ -600,6 +606,7 @@ impl ConnectionActor {
         ConnectionStats {
             active_questions: self.questions.len(),
             active_answers: self.answers.len(),
+            incoming_call_bytes: self.answers.incoming_bytes(),
             active_imports,
             active_exports,
             import_references,
@@ -1104,6 +1111,19 @@ impl ConnectionActor {
     }
 
     fn incoming(&mut self, raw: Arc<OwnedMessage>) {
+        let raw_bytes = match message_bytes(&raw)
+            .map_err(|error| ConnectionError::Protocol(error.to_string()))
+            .and_then(|bytes| {
+                u64::try_from(bytes).map_err(|_| {
+                    ConnectionError::Protocol("incoming message size does not fit u64".to_owned())
+                })
+            }) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                self.protocol_failure(error);
+                return;
+            }
+        };
         let message =
             match read_protocol_message_with_limits(Arc::clone(&raw), self.protocol_limits) {
                 Ok(message) => message,
@@ -1119,6 +1139,7 @@ impl ConnectionActor {
                     AnswerKind::Bootstrap,
                     Vec::new(),
                     false,
+                    0,
                 ) {
                     Ok(answer) => answer,
                     Err(error) => {
@@ -1129,6 +1150,10 @@ impl ConnectionActor {
                 self.dispatch(IncomingRequest::Bootstrap, answer);
             }
             ProtocolMessage::Call(message) => {
+                if let Err(error) = self.answers.check_insert(message.question_id, raw_bytes) {
+                    self.protocol_failure(error);
+                    return;
+                }
                 let (target, promised_answer, promise_export) = match message.target {
                     CallTarget::BootstrapAnswer(target_id) => {
                         let Some(target) = self.answers.key_for_id(target_id) else {
@@ -1195,6 +1220,7 @@ impl ConnectionActor {
                     AnswerKind::Call,
                     param_imports,
                     message.send_results_to == SendResultsTo::Yourself,
+                    raw_bytes,
                 ) {
                     Ok(answer) => answer,
                     Err(error) => {
@@ -2743,25 +2769,59 @@ struct AnswerState {
     redirect_waiter: Option<(QuestionKey, QuestionState)>,
     tail_question: Option<QuestionKey>,
     tail_results_elsewhere: bool,
+    incoming_bytes: u64,
 }
 
 struct AnswerTable {
     values: BTreeMap<u32, (u64, AnswerState)>,
     next_generation: u64,
     max: usize,
+    incoming_bytes: u64,
+    max_incoming_bytes: u64,
 }
 
 impl AnswerTable {
-    fn new(max: usize) -> Self {
+    fn new(max: usize, max_incoming_bytes: u64) -> Self {
         Self {
             values: BTreeMap::new(),
             next_generation: 0,
             max,
+            incoming_bytes: 0,
+            max_incoming_bytes,
         }
     }
 
     fn len(&self) -> usize {
         self.values.len()
+    }
+
+    fn incoming_bytes(&self) -> u64 {
+        self.incoming_bytes
+    }
+
+    fn check_insert(&self, id: u32, incoming_bytes: u64) -> Result<u64, ConnectionError> {
+        if self.values.contains_key(&id) {
+            return Err(ConnectionError::DuplicateAnswer(id));
+        }
+        if self.values.len() >= self.max {
+            return Err(ConnectionError::AnswerLimit { limit: self.max });
+        }
+        if self.next_generation == u64::MAX {
+            return Err(ConnectionError::GenerationExhausted);
+        }
+        let requested = self.incoming_bytes.checked_add(incoming_bytes).ok_or(
+            ConnectionError::IncomingCallByteLimit {
+                requested: u64::MAX,
+                limit: self.max_incoming_bytes,
+            },
+        )?;
+        if requested > self.max_incoming_bytes {
+            return Err(ConnectionError::IncomingCallByteLimit {
+                requested,
+                limit: self.max_incoming_bytes,
+            });
+        }
+        Ok(requested)
     }
 
     fn insert(
@@ -2770,13 +2830,9 @@ impl AnswerTable {
         kind: AnswerKind,
         param_imports: Vec<u32>,
         redirect_results: bool,
+        incoming_bytes: u64,
     ) -> Result<AnswerKey, ConnectionError> {
-        if self.values.contains_key(&id) {
-            return Err(ConnectionError::DuplicateAnswer(id));
-        }
-        if self.values.len() >= self.max {
-            return Err(ConnectionError::AnswerLimit { limit: self.max });
-        }
+        let requested = self.check_insert(id, incoming_bytes)?;
         let generation = self.next_generation;
         self.next_generation = self
             .next_generation
@@ -2800,9 +2856,11 @@ impl AnswerTable {
                     redirect_waiter: None,
                     tail_question: None,
                     tail_results_elsewhere: false,
+                    incoming_bytes,
                 },
             ),
         );
+        self.incoming_bytes = requested;
         Ok(AnswerKey { id, generation })
     }
 
@@ -3011,7 +3069,12 @@ impl AnswerTable {
     }
 
     fn remove_id(&mut self, id: u32) -> Option<AnswerState> {
-        self.values.remove(&id).map(|(_, value)| value)
+        let (_, value) = self.values.remove(&id)?;
+        self.incoming_bytes = self
+            .incoming_bytes
+            .checked_sub(value.incoming_bytes)
+            .expect("answer byte accounting invariant");
+        Some(value)
     }
 
     fn finish(&mut self, id: u32, release_result_caps: bool) -> Option<AnswerState> {
@@ -3034,6 +3097,7 @@ impl AnswerTable {
 
     fn clear(&mut self) {
         self.values.clear();
+        self.incoming_bytes = 0;
     }
 }
 
@@ -4148,5 +4212,66 @@ mod tests {
             completion.complete(HandlerResult::Canceled),
             Err(ConnectionError::Disconnected)
         ));
+    }
+
+    #[test]
+    fn incoming_call_byte_quota_rejects_before_dispatch() {
+        let call = crate::encode_call(
+            7,
+            CallTarget::ImportedCap(0),
+            1,
+            2,
+            &message(3),
+            ProtocolLimits::default(),
+        )
+        .expect("call");
+        let call_bytes = u64::try_from(message_bytes(&call).expect("message size")).expect("u64");
+        let limits = ActorLimits {
+            max_incoming_call_bytes: call_bytes - 1,
+            ..ActorLimits::default()
+        };
+        let (handle, mut actor) = ConnectionActor::new(limits, ProtocolLimits::default());
+        handle.receive(call).expect("call queued");
+        let Poll::Ready(Some(ActorEffect::Send(abort))) = next(&mut actor) else {
+            panic!("abort")
+        };
+        let ProtocolMessage::Abort(exception) =
+            read_protocol_message(abort).expect("abort message")
+        else {
+            panic!("abort protocol message")
+        };
+        assert!(exception.reason.contains("IncomingCallByteLimit"));
+        assert_eq!(actor.stats().active_answers, 0);
+        assert_eq!(actor.stats().incoming_call_bytes, 0);
+        assert!(matches!(
+            next(&mut actor),
+            Poll::Ready(Some(ActorEffect::CloseTransport))
+        ));
+    }
+
+    #[test]
+    fn answer_byte_quota_is_transactional_and_released_exactly() {
+        let mut answers = AnswerTable::new(2, 8);
+        let first = answers
+            .insert(0, AnswerKind::Call, Vec::new(), false, 5)
+            .expect("first answer");
+        assert_eq!(answers.incoming_bytes(), 5);
+        assert!(matches!(
+            answers.insert(1, AnswerKind::Call, Vec::new(), false, 4),
+            Err(ConnectionError::IncomingCallByteLimit {
+                requested: 9,
+                limit: 8
+            })
+        ));
+        assert_eq!(answers.len(), 1);
+        assert_eq!(answers.incoming_bytes(), 5);
+        assert!(answers.remove_id(first.id()).is_some());
+        assert_eq!(answers.incoming_bytes(), 0);
+        answers
+            .insert(1, AnswerKind::Call, Vec::new(), false, 8)
+            .expect("quota reusable after release");
+        assert_eq!(answers.incoming_bytes(), 8);
+        answers.clear();
+        assert_eq!(answers.incoming_bytes(), 0);
     }
 }

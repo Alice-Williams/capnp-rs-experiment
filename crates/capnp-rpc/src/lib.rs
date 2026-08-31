@@ -3,7 +3,10 @@
 //! M21 deliberately provides an in-memory transport boundary, typed response
 //! futures, streaming backpressure futures, and exact capability pipeline
 //! transforms. M33 adds the executor-neutral two-party driver around the
-//! single-owner Level-0 actor from `capnp-rpc-core`.
+//! single-owner Level-0 actor from `capnp-rpc-core`. M37 makes streaming sends
+//! eager: calling a generated streaming method invokes dispatch synchronously
+//! to preserve E-order, while acknowledgement-driven flow-control futures only
+//! govern when the caller should submit another message.
 
 use std::fmt;
 use std::future::Future;
@@ -15,6 +18,7 @@ use capnp_message::{OwnedMessage, OwnedPointerRef};
 use capnp_schema::{CompiledSchema, DynamicError};
 
 mod driver;
+mod flow;
 
 pub use capnp_rpc_core::{
     ActorLimits, AnswerKey, CapDescriptor, CapabilityError, CapabilityStats, CapabilityTables,
@@ -24,6 +28,10 @@ pub use capnp_rpc_core::{
     QuestionFuture, QuestionKey, QuestionTarget, ReceivedCapability, ReturnPayload, RpcException,
 };
 pub use driver::{ConnectionDriver, DriverCompletion, DriverDispatch, DriverError};
+pub use flow::{
+    AllAcked, FlowAck, FlowController, FlowError, FlowLimits, FlowMode, FlowReady, FlowSend,
+    FlowStats,
+};
 
 pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
 pub type MessageFuture = BoxFuture<Result<Arc<OwnedMessage>, RpcError>>;
@@ -128,9 +136,13 @@ impl LocalClient {
         params: Arc<OwnedMessage>,
     ) -> StreamingCall {
         let service = Arc::clone(&self.service);
+        // Dispatch is intentionally obtained outside the async block. Local
+        // services therefore observe the call before this function returns,
+        // matching the send-now contract of Cap'n Proto streaming methods.
+        let response = service.dispatch(interface_id, method_id, params);
         StreamingCall {
             completion: Box::pin(async move {
-                service.dispatch(interface_id, method_id, params).await?;
+                response.await?;
                 Ok(())
             }),
         }
@@ -252,6 +264,10 @@ mod tests {
         assert_send_sync::<LocalClient>();
         assert_send_sync::<PipelineTransform>();
         assert_send_sync::<CapabilityPipeline>();
+        assert_send_sync::<FlowController>();
+        assert_send_sync::<FlowAck>();
+        assert_send_sync::<FlowReady>();
+        assert_send_sync::<AllAcked>();
     }
 
     #[test]

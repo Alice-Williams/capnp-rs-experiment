@@ -97,6 +97,12 @@ thread-safe command handles, generation-safe question/answer tables,
 bootstrap-pipelined calls, concurrent handler dispatch, ordered returns and
 finishes, and an executor-neutral duplex transport driver.
 
+[Streaming flow control](docs/rpc/streaming-and-flow-control.md) adds eager
+ordered streaming dispatch, fixed and adaptive bandwidth-delay-product windows,
+acknowledgement/RTT tracking, bounded blocked senders and in-flight bytes, and
+aggregate incoming-call quotas. Its behavioral corpus runs directly against the
+pinned C++ fixed/adaptive tests.
+
 This is experimental software and is not yet suitable for production use.
 
 ## License
