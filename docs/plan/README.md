@@ -83,7 +83,7 @@ wire safety or protocol ordering.
 
 - [M29 — Parallel read API and subtree planner](milestones/M29-parallel-read-api.md) — complete
 - [M30 — Partitioned parallel builder](milestones/M30-partitioned-parallel-builder.md) — complete
-- [M31 — Batch codec and pipeline scheduling](milestones/M31-batch-codec-and-pipeline-scheduling.md)
+- [M31 — Batch codec and pipeline scheduling](milestones/M31-batch-codec-and-pipeline-scheduling.md) — complete
 
 ### Phase 6 — Thread-safe two-party RPC Level 1
 

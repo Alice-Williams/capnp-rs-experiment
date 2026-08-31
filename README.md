@@ -81,6 +81,11 @@ provides disjoint primitive-list slices and sealed worker fragments with
 deterministic far-pointer finalization, while keeping ordinary builders
 exclusive and capability registration out of the concurrent boundary.
 
+Bounded [ordered batch pipelines](docs/tooling/batch-pipeline.md) run independent
+message transform/build/pack work concurrently, keep slow-writer memory within
+explicit item/byte reservations, and emit each stream in input order without a
+persistent pool for single-message paths.
+
 This is experimental software and is not yet suitable for production use.
 
 ## License

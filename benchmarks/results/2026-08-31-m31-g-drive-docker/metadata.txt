@@ -1,0 +1,17 @@
+format_version=1
+generated_utc=2026-08-31T02:10:59Z
+environment=Debian Trixie dev container under Docker Desktop
+kernel=Linux 6.18.33.2-microsoft-standard-WSL2 #1 SMP PREEMPT_DYNAMIC Thu Jun 18 21:54:43 UTC 2026 x86_64 GNU/Linux
+cpu_model=Intel(R) Core(TM) i7-6700K CPU @ 4.00GHz
+logical_cpus=8
+memory_bytes=25157029888
+rustc=rustc 1.98.0 (88d9e12ae 2026-08-18)
+base_git_commit=aec81d3a64b3fd6d26c6b287cb344a8f8b0fcc2e
+batch_module_sha256=a27edde047e3fdaf320e06d9af703a4b0a3207f2e9387fd276c53db4935414ef
+benchmark_example_sha256=0e5b6201ddbfdae439292b8110956e655063a419a254a1df1cc8422210085d7c
+words_per_message=1024
+rounds_per_word=128
+workers=4
+samples_per_mode=7
+parallel_message_threshold=2
+timer=Rust Instant; median includes bounded scheduling, transform, pack, and ordered emit

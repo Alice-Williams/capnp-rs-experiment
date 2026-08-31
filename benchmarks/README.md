@@ -81,3 +81,19 @@ bash benchmarks/run-m30-parallel-build.sh benchmarks/results/<run-name>
 The checked-in qualification run is
 `results/2026-08-31-m30-g-drive-docker`. `M30_BENCH_*` variables control work,
 workers, samples, threshold, and sizes for new non-overwriting runs.
+
+## Ordered batch-pipeline benchmark
+
+M31 measures independent per-message transform and packed encoding through the
+bounded ordered scheduler. The serial and four-worker paths consume identical
+fixtures, verify output order and checksums, and include scheduling plus
+ordered emission. A single message must stay on the caller without a pool and
+within 5%; a qualifying multi-message batch must reach 3.0x:
+
+```console
+bash benchmarks/run-m31-batch-pipeline.sh benchmarks/results/<run-name>
+```
+
+The checked-in qualification run is
+`results/2026-08-31-m31-g-drive-docker`. New configurations use the
+`M31_BENCH_*` variables and a fresh output directory.

@@ -65,6 +65,7 @@ json = "M28 bounded reflection codec and native binary/packed/flat JSON conversi
 rpc_level = "M21 in-memory local dispatch, inheritance, streaming completion, and capability pipelines; network protocol deferred to M32+"
 parallel_read = "M29 zero-copy Arc-owned list partitions and deterministic retained-subtree work plans for scoped or external executors"
 parallel_build = "M30 disjoint primitive partitions plus sealed single-segment worker fragments with deterministic far-link finalization"
+batch_pipeline = "M31 bounded reservation-window scheduling for ordered concurrent process/build/pack work with no-pool single-item paths"
 std = "M16 sync partial-I/O and executor-neutral async framing adapters"
 no_std_alloc = "M16 capnp-message and capnp-io alloc feature matrix"
 no_allocation = "M16 capnp-wire plus caller-segment-buffer frame parsing"
@@ -103,6 +104,21 @@ M27 = "complete"
 M28 = "complete"
 M29 = "complete"
 M30 = "complete"
+M31 = "complete"
+
+[evidence.M31]
+crate = "crates/capnp-async"
+api = ["BatchJob byte reservations", "BatchOutput retained-size checks", "BatchLimits item and byte windows", "run_ordered_batch scoped work sharing", "ordered pack and bounded-unpack helpers", "BatchStats measured peaks"]
+ordering = ["input sequence assigned before submission", "workers may complete out of order", "only caller-side coordinator invokes emit", "capacity releases only after every preceding sequence emits", "opaque RPC-like byte test never reorders"]
+backpressure = "40-item slow-writer stress remains at exactly four in-flight items and 4,096 reserved bytes; result channels cannot exceed the submitted window"
+errors = ["oversized reservation before submission", "retained output exceeds reservation before emit", "sequence-located process and sink failures", "caught worker panic", "unexpected pool closure"]
+single_message = "one item and below-threshold batches execute process and emit on the caller without spawning a worker; recorded one-message path uses one worker and is 4.4% faster than the explicit serial comparison"
+codecs = ["word-aligned pack with conservative worst-case output reservation", "unpack with explicit per-message output limit and input-plus-output reservation", "ordered multi-message packed round trip"]
+benchmark = "2026-08-31 Docker/WSL2 i7-6700K, 1,024-word messages, 128 transform rounds, four workers, 7-sample medians: 3.186x at 32 messages and 3.180x at 64"
+benchmark_evidence = "benchmarks/results/2026-08-31-m31-g-drive-docker"
+documentation = "docs/tooling/batch-pipeline.md"
+limitations = ["caller supplies generic transient allocation reservation", "no persistent pool", "no concurrent sink calls", "no RPC dependency inference", "no cancellation of already-submitted work", "M37 owns transport acknowledgements and adaptive flow control"]
+validation = "Rust 1.98 and 1.85 workspace tests; public API doctest; Clippy -D warnings; slow sink/order/panic/reservation tests; checked-in throughput gate; full Bazel suite"
 
 [evidence.M30]
 crate = "crates/capnp-message"

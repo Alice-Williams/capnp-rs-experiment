@@ -41,3 +41,15 @@ sh_test(
     srcs = ["verify-m30-parallel-results.sh"],
     data = glob(["results/2026-08-31-m30-g-drive-docker/**"]),
 )
+
+sh_test(
+    name = "m31_batch_runner_syntax_test",
+    srcs = ["run-m31-batch-pipeline.sh"],
+    args = ["--syntax-check-only"],
+)
+
+sh_test(
+    name = "m31_batch_results_test",
+    srcs = ["verify-m31-batch-results.sh"],
+    data = glob(["results/2026-08-31-m31-g-drive-docker/**"]),
+)

@@ -5,6 +5,27 @@
 //! so cancellation between polls preserves partial bytes and ordered progress.
 //! Only one mutable poll may exist at a time. Queued writer bytes are bounded,
 //! frames are emitted serially, and no lock or borrow crosses `Pending`.
+//!
+//! Bounded batch work also preserves input order without a persistent pool:
+//!
+//! ```
+//! use capnp_async::{BatchJob, BatchLimits, BatchOutput, run_ordered_batch};
+//! use std::convert::Infallible;
+//!
+//! let jobs = vec![BatchJob::new(1_u8, 1), BatchJob::new(2, 1)];
+//! let mut ordered = Vec::new();
+//! run_ordered_batch(
+//!     jobs,
+//!     BatchLimits::default(),
+//!     |value| Ok::<_, Infallible>(BatchOutput::new(value * 2, 1)),
+//!     |sequence, value| {
+//!         ordered.push((sequence, value));
+//!         Ok::<_, Infallible>(())
+//!     },
+//! )?;
+//! assert_eq!(ordered, [(0, 2), (1, 4)]);
+//! # Ok::<(), capnp_async::BatchError<Infallible, Infallible>>(())
+//! ```
 
 use core::fmt;
 use core::pin::Pin;
@@ -14,6 +35,13 @@ use std::io;
 
 use capnp_io::{FrameError, FrameLimits, MAX_SEGMENTS, encode_frame};
 use capnp_wire::read_u32_le;
+
+mod batch;
+
+pub use batch::{
+    BatchError, BatchJob, BatchLimits, BatchOutput, BatchStats, pack_messages_ordered,
+    run_ordered_batch, unpack_messages_ordered,
+};
 
 pub trait AsyncRead {
     fn poll_read(
