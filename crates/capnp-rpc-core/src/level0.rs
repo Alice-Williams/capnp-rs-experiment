@@ -308,6 +308,26 @@ pub fn encode_return(
     result: &HandlerResult,
     limits: ProtocolLimits,
 ) -> Result<Arc<OwnedMessage>, ProtocolError> {
+    encode_return_with_options(answer_id, result, true, false, limits)
+}
+
+/// Encodes a `Return` including the lifecycle flags used by implementations
+/// that have already released parameter or answer state.
+pub fn encode_return_with_options(
+    answer_id: u32,
+    result: &HandlerResult,
+    release_param_caps: bool,
+    no_finish_needed: bool,
+    limits: ProtocolLimits,
+) -> Result<Arc<OwnedMessage>, ProtocolError> {
+    if no_finish_needed
+        && matches!(
+            result,
+            HandlerResult::ResultsWithCapabilities { cap_table, .. } if !cap_table.is_empty()
+        )
+    {
+        return Err(ProtocolError::FieldType("return.noFinishNeeded"));
+    }
     let result_pointer = match result {
         HandlerResult::Results(message)
         | HandlerResult::ResultsWithCapabilities {
@@ -327,7 +347,8 @@ pub fn encode_return(
             capnp_schema::DynamicStructBuilder::root(&schema, &mut arena, MESSAGE_TYPE_ID)?;
         let mut returned = message.init_struct("return")?;
         returned.set("answerId", DynamicInput::UInt32(answer_id))?;
-        returned.set("releaseParamCaps", DynamicInput::Bool(true))?;
+        returned.set("releaseParamCaps", DynamicInput::Bool(release_param_caps))?;
+        returned.set("noFinishNeeded", DynamicInput::Bool(no_finish_needed))?;
         match (result, result_pointer.as_ref()) {
             (HandlerResult::Results(_), Some(pointer)) => {
                 let mut payload = returned.init_struct("results")?;
@@ -444,6 +465,15 @@ pub fn encode_finish_with_release(
     release_result_caps: bool,
     limits: ProtocolLimits,
 ) -> Result<Arc<OwnedMessage>, ProtocolError> {
+    encode_finish_with_options(question_id, release_result_caps, false, limits)
+}
+
+pub fn encode_finish_with_options(
+    question_id: u32,
+    release_result_caps: bool,
+    require_early_cancellation_workaround: bool,
+    limits: ProtocolLimits,
+) -> Result<Arc<OwnedMessage>, ProtocolError> {
     let schema = protocol_schema()?;
     let mut arena = arena(limits)?;
     {
@@ -454,7 +484,7 @@ pub fn encode_finish_with_release(
         finish.set("releaseResultCaps", DynamicInput::Bool(release_result_caps))?;
         finish.set(
             "requireEarlyCancellationWorkaround",
-            DynamicInput::Bool(false),
+            DynamicInput::Bool(require_early_cancellation_workaround),
         )?;
     }
     owned(arena, limits)

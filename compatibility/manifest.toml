@@ -62,8 +62,9 @@ generated_api = "M37 typed data, exact pipelines, and eager ordered local stream
 native_compiler = "M26 native multi-file compile and id CLI, plugin-compatible request streaming, deterministic built-in Rust output, and self-hosted generation without a system capnp compiler"
 text_tools = "M27 bounded native text encode/decode/eval with standard, packed, and flat modes and pinned C++ short-format parity"
 json = "M28 bounded reflection codec and native binary/packed/flat JSON conversion with pinned C++ policy and annotations"
-rpc_level = "M37 fixed/adaptive streaming flow control and aggregate incoming-call quotas, layered over M36 senderPromise resolution, frozen forwarding routes, exact releases, and loopback embargo/disembargo"
+rpc_level = "M38 cooperative cancellation, clean transport-complete shutdown, disconnect propagation, and generation-safe capability recreation, layered over M37 flow control"
 flow_control = "M37 executor-neutral send-now/ack/readiness split with fixed extended windows, adaptive BDP windows, bounded in-flight bytes and waiters, and pinned C++ behavioral parity"
+rpc_lifecycle = "M38 last-lease cancellation, application opt-out, legacy Finish deferral, noFinishNeeded handling, waiter-complete disconnect, surfaced shutdown errors, and disconnect-only reconnect classification"
 parallel_read = "M29 zero-copy Arc-owned list partitions and deterministic retained-subtree work plans for scoped or external executors"
 parallel_build = "M30 disjoint primitive partitions plus sealed single-segment worker fragments with deterministic far-link finalization"
 batch_pipeline = "M31 bounded reservation-window scheduling for ordered concurrent process/build/pack work with no-pool single-item paths"
@@ -112,6 +113,20 @@ M34 = "complete"
 M35 = "complete"
 M36 = "complete"
 M37 = "complete"
+M38 = "complete"
+
+[evidence.M38]
+crates = ["crates/capnp-rpc-core", "crates/capnp-rpc"]
+sources = ["pinned rpc.capnp Finish/Return lifecycle fields", "pinned c++.capnp allowCancellation annotation", "Cap'n Proto rpc.c++ Finish/disconnect state transitions", "Cap'n Proto rpc-test.c++ cancellation and clean-shutdown cases", "Cap'n Proto reconnect.h and reconnect-test.c++"]
+question_lifetime = ["QuestionFuture and derived pipeline targets share one lease", "last-lease drop and explicit cancel enqueue one idempotent actor transition", "sent questions emit Finish and retain their ID tombstone until late Return or disconnect", "local shortened questions cancel without wire traffic", "noFinishNeeded suppresses Finish only when no result capabilities require release"]
+application_cancellation = ["each remote dispatch exposes a clonable cooperative signal", "modern Finish cancels allowed work immediately", "application opt-out retains work through completion but suppresses Return", "legacy workaround yields one scheduling turn before cancellation", "disconnect force-cancels even opted-out work"]
+disconnect = ["all active question and redirect waiters complete exactly once", "queued embargo calls complete instead of hanging", "answer signals cancel and tables/imports/exports/embargoes clear", "new and queued commands reject after terminal transition"]
+shutdown = ["DriverShutdown keeps driving until transport poll_close completes", "pending close remains pending", "transport close failure surfaces as DriverError::Transport"]
+reconnect = ["only disconnected errors invalidate the current capability", "overload is classified as backoff without reconnect", "stale generation errors cannot invalidate a newer capability", "checked monotonic generations never reuse connection identity", "concurrent first use invokes the synchronous factory once", "calls are never implicitly replayed"]
+oracle_check = "tools/verify-m38-lifecycle.sh runs nine exact pinned C++ cancellation/disconnect/shutdown tests, pins six reconnect-test.c++ cases, and runs native actor, reconnect, and shutdown suites"
+documentation = "docs/rpc/cancellation-disconnect-and-reconnect.md"
+limitations = ["reconnect factory is synchronous and must not re-enter itself", "caller owns retry count, replay-safety, delay/backoff, and network dialing", "server scheduling remains M39", "attached resources remain M43", "three-party routing remains M44+"]
+validation = "45 capnp-rpc-core tests and 16 capnp-rpc tests; nine pinned C++ lifecycle tests; Rust 1.98 and 1.85 workspace tests; doctests; Clippy -D warnings; shell syntax; complete Bazel suite"
 
 [evidence.M37]
 crates = ["crates/capnp-rpc", "crates/capnp-rpc-core", "crates/capnp-generated-fixture"]

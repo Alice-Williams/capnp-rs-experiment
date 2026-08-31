@@ -10,13 +10,14 @@
 //! cannot dispatch locally until the matching receiver disembargo arrives.
 //! M37 adds aggregate incoming-call byte accounting to the existing
 //! answer-count bound. Streaming flow controllers live in `capnp-rpc`;
-//! cancellation and reconnect remain later milestones.
+//! M38 adds question-lease cancellation, application cancellation opt-out,
+//! legacy deferred `Finish` handling, and complete disconnect propagation.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 
@@ -25,9 +26,9 @@ use crate::capability::{
     ReceivedCapability,
 };
 use crate::level0::{
-    CallTarget, CapDescriptor, DisembargoContext, DisembargoMessage, HandlerResult, Payload,
-    PipelineOp, PromiseResolution, PromisedAnswer, ResolveMessage, ReturnPayload, SendResultsTo,
-    encode_bootstrap, encode_call_payload_with_options, encode_call_with_options,
+    CallTarget, CapDescriptor, DisembargoContext, DisembargoMessage, FinishMessage, HandlerResult,
+    Payload, PipelineOp, PromiseResolution, PromisedAnswer, ResolveMessage, ReturnPayload,
+    SendResultsTo, encode_bootstrap, encode_call_payload_with_options, encode_call_with_options,
     encode_disembargo, encode_finish_with_release, encode_release, encode_resolve, encode_return,
 };
 use crate::protocol::{
@@ -126,6 +127,7 @@ pub enum ConnectionError {
     StaleAnswer(AnswerKey),
     GenerationExhausted,
     Unimplemented,
+    Canceled,
     Disconnected,
     RemoteAbort(RpcException),
     Protocol(String),
@@ -177,7 +179,7 @@ impl ConnectionHandle {
         self.submit(ActorCommand::StartBootstrap {
             cell: Arc::clone(&cell),
         })?;
-        Ok(QuestionFuture { cell })
+        Ok(QuestionFuture::new(self.clone(), cell))
     }
 
     pub fn call(
@@ -196,7 +198,7 @@ impl ConnectionHandle {
             capabilities: Vec::new(),
             cell: Arc::clone(&cell),
         })?;
-        Ok(QuestionFuture { cell })
+        Ok(QuestionFuture::new(self.clone(), cell))
     }
 
     pub fn call_imported(
@@ -216,7 +218,7 @@ impl ConnectionHandle {
             capabilities,
             cell: Arc::clone(&cell),
         })?;
-        Ok(QuestionFuture { cell })
+        Ok(QuestionFuture::new(self.clone(), cell))
     }
 
     pub fn receive(&self, message: Arc<OwnedMessage>) -> Result<(), ConnectionError> {
@@ -224,7 +226,7 @@ impl ConnectionHandle {
     }
 
     pub fn shutdown(&self) -> Result<(), ConnectionError> {
-        self.submit(ActorCommand::Shutdown)
+        self.mailbox.submit_shutdown()
     }
 
     fn submit(&self, command: ActorCommand) -> Result<(), ConnectionError> {
@@ -270,7 +272,7 @@ impl PromiseResolver {
 
 #[derive(Clone)]
 pub struct QuestionTarget {
-    cell: Arc<QuestionCell>,
+    lease: Arc<QuestionLease>,
     transform: Vec<PipelineOp>,
 }
 
@@ -286,14 +288,14 @@ impl fmt::Debug for QuestionTarget {
 
 impl QuestionTarget {
     pub fn key(&self) -> Option<QuestionKey> {
-        self.cell.active_key().ok().flatten()
+        self.lease.cell.active_key().ok().flatten()
     }
 
     pub fn pointer_field(&self, index: u16) -> Self {
         let mut transform = self.transform.clone();
         transform.push(PipelineOp::GetPointerField(index));
         Self {
-            cell: Arc::clone(&self.cell),
+            lease: Arc::clone(&self.lease),
             transform,
         }
     }
@@ -302,13 +304,14 @@ impl QuestionTarget {
         let mut transform = self.transform.clone();
         transform.push(PipelineOp::Noop);
         Self {
-            cell: Arc::clone(&self.cell),
+            lease: Arc::clone(&self.lease),
             transform,
         }
     }
 
     pub fn as_outgoing_capability(&self) -> Result<OutgoingCapability, ConnectionError> {
         let key = self
+            .lease
             .cell
             .active_key()?
             .ok_or(ConnectionError::Disconnected)?;
@@ -320,7 +323,7 @@ impl QuestionTarget {
 }
 
 pub struct QuestionFuture {
-    cell: Arc<QuestionCell>,
+    lease: Arc<QuestionLease>,
 }
 
 impl fmt::Debug for QuestionFuture {
@@ -332,11 +335,28 @@ impl fmt::Debug for QuestionFuture {
 }
 
 impl QuestionFuture {
+    fn new(handle: ConnectionHandle, cell: Arc<QuestionCell>) -> Self {
+        Self {
+            lease: Arc::new(QuestionLease {
+                handle,
+                cell,
+                cancel_sent: AtomicBool::new(false),
+            }),
+        }
+    }
+
     pub fn target(&self) -> QuestionTarget {
         QuestionTarget {
-            cell: Arc::clone(&self.cell),
+            lease: Arc::clone(&self.lease),
             transform: Vec::new(),
         }
+    }
+
+    /// Requests cancellation and consumes the response future. The question ID
+    /// remains reserved until the peer's `Return` arrives or the connection
+    /// disconnects.
+    pub fn cancel(self) -> Result<(), ConnectionError> {
+        self.lease.request_cancel()
     }
 }
 
@@ -344,7 +364,32 @@ impl Future for QuestionFuture {
     type Output = Result<ReturnPayload, ConnectionError>;
 
     fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
-        self.cell.poll(context)
+        self.lease.cell.poll(context)
+    }
+}
+
+struct QuestionLease {
+    handle: ConnectionHandle,
+    cell: Arc<QuestionCell>,
+    cancel_sent: AtomicBool,
+}
+
+impl QuestionLease {
+    fn request_cancel(&self) -> Result<(), ConnectionError> {
+        if self.cancel_sent.swap(true, Ordering::AcqRel) {
+            return Ok(());
+        }
+        self.handle
+            .mailbox
+            .submit_lifecycle(ActorCommand::CancelQuestion {
+                cell: Arc::clone(&self.cell),
+            })
+    }
+}
+
+impl Drop for QuestionLease {
+    fn drop(&mut self) {
+        let _ = self.request_cancel();
     }
 }
 
@@ -368,6 +413,72 @@ pub enum IncomingCallTarget {
 pub struct CompletionToken {
     handle: ConnectionHandle,
     answer: AnswerKey,
+    cancellation: CancellationSignal,
+}
+
+/// Cooperative cancellation state for one dispatched incoming call.
+#[derive(Clone)]
+pub struct CancellationSignal {
+    state: Arc<AtomicU8>,
+}
+
+impl fmt::Debug for CancellationSignal {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CancellationSignal")
+            .field("canceled", &self.is_canceled())
+            .field("allowed", &self.is_allowed())
+            .finish()
+    }
+}
+
+impl CancellationSignal {
+    const ALLOWED: u8 = 0;
+    const DISALLOWED: u8 = 1;
+    const CANCELED: u8 = 2;
+
+    fn new() -> Self {
+        Self {
+            state: Arc::new(AtomicU8::new(Self::ALLOWED)),
+        }
+    }
+
+    pub fn is_canceled(&self) -> bool {
+        self.state.load(Ordering::Acquire) == Self::CANCELED
+    }
+
+    pub fn is_allowed(&self) -> bool {
+        self.state.load(Ordering::Acquire) == Self::ALLOWED
+    }
+
+    /// Opts out before cancellation wins the race. Returns false if the call
+    /// was already canceled.
+    pub fn disallow(&self) -> bool {
+        self.state
+            .compare_exchange(
+                Self::ALLOWED,
+                Self::DISALLOWED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+            || self.state.load(Ordering::Acquire) == Self::DISALLOWED
+    }
+
+    fn cancel_if_allowed(&self) -> bool {
+        self.state
+            .compare_exchange(
+                Self::ALLOWED,
+                Self::CANCELED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+
+    fn force_cancel(&self) {
+        self.state.store(Self::CANCELED, Ordering::Release);
+    }
 }
 
 /// Completion authority for a call shortened back to a local capability.
@@ -419,6 +530,14 @@ impl fmt::Debug for CompletionToken {
 impl CompletionToken {
     pub const fn answer_key(&self) -> AnswerKey {
         self.answer
+    }
+
+    pub fn cancellation(&self) -> CancellationSignal {
+        self.cancellation.clone()
+    }
+
+    pub fn disallow_cancellation(&self) -> bool {
+        self.cancellation.disallow()
     }
 
     pub fn complete(self, result: HandlerResult) -> Result<(), ConnectionError> {
@@ -554,6 +673,8 @@ pub struct ConnectionActor {
     max_embargoed_calls: usize,
     embargoed_calls: usize,
     effects: VecDeque<ActorEffect>,
+    deferred_finishes: VecDeque<FinishMessage>,
+    yield_deferred_finish: bool,
     stats: ConnectionStats,
     terminal: bool,
 }
@@ -590,6 +711,8 @@ impl ConnectionActor {
                 max_embargoed_calls: limits.max_embargoed_calls,
                 embargoed_calls: 0,
                 effects: VecDeque::new(),
+                deferred_finishes: VecDeque::new(),
+                yield_deferred_finish: false,
                 stats: ConnectionStats::default(),
                 terminal: false,
             },
@@ -662,6 +785,15 @@ impl ConnectionActor {
             if let Some(effect) = self.effects.pop_front() {
                 return Poll::Ready(Some(effect));
             }
+            if self.yield_deferred_finish {
+                self.yield_deferred_finish = false;
+                context.waker().wake_by_ref();
+                return Poll::Pending;
+            }
+            if let Some(finish) = self.deferred_finishes.pop_front() {
+                self.finish_incoming(finish);
+                continue;
+            }
             let command = match self.mailbox.pop_or_register(context.waker()) {
                 Ok(Some(command)) => command,
                 Ok(None) if self.terminal => return Poll::Ready(None),
@@ -720,6 +852,7 @@ impl ConnectionActor {
                 result,
                 capabilities,
             } => self.local_call_complete(question, result, capabilities),
+            ActorCommand::CancelQuestion { cell } => self.cancel_question(&cell),
             ActorCommand::Shutdown => {
                 self.transition_terminal(ConnectionError::Disconnected, false)
             }
@@ -731,6 +864,8 @@ impl ConnectionActor {
             cell: Arc::clone(&cell),
             param_exports: Vec::new(),
             is_tail_call: false,
+            sent_to_peer: true,
+            canceled: false,
         }) {
             Ok(key) => key,
             Err(error) => {
@@ -829,7 +964,7 @@ impl ConnectionActor {
             }
         }
         let wire_target = match target {
-            OutgoingCallTarget::Bootstrap(target) => match target.cell.active_key() {
+            OutgoingCallTarget::Bootstrap(target) => match target.lease.cell.active_key() {
                 Ok(Some(key)) if self.questions.contains(key) => {
                     if target.transform.is_empty() {
                         CallTarget::BootstrapAnswer(key.id)
@@ -884,6 +1019,8 @@ impl ConnectionActor {
             cell: Arc::clone(&cell),
             param_exports: param_exports.clone(),
             is_tail_call: false,
+            sent_to_peer: true,
+            canceled: false,
         }) {
             Ok(key) => key,
             Err(error) => {
@@ -939,6 +1076,8 @@ impl ConnectionActor {
             cell: Arc::clone(&cell),
             param_exports: Vec::new(),
             is_tail_call: false,
+            sent_to_peer: false,
+            canceled: false,
         }) {
             Ok(key) => key,
             Err(error) => {
@@ -1033,6 +1172,8 @@ impl ConnectionActor {
             cell: Arc::clone(&cell),
             param_exports: param_exports.clone(),
             is_tail_call: true,
+            sent_to_peer: true,
+            canceled: false,
         }) {
             Ok(key) => key,
             Err(error) => {
@@ -1267,6 +1408,27 @@ impl ConnectionActor {
                 }
             }
             ProtocolMessage::Return(message) => {
+                if self.questions.is_canceled_id(message.answer_id) {
+                    let Some((_key, question)) = self.questions.remove_id(message.answer_id) else {
+                        self.protocol_failure(ConnectionError::UnknownQuestion(message.answer_id));
+                        return;
+                    };
+                    if message.release_param_caps {
+                        if let Err(error) = self
+                            .capabilities
+                            .apply_implicit_releases(&question.param_exports)
+                        {
+                            self.protocol_failure(ConnectionError::Capability(error.to_string()));
+                            return;
+                        }
+                    }
+                    if let ReturnPayload::TakeFromOtherQuestion(answer_id) = message.payload {
+                        if let Some(answer) = self.answers.finish(answer_id, true) {
+                            self.finish_answer(answer);
+                        }
+                    }
+                    return;
+                }
                 let has_result_caps = if let ReturnPayload::Results(payload) = &message.payload {
                     if let Err(error) = self.receive_cap_table(&payload.cap_table) {
                         self.protocol_failure(error);
@@ -1276,6 +1438,12 @@ impl ConnectionActor {
                 } else {
                     false
                 };
+                if message.no_finish_needed && has_result_caps {
+                    self.protocol_failure(ConnectionError::Protocol(
+                        "return.noFinishNeeded cannot retain result capabilities".to_owned(),
+                    ));
+                    return;
+                }
                 let tail_routing =
                     matches!(message.payload, ReturnPayload::TakeFromOtherQuestion(_));
                 let tail_results_elsewhere =
@@ -1357,17 +1525,22 @@ impl ConnectionActor {
                     payload => Ok(payload),
                 };
                 question.cell.complete(outcome);
-                match encode_finish_with_release(key.id, !has_result_caps, self.protocol_limits) {
-                    Ok(finish) => self.effects.push_back(ActorEffect::Send(finish)),
-                    Err(error) => self.protocol_failure(ConnectionError::Wire(error.to_string())),
+                if !message.no_finish_needed {
+                    match encode_finish_with_release(key.id, !has_result_caps, self.protocol_limits)
+                    {
+                        Ok(finish) => self.effects.push_back(ActorEffect::Send(finish)),
+                        Err(error) => {
+                            self.protocol_failure(ConnectionError::Wire(error.to_string()))
+                        }
+                    }
                 }
             }
             ProtocolMessage::Finish(message) => {
-                if let Some(answer) = self
-                    .answers
-                    .finish(message.question_id, message.release_result_caps)
-                {
-                    self.finish_answer(answer);
+                if message.require_early_cancellation_workaround {
+                    self.deferred_finishes.push_back(message);
+                    self.yield_deferred_finish = true;
+                } else {
+                    self.finish_incoming(message);
                 }
             }
             ProtocolMessage::Release(release) => {
@@ -1650,12 +1823,17 @@ impl ConnectionActor {
     }
 
     fn dispatch(&mut self, request: IncomingRequest, answer: AnswerKey) {
+        let Some(cancellation) = self.answers.cancellation(answer) else {
+            self.protocol_failure(ConnectionError::StaleAnswer(answer));
+            return;
+        };
         self.stats.dispatched_handlers = self.stats.dispatched_handlers.saturating_add(1);
         self.effects.push_back(ActorEffect::Dispatch {
             request,
             completion: CompletionToken {
                 handle: self.handle.clone(),
                 answer,
+                cancellation,
             },
         });
     }
@@ -1955,6 +2133,24 @@ impl ConnectionActor {
             }));
     }
 
+    fn cancel_question(&mut self, cell: &Arc<QuestionCell>) {
+        let Ok(Some(key)) = cell.active_key() else {
+            return;
+        };
+        let Some(sent_to_peer) = self.questions.mark_canceled(key) else {
+            return;
+        };
+        cell.complete(Err(ConnectionError::Canceled));
+        if sent_to_peer {
+            match encode_finish_with_release(key.id, true, self.protocol_limits) {
+                Ok(finish) => self.effects.push_back(ActorEffect::Send(finish)),
+                Err(error) => self.protocol_failure(ConnectionError::Wire(error.to_string())),
+            }
+        } else {
+            let _ = self.questions.remove(key);
+        }
+    }
+
     fn route_pipeline_call(&mut self, pending: PendingPipelineCall, pipeline: &PipelineSnapshot) {
         match resolve_pipeline_target(pipeline, &pending.transform) {
             Ok(target) => self.dispatch(
@@ -2057,6 +2253,15 @@ impl ConnectionActor {
                 return;
             };
             self.complete_redirect_waiter(question_key, question, response);
+        }
+    }
+
+    fn finish_incoming(&mut self, message: FinishMessage) {
+        if let Some(answer) = self
+            .answers
+            .finish(message.question_id, message.release_result_caps)
+        {
+            self.finish_answer(answer);
         }
     }
 
@@ -2250,10 +2455,16 @@ impl ConnectionActor {
             question.cell.complete(Err(error.clone()));
         }
         self.answers.clear();
+        self.deferred_finishes.clear();
+        self.yield_deferred_finish = false;
         self.capabilities.clear();
         self.promise_imports.clear();
         self.promise_exports.clear();
-        self.embargoes.clear();
+        for embargo in core::mem::take(&mut self.embargoes).into_values() {
+            for call in embargo.queued_calls {
+                call.cell.complete(Err(error.clone()));
+            }
+        }
         self.embargoed_calls = 0;
         if let Ok(commands) = self.mailbox.drain() {
             for command in commands {
@@ -2304,6 +2515,9 @@ enum ActorCommand {
         question: QuestionKey,
         result: HandlerResult,
         capabilities: Vec<OutgoingCapability>,
+    },
+    CancelQuestion {
+        cell: Arc<QuestionCell>,
     },
     Shutdown,
 }
@@ -2420,6 +2634,7 @@ fn complete_rejected(command: ActorCommand, error: ConnectionError) {
         | ActorCommand::HandlerComplete { .. }
         | ActorCommand::ResolvePromise { .. }
         | ActorCommand::LocalCallComplete { .. }
+        | ActorCommand::CancelQuestion { .. }
         | ActorCommand::Shutdown => {}
     }
 }
@@ -2427,6 +2642,7 @@ fn complete_rejected(command: ActorCommand, error: ConnectionError) {
 struct SharedMailbox {
     capacity: usize,
     closed: AtomicBool,
+    shutdown_queued: AtomicBool,
     state: Mutex<MailboxState>,
 }
 
@@ -2440,6 +2656,7 @@ impl SharedMailbox {
         Self {
             capacity,
             closed: AtomicBool::new(false),
+            shutdown_queued: AtomicBool::new(false),
             state: Mutex::new(MailboxState {
                 commands: VecDeque::new(),
                 actor_waker: None,
@@ -2467,6 +2684,33 @@ impl SharedMailbox {
             waker.wake();
         }
         Ok(())
+    }
+
+    fn submit_lifecycle(&self, command: ActorCommand) -> Result<(), ConnectionError> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(ConnectionError::Disconnected);
+        }
+        let mut state = self.state.lock().map_err(|_| ConnectionError::Poisoned)?;
+        if self.closed.load(Ordering::Acquire) {
+            return Err(ConnectionError::Disconnected);
+        }
+        state.commands.push_back(command);
+        let actor_waker = state.actor_waker.take();
+        drop(state);
+        if let Some(waker) = actor_waker {
+            waker.wake();
+        }
+        Ok(())
+    }
+
+    fn submit_shutdown(&self) -> Result<(), ConnectionError> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(ConnectionError::Disconnected);
+        }
+        if self.shutdown_queued.swap(true, Ordering::AcqRel) {
+            return Ok(());
+        }
+        self.submit_lifecycle(ActorCommand::Shutdown)
     }
 
     fn pop_or_register(&self, waker: &Waker) -> Result<Option<ActorCommand>, ConnectionError> {
@@ -2558,6 +2802,8 @@ struct QuestionState {
     cell: Arc<QuestionCell>,
     param_exports: Vec<u32>,
     is_tail_call: bool,
+    sent_to_peer: bool,
+    canceled: bool,
 }
 
 struct QuestionSlot {
@@ -2639,6 +2885,28 @@ impl QuestionTable {
             .get(usize::try_from(id).unwrap_or(usize::MAX))
             .and_then(|slot| slot.value.as_ref())
             .is_some_and(|question| question.is_tail_call)
+    }
+
+    fn is_canceled_id(&self, id: u32) -> bool {
+        self.slots
+            .get(usize::try_from(id).unwrap_or(usize::MAX))
+            .and_then(|slot| slot.value.as_ref())
+            .is_some_and(|question| question.canceled)
+    }
+
+    fn mark_canceled(&mut self, key: QuestionKey) -> Option<bool> {
+        let value = usize::try_from(key.id)
+            .ok()
+            .and_then(|index| self.slots.get_mut(index))?;
+        if value.generation != key.generation {
+            return None;
+        }
+        let question = value.value.as_mut()?;
+        if question.canceled {
+            return None;
+        }
+        question.canceled = true;
+        Some(question.sent_to_peer)
     }
 
     fn remove(&mut self, key: QuestionKey) -> Option<QuestionState> {
@@ -2770,6 +3038,7 @@ struct AnswerState {
     tail_question: Option<QuestionKey>,
     tail_results_elsewhere: bool,
     incoming_bytes: u64,
+    cancellation: CancellationSignal,
 }
 
 struct AnswerTable {
@@ -2857,6 +3126,7 @@ impl AnswerTable {
                     tail_question: None,
                     tail_results_elsewhere: false,
                     incoming_bytes,
+                    cancellation: CancellationSignal::new(),
                 },
             ),
         );
@@ -2891,6 +3161,12 @@ impl AnswerTable {
     fn is_in_progress(&self, key: AnswerKey) -> bool {
         self.values.get(&key.id).is_some_and(|(generation, value)| {
             *generation == key.generation && value.phase == AnswerPhase::InProgress
+        })
+    }
+
+    fn cancellation(&self, key: AnswerKey) -> Option<CancellationSignal> {
+        self.values.get(&key.id).and_then(|(generation, value)| {
+            (*generation == key.generation).then(|| value.cancellation.clone())
         })
     }
 
@@ -3090,12 +3366,21 @@ impl AnswerTable {
         let keep_for_tail = value.tail_question.is_some() && !value.tail_results_elsewhere;
         if keep_for_pipeline || keep_for_tail {
             None
+        } else if value.phase == AnswerPhase::InProgress && !value.cancellation.cancel_if_allowed()
+        {
+            // The application opted out after dispatch. Keep the entry until
+            // its completion arrives, but suppress the Return because Finish
+            // already released the caller's interest.
+            None
         } else {
             self.remove_id(id)
         }
     }
 
     fn clear(&mut self) {
+        for (_, answer) in self.values.values() {
+            answer.cancellation.force_cancel();
+        }
         self.values.clear();
         self.incoming_bytes = 0;
     }
@@ -3108,6 +3393,7 @@ fn _assert_public_send_traits() {
     assert_send::<ConnectionActor>();
     assert_send::<QuestionFuture>();
     assert_send::<CompletionToken>();
+    assert_send::<CancellationSignal>();
     assert_send::<LocalCompletionToken>();
     assert_send::<PromiseResolver>();
     assert_send_sync::<HostedCapability>();
@@ -3668,6 +3954,7 @@ mod tests {
             Poll::Ready(Some(ActorEffect::Send(_)))
         ));
         handle.shutdown().expect("shutdown fits");
+        handle.shutdown().expect("duplicate shutdown is idempotent");
         assert!(matches!(
             next(&mut actor),
             Poll::Ready(Some(ActorEffect::CloseTransport))
@@ -4273,5 +4560,251 @@ mod tests {
         assert_eq!(answers.incoming_bytes(), 8);
         answers.clear();
         assert_eq!(answers.incoming_bytes(), 0);
+    }
+
+    #[test]
+    fn dropping_the_last_question_lease_sends_finish_once() {
+        let (handle, mut actor) =
+            ConnectionActor::new(ActorLimits::default(), ProtocolLimits::default());
+        let response = handle.bootstrap().expect("bootstrap");
+        let target = response.target();
+        let Poll::Ready(Some(ActorEffect::Send(_bootstrap))) = next(&mut actor) else {
+            panic!("bootstrap wire")
+        };
+
+        drop(response);
+        assert!(matches!(next(&mut actor), Poll::Pending));
+        drop(target);
+        let Poll::Ready(Some(ActorEffect::Send(finish))) = next(&mut actor) else {
+            panic!("finish after last lease")
+        };
+        assert!(matches!(
+            read_protocol_message(finish).expect("finish"),
+            ProtocolMessage::Finish(FinishMessage {
+                question_id: 0,
+                release_result_caps: true,
+                require_early_cancellation_workaround: false,
+            })
+        ));
+        assert!(matches!(next(&mut actor), Poll::Pending));
+        assert_eq!(actor.stats().active_questions, 1);
+
+        handle
+            .receive(
+                crate::encode_return(0, &HandlerResult::Canceled, ProtocolLimits::default())
+                    .expect("late return"),
+            )
+            .expect("late return queued");
+        assert!(matches!(next(&mut actor), Poll::Pending));
+        assert_eq!(actor.stats().active_questions, 0);
+    }
+
+    #[test]
+    fn finish_cancels_dispatched_work_and_late_completion_is_stale() {
+        let (handle, mut actor) =
+            ConnectionActor::new(ActorLimits::default(), ProtocolLimits::default());
+        handle
+            .receive(encode_bootstrap(7, ProtocolLimits::default()).expect("bootstrap"))
+            .expect("bootstrap queued");
+        let Poll::Ready(Some(ActorEffect::Dispatch { completion, .. })) = next(&mut actor) else {
+            panic!("dispatch")
+        };
+        let cancellation = completion.cancellation();
+        assert!(cancellation.is_allowed());
+
+        handle
+            .receive(
+                crate::encode_finish_with_options(7, true, false, ProtocolLimits::default())
+                    .expect("finish"),
+            )
+            .expect("finish queued");
+        assert!(matches!(next(&mut actor), Poll::Pending));
+        assert!(cancellation.is_canceled());
+        assert!(!completion.disallow_cancellation());
+        assert_eq!(actor.stats().active_answers, 0);
+
+        completion
+            .complete(HandlerResult::Results(message(1)))
+            .expect("late completion queued");
+        assert!(matches!(next(&mut actor), Poll::Pending));
+        assert_eq!(actor.stats().stale_handler_completions, 1);
+    }
+
+    #[test]
+    fn explicit_question_cancel_uses_the_same_idempotent_finish_path() {
+        let (handle, mut actor) =
+            ConnectionActor::new(ActorLimits::default(), ProtocolLimits::default());
+        let response = handle.bootstrap().expect("bootstrap");
+        assert!(matches!(
+            next(&mut actor),
+            Poll::Ready(Some(ActorEffect::Send(_)))
+        ));
+        response.cancel().expect("explicit cancel queued");
+        let Poll::Ready(Some(ActorEffect::Send(finish))) = next(&mut actor) else {
+            panic!("cancel finish")
+        };
+        assert!(matches!(
+            read_protocol_message(finish).expect("finish"),
+            ProtocolMessage::Finish(FinishMessage {
+                question_id: 0,
+                release_result_caps: true,
+                require_early_cancellation_workaround: false,
+            })
+        ));
+        assert!(matches!(next(&mut actor), Poll::Pending));
+    }
+
+    #[test]
+    fn application_opt_out_runs_to_completion_without_returning_to_finished_caller() {
+        let (handle, mut actor) =
+            ConnectionActor::new(ActorLimits::default(), ProtocolLimits::default());
+        handle
+            .receive(encode_bootstrap(8, ProtocolLimits::default()).expect("bootstrap"))
+            .expect("bootstrap queued");
+        let Poll::Ready(Some(ActorEffect::Dispatch { completion, .. })) = next(&mut actor) else {
+            panic!("dispatch")
+        };
+        let cancellation = completion.cancellation();
+        assert!(completion.disallow_cancellation());
+
+        handle
+            .receive(
+                crate::encode_finish_with_options(8, true, false, ProtocolLimits::default())
+                    .expect("finish"),
+            )
+            .expect("finish queued");
+        assert!(matches!(next(&mut actor), Poll::Pending));
+        assert!(!cancellation.is_canceled());
+        assert_eq!(actor.stats().active_answers, 1);
+
+        completion
+            .complete(HandlerResult::Results(message(2)))
+            .expect("completion queued");
+        assert!(matches!(next(&mut actor), Poll::Pending));
+        assert_eq!(actor.stats().active_answers, 0);
+        assert_eq!(actor.stats().completed_handlers, 1);
+    }
+
+    #[test]
+    fn legacy_finish_yields_once_so_application_can_opt_out() {
+        let (handle, mut actor) =
+            ConnectionActor::new(ActorLimits::default(), ProtocolLimits::default());
+        handle
+            .receive(encode_bootstrap(9, ProtocolLimits::default()).expect("bootstrap"))
+            .expect("bootstrap queued");
+        let Poll::Ready(Some(ActorEffect::Dispatch { completion, .. })) = next(&mut actor) else {
+            panic!("dispatch")
+        };
+        let cancellation = completion.cancellation();
+        handle
+            .receive(
+                crate::encode_finish_with_options(9, true, true, ProtocolLimits::default())
+                    .expect("legacy finish"),
+            )
+            .expect("finish queued");
+
+        assert!(matches!(next(&mut actor), Poll::Pending));
+        assert!(cancellation.is_allowed());
+        assert!(completion.disallow_cancellation());
+        assert!(matches!(next(&mut actor), Poll::Pending));
+        assert!(!cancellation.is_canceled());
+        assert_eq!(actor.stats().active_answers, 1);
+
+        completion
+            .complete(HandlerResult::Results(message(3)))
+            .expect("completion queued");
+        assert!(matches!(next(&mut actor), Poll::Pending));
+        assert_eq!(actor.stats().active_answers, 0);
+    }
+
+    #[test]
+    fn no_finish_needed_completes_without_emitting_finish() {
+        let (handle, mut actor) =
+            ConnectionActor::new(ActorLimits::default(), ProtocolLimits::default());
+        let mut response = handle.bootstrap().expect("bootstrap");
+        assert!(matches!(
+            next(&mut actor),
+            Poll::Ready(Some(ActorEffect::Send(_)))
+        ));
+        handle
+            .receive(
+                crate::encode_return_with_options(
+                    0,
+                    &HandlerResult::Results(message(4)),
+                    true,
+                    true,
+                    ProtocolLimits::default(),
+                )
+                .expect("return"),
+            )
+            .expect("return queued");
+        assert!(matches!(next(&mut actor), Poll::Pending));
+        assert!(matches!(
+            poll_future(&mut response),
+            Poll::Ready(Ok(ReturnPayload::Results(_)))
+        ));
+        assert_eq!(actor.stats().active_questions, 0);
+    }
+
+    #[test]
+    fn disconnect_completes_embargoed_question_and_cancels_dispatch() {
+        let (handle, mut actor) =
+            ConnectionActor::new(ActorLimits::default(), ProtocolLimits::default());
+        let hosted = HostedCapability::new().expect("hosted");
+        actor.promise_imports.insert(
+            7,
+            ImportPromiseState::Loopback {
+                capability: hosted.clone(),
+                embargo_id: 0,
+            },
+        );
+        actor.embargoes.insert(
+            0,
+            EmbargoState {
+                promise_id: 7,
+                capability: hosted,
+                queued_calls: VecDeque::new(),
+            },
+        );
+        let mut embargoed = handle
+            .call_imported(7, 1, 2, message(5), Vec::new())
+            .expect("embargoed call");
+        assert!(matches!(next(&mut actor), Poll::Pending));
+        assert_eq!(actor.stats().queued_embargo_calls, 1);
+
+        handle.shutdown().expect("shutdown queued");
+        assert!(matches!(
+            next(&mut actor),
+            Poll::Ready(Some(ActorEffect::CloseTransport))
+        ));
+        assert!(matches!(
+            poll_future(&mut embargoed),
+            Poll::Ready(Err(ConnectionError::Disconnected))
+        ));
+        assert_eq!(actor.stats().queued_embargo_calls, 0);
+    }
+
+    #[test]
+    fn disconnect_force_cancels_opted_out_application_work() {
+        let (handle, mut actor) =
+            ConnectionActor::new(ActorLimits::default(), ProtocolLimits::default());
+        handle
+            .receive(encode_bootstrap(10, ProtocolLimits::default()).expect("bootstrap"))
+            .expect("bootstrap queued");
+        let Poll::Ready(Some(ActorEffect::Dispatch { completion, .. })) = next(&mut actor) else {
+            panic!("dispatch")
+        };
+        let cancellation = completion.cancellation();
+        assert!(completion.disallow_cancellation());
+        handle.shutdown().expect("shutdown queued");
+        assert!(matches!(
+            next(&mut actor),
+            Poll::Ready(Some(ActorEffect::CloseTransport))
+        ));
+        assert!(cancellation.is_canceled());
+        assert!(matches!(
+            completion.complete(HandlerResult::Canceled),
+            Err(ConnectionError::Disconnected)
+        ));
     }
 }

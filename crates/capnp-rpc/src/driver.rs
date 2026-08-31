@@ -1,14 +1,16 @@
 //! Executor-neutral bridge between the connection actor and a duplex transport.
 
 use std::fmt;
+use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use capnp_message::OwnedMessage;
 use capnp_rpc_core::{
-    ActorEffect, ActorLimits, CompletionToken, ConnectionActor, ConnectionError, ConnectionHandle,
-    DuplexTransport, EnvelopeLimits, HandlerResult, IncomingRequest, LocalCompletionToken,
-    OutgoingCapability, ProtocolLimits, TransportEnvelope, TransportError,
+    ActorEffect, ActorLimits, CancellationSignal, CompletionToken, ConnectionActor,
+    ConnectionError, ConnectionHandle, DuplexTransport, EnvelopeLimits, HandlerResult,
+    IncomingRequest, LocalCompletionToken, OutgoingCapability, ProtocolLimits, TransportEnvelope,
+    TransportError,
 };
 use std::sync::Arc;
 
@@ -25,6 +27,26 @@ pub enum DriverCompletion {
 }
 
 impl DriverCompletion {
+    /// Returns the cooperative cancellation signal for a peer-originated
+    /// dispatch. Calls shortened to a local capability have no wire caller and
+    /// therefore no remote cancellation signal.
+    pub fn cancellation(&self) -> Option<CancellationSignal> {
+        match self {
+            Self::Remote(completion) => Some(completion.cancellation()),
+            Self::Local(_) => None,
+        }
+    }
+
+    /// Opts a peer-originated dispatch out of cancellation before cancellation
+    /// wins the race. Local dispatches already run independently of a peer
+    /// `Finish` and return `true`.
+    pub fn disallow_cancellation(&self) -> bool {
+        match self {
+            Self::Remote(completion) => completion.disallow_cancellation(),
+            Self::Local(_) => true,
+        }
+    }
+
     pub fn complete(self, result: HandlerResult) -> Result<(), ConnectionError> {
         match self {
             Self::Remote(completion) => completion.complete(result),
@@ -97,6 +119,49 @@ pub struct ConnectionDriver<T: DuplexTransport> {
     closing: bool,
 }
 
+/// A shutdown operation that keeps driving the actor until the transport's
+/// close operation itself completes.
+pub struct DriverShutdown<'a, T: DuplexTransport> {
+    driver: &'a mut ConnectionDriver<T>,
+    started: bool,
+}
+
+impl<T: DuplexTransport> fmt::Debug for DriverShutdown<'_, T> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DriverShutdown")
+            .field("started", &self.started)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<T: DuplexTransport> Future for DriverShutdown<'_, T> {
+    type Output = Result<(), DriverError<T::Error>>;
+
+    fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+        if !self.started {
+            self.started = true;
+            if let Err(error) = self.driver.handle.shutdown() {
+                if !matches!(error, ConnectionError::Disconnected) {
+                    return Poll::Ready(Err(DriverError::Actor(error)));
+                }
+            }
+        }
+        loop {
+            match self.driver.poll_next_dispatch(context) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(Ok(Some(_dispatch))) => {
+                    // Shutdown owns the driver exclusively. Any dispatch that
+                    // raced ahead of the shutdown command is abandoned; the
+                    // actor's terminal transition cancels its signal.
+                }
+                Poll::Ready(Ok(None)) => return Poll::Ready(Ok(())),
+                Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
+            }
+        }
+    }
+}
+
 impl<T: DuplexTransport> fmt::Debug for ConnectionDriver<T> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -131,6 +196,13 @@ impl<T: DuplexTransport> ConnectionDriver<T> {
 
     pub fn stats(&self) -> capnp_rpc_core::ConnectionStats {
         self.actor.stats()
+    }
+
+    pub fn shutdown(&mut self) -> DriverShutdown<'_, T> {
+        DriverShutdown {
+            driver: self,
+            started: false,
+        }
     }
 
     /// Releases settled import references and queues one batched Level-1
@@ -245,6 +317,7 @@ mod tests {
     use super::*;
     use std::future::Future;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::task::Waker;
 
     use capnp_message::{ExclusiveArena, OwnedMessage, ReaderLimits};
@@ -265,6 +338,58 @@ mod tests {
     ) -> Poll<Result<Option<DriverDispatch>, DriverError<T::Error>>> {
         let mut context = Context::from_waker(Waker::noop());
         driver.poll_next_dispatch(&mut context)
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    struct CloseError;
+
+    impl fmt::Display for CloseError {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("close failed")
+        }
+    }
+
+    impl std::error::Error for CloseError {}
+
+    #[derive(Debug)]
+    struct StagedCloseTransport {
+        close_polls: Arc<AtomicUsize>,
+        fail_close: bool,
+    }
+
+    impl DuplexTransport for StagedCloseTransport {
+        type Error = CloseError;
+
+        fn poll_receive(
+            self: Pin<&mut Self>,
+            _context: &mut Context<'_>,
+        ) -> Poll<Result<Option<TransportEnvelope>, Self::Error>> {
+            Poll::Pending
+        }
+
+        fn poll_send(
+            self: Pin<&mut Self>,
+            _context: &mut Context<'_>,
+            envelope: &mut Option<TransportEnvelope>,
+        ) -> Poll<Result<(), Self::Error>> {
+            let _ = envelope.take();
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_close(
+            self: Pin<&mut Self>,
+            context: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
+            let poll = self.close_polls.fetch_add(1, Ordering::SeqCst);
+            if self.fail_close {
+                Poll::Ready(Err(CloseError))
+            } else if poll == 0 {
+                context.waker().wake_by_ref();
+                Poll::Pending
+            } else {
+                Poll::Ready(Ok(()))
+            }
+        }
     }
 
     #[test]
@@ -305,5 +430,54 @@ mod tests {
         assert!(matches!(drive(&mut right), Poll::Pending));
         assert_eq!(left.stats().active_questions, 0);
         assert_eq!(right.stats().active_answers, 0);
+    }
+
+    #[test]
+    fn shutdown_future_waits_for_transport_close_completion() {
+        let close_polls = Arc::new(AtomicUsize::new(0));
+        let transport = StagedCloseTransport {
+            close_polls: Arc::clone(&close_polls),
+            fail_close: false,
+        };
+        let (_handle, mut driver) = ConnectionDriver::new(
+            transport,
+            ActorLimits::default(),
+            ProtocolLimits::default(),
+            EnvelopeLimits::default(),
+        );
+        let mut shutdown = driver.shutdown();
+        let mut context = Context::from_waker(Waker::noop());
+        assert!(matches!(
+            Pin::new(&mut shutdown).poll(&mut context),
+            Poll::Pending
+        ));
+        assert_eq!(close_polls.load(Ordering::SeqCst), 1);
+        assert!(matches!(
+            Pin::new(&mut shutdown).poll(&mut context),
+            Poll::Ready(Ok(()))
+        ));
+        assert_eq!(close_polls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn shutdown_future_surfaces_transport_close_error() {
+        let close_polls = Arc::new(AtomicUsize::new(0));
+        let transport = StagedCloseTransport {
+            close_polls: Arc::clone(&close_polls),
+            fail_close: true,
+        };
+        let (_handle, mut driver) = ConnectionDriver::new(
+            transport,
+            ActorLimits::default(),
+            ProtocolLimits::default(),
+            EnvelopeLimits::default(),
+        );
+        let mut shutdown = driver.shutdown();
+        let mut context = Context::from_waker(Waker::noop());
+        assert!(matches!(
+            Pin::new(&mut shutdown).poll(&mut context),
+            Poll::Ready(Err(DriverError::Transport(CloseError)))
+        ));
+        assert_eq!(close_polls.load(Ordering::SeqCst), 1);
     }
 }

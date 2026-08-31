@@ -103,6 +103,12 @@ acknowledgement/RTT tracking, bounded blocked senders and in-flight bytes, and
 aggregate incoming-call quotas. Its behavioral corpus runs directly against the
 pinned C++ fixed/adaptive tests.
 
+[RPC lifecycle handling](docs/rpc/cancellation-disconnect-and-reconnect.md)
+adds last-lease and explicit cancellation, application opt-out, legacy Finish
+compatibility, transport-complete shutdown with surfaced errors, and
+generation-safe capability recreation that distinguishes disconnect from
+overload.
+
 This is experimental software and is not yet suitable for production use.
 
 ## License

@@ -6,9 +6,9 @@
 //! M33 adds the connection actor; M34 adds settled hosted-capability payloads
 //! and actor-owned import/export lifetime accounting; M35 adds bounded promise
 //! pipelining and two-party tail routing; M36 adds `Resolve`, frozen promise
-//! routes, and loopback disembargo/E-order. Unknown union discriminants remain
-//! inspectable instead of being rejected. Streaming, cancellation, reconnect,
-//! and network-resource behavior remain later milestones.
+//! routes, and loopback disembargo/E-order; M37 adds bounded incoming call
+//! bytes; M38 adds cooperative cancellation and complete disconnect cleanup.
+//! Unknown union discriminants remain inspectable instead of being rejected.
 
 mod actor;
 mod capability;
@@ -17,9 +17,9 @@ mod protocol;
 mod transport;
 
 pub use actor::{
-    ActorEffect, ActorLimits, AnswerKey, CompletionToken, ConnectionActor, ConnectionError,
-    ConnectionHandle, ConnectionStats, IncomingCallTarget, IncomingRequest, LocalCompletionToken,
-    PromiseResolver, QuestionFuture, QuestionKey, QuestionTarget,
+    ActorEffect, ActorLimits, AnswerKey, CancellationSignal, CompletionToken, ConnectionActor,
+    ConnectionError, ConnectionHandle, ConnectionStats, IncomingCallTarget, IncomingRequest,
+    LocalCompletionToken, PromiseResolver, QuestionFuture, QuestionKey, QuestionTarget,
 };
 pub use capability::{
     CapabilityError, CapabilityStats, CapabilityTables, HostedCapability, OutgoingCapability,
@@ -30,7 +30,8 @@ pub use level0::{
     FinishMessage, HandlerResult, Payload, PipelineOp, PromiseResolution, PromisedAnswer,
     ReleaseMessage, ResolveMessage, ReturnMessage, ReturnPayload, SendResultsTo, encode_bootstrap,
     encode_call, encode_call_with_capabilities, encode_call_with_options, encode_disembargo,
-    encode_finish, encode_finish_with_release, encode_release, encode_resolve, encode_return,
+    encode_finish, encode_finish_with_options, encode_finish_with_release, encode_release,
+    encode_resolve, encode_return, encode_return_with_options,
 };
 pub use protocol::{
     EXCEPTION_TYPE_ID, ExceptionType, MESSAGE_TYPE_ID, ProtocolError, ProtocolLimits,

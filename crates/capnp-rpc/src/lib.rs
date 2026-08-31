@@ -6,7 +6,9 @@
 //! single-owner Level-0 actor from `capnp-rpc-core`. M37 makes streaming sends
 //! eager: calling a generated streaming method invokes dispatch synchronously
 //! to preserve E-order, while acknowledgement-driven flow-control futures only
-//! govern when the caller should submit another message.
+//! govern when the caller should submit another message. M38 adds cooperative
+//! dispatch cancellation, transport-complete shutdown, and generation-safe
+//! capability recreation after disconnect.
 
 use std::fmt;
 use std::future::Future;
@@ -19,18 +21,24 @@ use capnp_schema::{CompiledSchema, DynamicError};
 
 mod driver;
 mod flow;
+mod reconnect;
 
 pub use capnp_rpc_core::{
-    ActorLimits, AnswerKey, CapDescriptor, CapabilityError, CapabilityStats, CapabilityTables,
-    CompletionToken, ConnectionError, ConnectionHandle, ConnectionStats, ExceptionType,
-    HandlerResult, HostedCapability, IncomingCallTarget, IncomingRequest, LocalCompletionToken,
-    OutgoingCapability, Payload, PromiseCapability, PromiseResolver, ProtocolLimits,
-    QuestionFuture, QuestionKey, QuestionTarget, ReceivedCapability, ReturnPayload, RpcException,
+    ActorLimits, AnswerKey, CancellationSignal, CapDescriptor, CapabilityError, CapabilityStats,
+    CapabilityTables, CompletionToken, ConnectionError, ConnectionHandle, ConnectionStats,
+    ExceptionType, HandlerResult, HostedCapability, IncomingCallTarget, IncomingRequest,
+    LocalCompletionToken, OutgoingCapability, Payload, PromiseCapability, PromiseResolver,
+    ProtocolLimits, QuestionFuture, QuestionKey, QuestionTarget, ReceivedCapability, ReturnPayload,
+    RpcException,
 };
-pub use driver::{ConnectionDriver, DriverCompletion, DriverDispatch, DriverError};
+pub use driver::{ConnectionDriver, DriverCompletion, DriverDispatch, DriverError, DriverShutdown};
 pub use flow::{
     AllAcked, FlowAck, FlowController, FlowError, FlowLimits, FlowMode, FlowReady, FlowSend,
     FlowStats,
+};
+pub use reconnect::{
+    CapabilityReconnector, ReconnectLease, RetryDisposition, classify_connection_error,
+    classify_exception,
 };
 
 pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
@@ -268,6 +276,8 @@ mod tests {
         assert_send_sync::<FlowAck>();
         assert_send_sync::<FlowReady>();
         assert_send_sync::<AllAcked>();
+        assert_send_sync::<CancellationSignal>();
+        assert_send_sync::<CapabilityReconnector<usize, fn() -> Result<usize, ConnectionError>>>();
     }
 
     #[test]
