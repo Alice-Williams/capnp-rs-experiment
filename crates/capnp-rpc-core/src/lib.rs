@@ -9,6 +9,12 @@
 //! routes, and loopback disembargo/E-order; M37 adds bounded incoming call
 //! bytes; M38 adds cooperative cancellation and complete disconnect cleanup.
 //! Unknown union discriminants remain inspectable instead of being rejected.
+//! M40 freezes this as the two-party Level-1 release-candidate boundary. The
+//! pinned C++ implementation is the primary product oracle, the pinned schemas
+//! and normative protocol are authoritative for wire evolution, and
+//! `capnproto-rust` is a secondary regression oracle. Three-party handoff,
+//! join/equality, persistence, membranes, and attached resources are not
+//! implemented by this crate.
 
 mod actor;
 mod capability;

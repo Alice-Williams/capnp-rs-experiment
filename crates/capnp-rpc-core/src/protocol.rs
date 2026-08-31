@@ -1,8 +1,10 @@
-//! Thin bindings for the pinned Cap'n Proto RPC schema.
+//! Bounded bindings for the pinned Cap'n Proto RPC schema.
 //!
-//! These bindings intentionally decode only the two connection-control
-//! messages required by M32. Other known and future union members are retained
-//! as raw discriminants for the connection actor to handle in later milestones.
+//! The implemented union members cover the complete two-party Level-1 boundary:
+//! bootstrap, call, return, finish, resolve, release, and disembargo plus abort
+//! and unimplemented control traffic. Later-level and future union members are
+//! retained as raw discriminants, so receiving them is revision-tolerant but
+//! does not claim semantics outside M40.
 
 use std::fmt;
 use std::sync::{Arc, OnceLock};
@@ -122,7 +124,7 @@ pub enum ProtocolMessage {
     Release(ReleaseMessage),
     Disembargo(DisembargoMessage),
     /// Includes both later-level messages and discriminants added by a newer
-    /// schema revision. M32 does not assign either category semantics.
+    /// schema revision. The M40 Level-1 boundary assigns neither semantics.
     Unsupported {
         discriminant: u16,
     },

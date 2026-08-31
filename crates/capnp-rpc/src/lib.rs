@@ -9,6 +9,10 @@
 //! govern when the caller should submit another message. M38 adds cooperative
 //! dispatch cancellation, transport-complete shutdown, and generation-safe
 //! capability recreation after disconnect.
+//! M39 adds explicit concurrent, serial, keyed, and dedicated-local scheduling
+//! policies. M40 freezes these executor-neutral APIs as the two-party Level-1
+//! release candidate; higher-level routing, membranes, attached resources,
+//! join/equality, and persistence remain explicit non-goals.
 
 use std::fmt;
 use std::future::Future;
