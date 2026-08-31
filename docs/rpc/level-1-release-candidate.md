@@ -73,8 +73,10 @@ implement the executor-neutral `DuplexTransport` boundary and are driven by
   gates. A shorter duration is a smoke test and must never be recorded as the
   release result.
 - The workspace forbids unsafe Rust. Miri remains mandatory for the disjoint
-  builder storage boundary; other release surfaces therefore have no unsafe
-  block requiring a safety exception.
+  builder storage boundary. The complete `capnp-wire` suite also runs in
+  Miri's strict-alignment abstract machine, including deliberately unaligned
+  and host-endian-independent byte paths. Other release surfaces have no
+  unsafe block requiring a safety exception.
 
 ## Explicit non-goals
 

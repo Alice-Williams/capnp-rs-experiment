@@ -66,7 +66,7 @@ jobs:
       - name: Test Bazel workspace
         run: bazel test //...
 
-  miri-partitioned-builder:
+  miri-strict-alignment-and-partitioned-builder:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -74,6 +74,9 @@ jobs:
 
       - name: Install Miri
         run: rustup toolchain install nightly-2026-08-31 --profile minimal --component miri
+
+      - name: Check endian-independent unaligned wire paths under Miri
+        run: cargo +nightly-2026-08-31 miri test -p capnp-wire
 
       - name: Check disjoint partition storage under Miri
         run: cargo +nightly-2026-08-31 miri test -p capnp-message miri_disjoint_primitive_partitions_do_not_alias
