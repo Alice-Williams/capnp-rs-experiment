@@ -14,8 +14,8 @@ use capnp_schema::{
 };
 
 use crate::level0::{
-    BootstrapMessage, CallMessage, FinishMessage, ReturnMessage, read_bootstrap, read_call,
-    read_finish, read_return,
+    BootstrapMessage, CallMessage, FinishMessage, ReleaseMessage, ReturnMessage, read_bootstrap,
+    read_call, read_finish, read_release, read_return,
 };
 
 pub const RPC_SCHEMA_SHA256: &str =
@@ -38,6 +38,7 @@ pub struct ProtocolLimits {
     pub max_message_words: u32,
     pub max_reason_bytes: usize,
     pub max_trace_bytes: usize,
+    pub max_cap_table_entries: usize,
 }
 
 impl Default for ProtocolLimits {
@@ -46,6 +47,7 @@ impl Default for ProtocolLimits {
             max_message_words: 8 * 1024 * 1024,
             max_reason_bytes: 64 * 1024,
             max_trace_bytes: 1024 * 1024,
+            max_cap_table_entries: 4096,
         }
     }
 }
@@ -113,6 +115,7 @@ pub enum ProtocolMessage {
     Call(CallMessage),
     Return(ReturnMessage),
     Finish(FinishMessage),
+    Release(ReleaseMessage),
     /// Includes both later-level messages and discriminants added by a newer
     /// schema revision. M32 does not assign either category semantics.
     Unsupported {
@@ -128,6 +131,7 @@ pub enum ProtocolError {
     Validation(ValidationError),
     FieldType(&'static str),
     UnsupportedLevel0(&'static str),
+    InvalidReferenceCount,
     Limit {
         field: &'static str,
         requested: usize,
@@ -146,6 +150,9 @@ impl fmt::Display for ProtocolError {
             Self::FieldType(field) => write!(formatter, "RPC field `{field}` has the wrong type"),
             Self::UnsupportedLevel0(feature) => {
                 write!(formatter, "RPC feature `{feature}` is outside Level 0")
+            }
+            Self::InvalidReferenceCount => {
+                formatter.write_str("RPC release reference count must be non-zero")
             }
             Self::Limit {
                 field,
@@ -169,6 +176,7 @@ impl std::error::Error for ProtocolError {
             Self::Schema(_)
             | Self::FieldType(_)
             | Self::UnsupportedLevel0(_)
+            | Self::InvalidReferenceCount
             | Self::Limit { .. }
             | Self::MessageSizeOverflow => None,
         }
@@ -269,12 +277,26 @@ pub fn encode_unimplemented(
 
 /// Decodes the M32 control subset while retaining revision-unknown union tags.
 pub fn read_protocol_message(message: Arc<OwnedMessage>) -> Result<ProtocolMessage, ProtocolError> {
+    read_protocol_message_with_limits(message, ProtocolLimits::default())
+}
+
+pub fn read_protocol_message_with_limits(
+    message: Arc<OwnedMessage>,
+    limits: ProtocolLimits,
+) -> Result<ProtocolMessage, ProtocolError> {
     let schema = protocol_schema()?;
     let root = DynamicStruct::root(schema, message, MESSAGE_TYPE_ID)?;
-    read_protocol_struct(root)
+    read_protocol_struct_with_limits(root, limits)
 }
 
 pub(crate) fn read_protocol_struct(root: DynamicStruct) -> Result<ProtocolMessage, ProtocolError> {
+    read_protocol_struct_with_limits(root, ProtocolLimits::default())
+}
+
+fn read_protocol_struct_with_limits(
+    root: DynamicStruct,
+    limits: ProtocolLimits,
+) -> Result<ProtocolMessage, ProtocolError> {
     let discriminant = root.union_discriminant()?.unwrap_or(u16::MAX);
     match discriminant {
         0 => match root.get("unimplemented")? {
@@ -292,9 +314,10 @@ pub(crate) fn read_protocol_struct(root: DynamicStruct) -> Result<ProtocolMessag
             _ => Err(ProtocolError::FieldType("abort")),
         },
         8 => Ok(ProtocolMessage::Bootstrap(read_bootstrap(&root)?)),
-        2 => Ok(ProtocolMessage::Call(read_call(&root)?)),
-        3 => Ok(ProtocolMessage::Return(read_return(&root)?)),
+        2 => Ok(ProtocolMessage::Call(read_call(&root, limits)?)),
+        3 => Ok(ProtocolMessage::Return(read_return(&root, limits)?)),
         4 => Ok(ProtocolMessage::Finish(read_finish(&root)?)),
+        6 => Ok(ProtocolMessage::Release(read_release(&root)?)),
         discriminant => Ok(ProtocolMessage::Unsupported { discriminant }),
     }
 }

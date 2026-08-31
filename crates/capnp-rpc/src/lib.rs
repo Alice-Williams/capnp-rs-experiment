@@ -17,9 +17,11 @@ use capnp_schema::{CompiledSchema, DynamicError};
 mod driver;
 
 pub use capnp_rpc_core::{
-    ActorLimits, AnswerKey, CompletionToken, ConnectionError, ConnectionHandle, ConnectionStats,
-    ExceptionType, HandlerResult, IncomingRequest, ProtocolLimits, QuestionFuture, QuestionKey,
-    QuestionTarget, ReturnPayload, RpcException,
+    ActorLimits, AnswerKey, CapDescriptor, CapabilityError, CapabilityStats, CapabilityTables,
+    CompletionToken, ConnectionError, ConnectionHandle, ConnectionStats, ExceptionType,
+    HandlerResult, HostedCapability, IncomingCallTarget, IncomingRequest, OutgoingCapability,
+    Payload, ProtocolLimits, QuestionFuture, QuestionKey, QuestionTarget, ReceivedCapability,
+    ReturnPayload, RpcException,
 };
 pub use driver::{ConnectionDriver, DriverDispatch, DriverError};
 

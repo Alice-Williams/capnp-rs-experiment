@@ -62,7 +62,7 @@ generated_api = "M21 typed data and thread-safe local interface APIs with exact 
 native_compiler = "M26 native multi-file compile and id CLI, plugin-compatible request streaming, deterministic built-in Rust output, and self-hosted generation without a system capnp compiler"
 text_tools = "M27 bounded native text encode/decode/eval with standard, packed, and flat modes and pinned C++ short-format parity"
 json = "M28 bounded reflection codec and native binary/packed/flat JSON conversion with pinned C++ policy and annotations"
-rpc_level = "M33 executor-neutral two-party Level-0 actor/driver with bounded mailbox, generation-safe question/answer tables, bootstrap pipelining, call/return/finish, abort, and deterministic shutdown; capability imports/exports deferred to M34"
+rpc_level = "M34 settled Level-1 capability payloads with actor-owned import/export tables, exact refcounts, hosted callbacks, explicit/implicit release, and deterministic disconnect cleanup; promises and pipelining remain M35+"
 parallel_read = "M29 zero-copy Arc-owned list partitions and deterministic retained-subtree work plans for scoped or external executors"
 parallel_build = "M30 disjoint primitive partitions plus sealed single-segment worker fragments with deterministic far-link finalization"
 batch_pipeline = "M31 bounded reservation-window scheduling for ordered concurrent process/build/pack work with no-pool single-item paths"
@@ -107,6 +107,20 @@ M30 = "complete"
 M31 = "complete"
 M32 = "complete"
 M33 = "complete"
+M34 = "complete"
+
+[evidence.M34]
+crates = ["crates/capnp-rpc-core", "crates/capnp-rpc"]
+wire = ["Payload.capTable", "CapDescriptor.none", "CapDescriptor.senderHosted", "CapDescriptor.receiverHosted", "MessageTarget.importedCap", "Release.id/referenceCount", "capability-aware Finish.releaseResultCaps"]
+identity = "HostedCapability has stable process-local Arc identity; duplicate exports reuse the lowest free ExportId; receiverHosted resolves back to the identical hosted object"
+tables = ["actor-exclusive CapabilityTables ownership", "configured import/export entry quotas", "u64 checked reference totals", "transactional whole-payload description", "complete-or-unchanged excessive Release rejection"]
+lifecycle = ["explicit batched Release", "Return.releaseParamCaps applies duplicate-preserving implicit releases", "capability-bearing results suppress Finish.releaseResultCaps", "capability-free results retain the Level-0 fast path", "disconnect clears imports and exports without traffic"]
+callback = "ConnectionHandle::call_imported targets a settled peer export and may carry hosted callbacks; IncomingCallTarget::Hosted preserves the original local identity"
+oracle_fixture = "conformance/fixtures/cpp/e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/rpc-capability-call.bin SHA-256 d782bc404a620bbf45e2f725423139515ce6114860f3fbf2f306e7ddcfc06b73"
+oracle_check = "tools/verify-m34-capabilities.sh: pinned C++ emits capability payload, native decodes/emits it, pinned C++ validates native output"
+documentation = "docs/rpc/capability-lifetimes.md"
+limitations = ["settled hosted capabilities only", "promise descriptors and promised-answer transforms remain M35", "Resolve and embargo remain M36", "attached resources remain M43", "generated high-level remote client integration remains later work"]
+validation = "21 focused capnp-rpc-core tests plus capnp-rpc driver tests; pinned C++ -> native -> pinned C++ capability payload interoperability; Rust 1.98 and 1.85 workspace tests; Clippy -D warnings; doctests; complete Bazel suite"
 
 [evidence.M33]
 crates = ["crates/capnp-rpc-core", "crates/capnp-rpc"]

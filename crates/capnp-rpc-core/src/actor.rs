@@ -13,17 +13,18 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 
-use capnp_message::OwnedMessage;
-use capnp_schema::DynamicAnyPointer;
-
+use crate::capability::{
+    CapabilityStats, CapabilityTables, HostedCapability, OutgoingCapability, ReceivedCapability,
+};
 use crate::level0::{
-    CallTarget, HandlerResult, ReturnPayload, encode_bootstrap, encode_call, encode_finish,
-    encode_return,
+    CallTarget, CapDescriptor, HandlerResult, Payload, ReturnPayload, encode_bootstrap,
+    encode_finish_with_release, encode_release, encode_return,
 };
 use crate::protocol::{
     ExceptionType, ProtocolLimits, ProtocolMessage, RpcException, encode_abort,
-    encode_unimplemented, read_protocol_message, read_protocol_struct,
+    encode_unimplemented, read_protocol_message_with_limits, read_protocol_struct,
 };
+use capnp_message::OwnedMessage;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct QuestionKey {
@@ -62,6 +63,8 @@ pub struct ActorLimits {
     pub mailbox_capacity: usize,
     pub max_questions: usize,
     pub max_answers: usize,
+    pub max_imports: usize,
+    pub max_exports: usize,
 }
 
 impl Default for ActorLimits {
@@ -70,6 +73,8 @@ impl Default for ActorLimits {
             mailbox_capacity: 256,
             max_questions: 4096,
             max_answers: 4096,
+            max_imports: 4096,
+            max_exports: 4096,
         }
     }
 }
@@ -83,6 +88,10 @@ pub struct ConnectionStats {
     pub dispatched_handlers: u64,
     pub completed_handlers: u64,
     pub stale_handler_completions: u64,
+    pub active_imports: usize,
+    pub active_exports: usize,
+    pub import_references: u64,
+    pub export_references: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -100,6 +109,7 @@ pub enum ConnectionError {
     RemoteAbort(RpcException),
     Protocol(String),
     Wire(String),
+    Capability(String),
     Poisoned,
     PolledAfterCompletion,
 }
@@ -144,10 +154,31 @@ impl ConnectionHandle {
     ) -> Result<QuestionFuture, ConnectionError> {
         let cell = Arc::new(QuestionCell::new());
         self.submit(ActorCommand::StartCall {
-            target: target.clone(),
+            target: OutgoingCallTarget::Bootstrap(target.clone()),
             interface_id,
             method_id,
             params,
+            capabilities: Vec::new(),
+            cell: Arc::clone(&cell),
+        })?;
+        Ok(QuestionFuture { cell })
+    }
+
+    pub fn call_imported(
+        &self,
+        import_id: u32,
+        interface_id: u64,
+        method_id: u16,
+        params: Arc<OwnedMessage>,
+        capabilities: Vec<OutgoingCapability>,
+    ) -> Result<QuestionFuture, ConnectionError> {
+        let cell = Arc::new(QuestionCell::new());
+        self.submit(ActorCommand::StartCall {
+            target: OutgoingCallTarget::Imported(import_id),
+            interface_id,
+            method_id,
+            params,
+            capabilities,
             cell: Arc::clone(&cell),
         })?;
         Ok(QuestionFuture { cell })
@@ -218,11 +249,17 @@ impl Future for QuestionFuture {
 pub enum IncomingRequest {
     Bootstrap,
     Call {
-        target: AnswerKey,
+        target: IncomingCallTarget,
         interface_id: u64,
         method_id: u16,
-        params: DynamicAnyPointer,
+        params: Payload,
     },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum IncomingCallTarget {
+    BootstrapAnswer(AnswerKey),
+    Hosted(HostedCapability),
 }
 
 pub struct CompletionToken {
@@ -248,6 +285,19 @@ impl CompletionToken {
         self.handle.submit(ActorCommand::HandlerComplete {
             answer: self.answer,
             result,
+            capabilities: Vec::new(),
+        })
+    }
+
+    pub fn complete_with_capabilities(
+        self,
+        content: Arc<OwnedMessage>,
+        capabilities: Vec<OutgoingCapability>,
+    ) -> Result<(), ConnectionError> {
+        self.handle.submit(ActorCommand::HandlerComplete {
+            answer: self.answer,
+            result: HandlerResult::Results(content),
+            capabilities,
         })
     }
 }
@@ -269,6 +319,7 @@ pub struct ConnectionActor {
     protocol_limits: ProtocolLimits,
     questions: QuestionTable,
     answers: AnswerTable,
+    capabilities: CapabilityTables,
     effects: VecDeque<ActorEffect>,
     stats: ConnectionStats,
     terminal: bool,
@@ -298,6 +349,7 @@ impl ConnectionActor {
                 protocol_limits,
                 questions: QuestionTable::new(limits.max_questions),
                 answers: AnswerTable::new(limits.max_answers),
+                capabilities: CapabilityTables::new(limits.max_imports, limits.max_exports),
                 effects: VecDeque::new(),
                 stats: ConnectionStats::default(),
                 terminal: false,
@@ -306,11 +358,41 @@ impl ConnectionActor {
     }
 
     pub fn stats(&self) -> ConnectionStats {
+        let CapabilityStats {
+            active_imports,
+            active_exports,
+            import_references,
+            export_references,
+        } = self.capabilities.stats();
         ConnectionStats {
             active_questions: self.questions.len(),
             active_answers: self.answers.len(),
+            active_imports,
+            active_exports,
+            import_references,
+            export_references,
             ..self.stats
         }
+    }
+
+    /// Releases locally-held import references and schedules a batched wire
+    /// `Release` message without involving application locks.
+    pub fn release_import(&mut self, id: u32, count: u32) -> Result<(), ConnectionError> {
+        let snapshot = self.capabilities.clone();
+        let release = self
+            .capabilities
+            .release_import(id, count)
+            .map_err(|error| ConnectionError::Capability(error.to_string()))?;
+        let message =
+            match encode_release(release.id, release.reference_count, self.protocol_limits) {
+                Ok(message) => message,
+                Err(error) => {
+                    self.capabilities = snapshot;
+                    return Err(ConnectionError::Wire(error.to_string()));
+                }
+            };
+        self.effects.push_back(ActorEffect::Send(message));
+        Ok(())
     }
 
     /// Processes ordered commands until one externally-visible effect is ready.
@@ -344,12 +426,15 @@ impl ConnectionActor {
                 interface_id,
                 method_id,
                 params,
+                capabilities,
                 cell,
-            } => self.start_call(target, interface_id, method_id, params, cell),
+            } => self.start_call(target, interface_id, method_id, params, capabilities, cell),
             ActorCommand::Incoming(message) => self.incoming(message),
-            ActorCommand::HandlerComplete { answer, result } => {
-                self.handler_complete(answer, result)
-            }
+            ActorCommand::HandlerComplete {
+                answer,
+                result,
+                capabilities,
+            } => self.handler_complete(answer, result, capabilities),
             ActorCommand::Shutdown => {
                 self.transition_terminal(ConnectionError::Disconnected, false)
             }
@@ -359,6 +444,7 @@ impl ConnectionActor {
     fn start_bootstrap(&mut self, cell: Arc<QuestionCell>) {
         let key = match self.questions.allocate(QuestionState {
             cell: Arc::clone(&cell),
+            param_exports: Vec::new(),
         }) {
             Ok(key) => key,
             Err(error) => {
@@ -368,7 +454,11 @@ impl ConnectionActor {
         };
         self.record_question_allocation(key);
         if let Err(error) = cell.assign(key) {
-            let _ = self.questions.remove(key);
+            if let Some(question) = self.questions.remove(key) {
+                let _ = self
+                    .capabilities
+                    .apply_implicit_releases(&question.param_exports);
+            }
             self.protocol_failure(error);
             return;
         }
@@ -386,53 +476,85 @@ impl ConnectionActor {
 
     fn start_call(
         &mut self,
-        target: QuestionTarget,
+        target: OutgoingCallTarget,
         interface_id: u64,
         method_id: u16,
         params: Arc<OwnedMessage>,
+        capabilities: Vec<OutgoingCapability>,
         cell: Arc<QuestionCell>,
     ) {
-        let target_key = match target.cell.active_key() {
-            Ok(Some(key)) if self.questions.contains(key) => key,
-            Ok(Some(key)) => {
-                cell.complete(Err(ConnectionError::StaleTarget(key)));
-                return;
+        let wire_target = match target {
+            OutgoingCallTarget::Bootstrap(target) => match target.cell.active_key() {
+                Ok(Some(key)) if self.questions.contains(key) => {
+                    CallTarget::BootstrapAnswer(key.id)
+                }
+                Ok(Some(key)) => {
+                    cell.complete(Err(ConnectionError::StaleTarget(key)));
+                    return;
+                }
+                Ok(None) => {
+                    cell.complete(Err(ConnectionError::Disconnected));
+                    return;
+                }
+                Err(error) => {
+                    cell.complete(Err(error));
+                    return;
+                }
+            },
+            OutgoingCallTarget::Imported(id) if self.capabilities.contains_import(id) => {
+                CallTarget::ImportedCap(id)
             }
-            Ok(None) => {
-                cell.complete(Err(ConnectionError::Disconnected));
-                return;
-            }
-            Err(error) => {
-                cell.complete(Err(error));
+            OutgoingCallTarget::Imported(id) => {
+                cell.complete(Err(ConnectionError::Capability(format!(
+                    "unknown import {id}"
+                ))));
                 return;
             }
         };
+        let descriptors = match self.capabilities.describe_all(&capabilities) {
+            Ok(descriptors) => descriptors,
+            Err(error) => {
+                cell.complete(Err(ConnectionError::Capability(error.to_string())));
+                return;
+            }
+        };
+        let param_exports = sender_hosted_ids(&descriptors);
         let key = match self.questions.allocate(QuestionState {
             cell: Arc::clone(&cell),
+            param_exports: param_exports.clone(),
         }) {
             Ok(key) => key,
             Err(error) => {
+                let _ = self.capabilities.apply_implicit_releases(&param_exports);
                 cell.complete(Err(error));
                 return;
             }
         };
         self.record_question_allocation(key);
         if let Err(error) = cell.assign(key) {
-            let _ = self.questions.remove(key);
+            if let Some(question) = self.questions.remove(key) {
+                let _ = self
+                    .capabilities
+                    .apply_implicit_releases(&question.param_exports);
+            }
             self.protocol_failure(error);
             return;
         }
-        match encode_call(
+        match crate::encode_call_with_capabilities(
             key.id,
-            CallTarget::BootstrapAnswer(target_key.id),
+            wire_target,
             interface_id,
             method_id,
             &params,
+            &descriptors,
             self.protocol_limits,
         ) {
             Ok(message) => self.effects.push_back(ActorEffect::Send(message)),
             Err(error) => {
                 if let Some(question) = self.questions.remove(key) {
+                    let _ = self
+                        .capabilities
+                        .apply_implicit_releases(&question.param_exports);
                     question
                         .cell
                         .complete(Err(ConnectionError::Wire(error.to_string())));
@@ -442,19 +564,21 @@ impl ConnectionActor {
     }
 
     fn incoming(&mut self, raw: Arc<OwnedMessage>) {
-        let message = match read_protocol_message(Arc::clone(&raw)) {
-            Ok(message) => message,
-            Err(error) => {
-                self.protocol_failure(ConnectionError::Protocol(error.to_string()));
-                return;
-            }
-        };
+        let message =
+            match read_protocol_message_with_limits(Arc::clone(&raw), self.protocol_limits) {
+                Ok(message) => message,
+                Err(error) => {
+                    self.protocol_failure(ConnectionError::Protocol(error.to_string()));
+                    return;
+                }
+            };
         match message {
             ProtocolMessage::Bootstrap(message) => {
-                let answer = match self
-                    .answers
-                    .insert(message.question_id, AnswerKind::Bootstrap)
-                {
+                let answer = match self.answers.insert(
+                    message.question_id,
+                    AnswerKind::Bootstrap,
+                    Vec::new(),
+                ) {
                     Ok(answer) => answer,
                     Err(error) => {
                         self.protocol_failure(error);
@@ -464,26 +588,63 @@ impl ConnectionActor {
                 self.dispatch(IncomingRequest::Bootstrap, answer);
             }
             ProtocolMessage::Call(message) => {
-                let CallTarget::BootstrapAnswer(target_id) = message.target;
-                let Some(target) = self.answers.key_for_id(target_id) else {
-                    self.protocol_failure(ConnectionError::Protocol(format!(
-                        "call targets unknown bootstrap answer {target_id}"
-                    )));
-                    return;
+                let target = match message.target {
+                    CallTarget::BootstrapAnswer(target_id) => {
+                        let Some(target) = self.answers.key_for_id(target_id) else {
+                            self.protocol_failure(ConnectionError::Protocol(format!(
+                                "call targets unknown bootstrap answer {target_id}"
+                            )));
+                            return;
+                        };
+                        if !self.answers.is_bootstrap(target) {
+                            self.protocol_failure(ConnectionError::Protocol(format!(
+                                "call target {target_id} is not a bootstrap answer"
+                            )));
+                            return;
+                        }
+                        IncomingCallTarget::BootstrapAnswer(target)
+                    }
+                    CallTarget::ImportedCap(export_id) => {
+                        match self
+                            .capabilities
+                            .receive(&CapDescriptor::ReceiverHosted(export_id))
+                        {
+                            Ok(ReceivedCapability::Hosted(capability)) => {
+                                IncomingCallTarget::Hosted(capability)
+                            }
+                            Ok(_) => {
+                                self.protocol_failure(ConnectionError::Protocol(
+                                    "importedCap did not resolve to a hosted capability".to_owned(),
+                                ));
+                                return;
+                            }
+                            Err(error) => {
+                                self.protocol_failure(ConnectionError::Capability(
+                                    error.to_string(),
+                                ));
+                                return;
+                            }
+                        }
+                    }
                 };
-                if !self.answers.is_bootstrap(target) {
-                    self.protocol_failure(ConnectionError::Protocol(format!(
-                        "call target {target_id} is not a bootstrap answer"
-                    )));
-                    return;
-                }
-                let answer = match self.answers.insert(message.question_id, AnswerKind::Call) {
-                    Ok(answer) => answer,
+                let param_imports = match self.receive_cap_table(&message.params.cap_table) {
+                    Ok(imports) => imports,
                     Err(error) => {
                         self.protocol_failure(error);
                         return;
                     }
                 };
+                let answer =
+                    match self
+                        .answers
+                        .insert(message.question_id, AnswerKind::Call, param_imports)
+                    {
+                        Ok(answer) => answer,
+                        Err(error) => {
+                            self.protocol_failure(error);
+                            return;
+                        }
+                    };
                 self.dispatch(
                     IncomingRequest::Call {
                         target,
@@ -495,18 +656,50 @@ impl ConnectionActor {
                 );
             }
             ProtocolMessage::Return(message) => {
+                let has_result_caps = if let ReturnPayload::Results(payload) = &message.payload {
+                    if let Err(error) = self.receive_cap_table(&payload.cap_table) {
+                        self.protocol_failure(error);
+                        return;
+                    }
+                    !payload.cap_table.is_empty()
+                } else {
+                    false
+                };
                 let Some((key, question)) = self.questions.remove_id(message.answer_id) else {
                     self.protocol_failure(ConnectionError::UnknownQuestion(message.answer_id));
                     return;
                 };
+                if message.release_param_caps {
+                    if let Err(error) = self
+                        .capabilities
+                        .apply_implicit_releases(&question.param_exports)
+                    {
+                        self.protocol_failure(ConnectionError::Capability(error.to_string()));
+                        return;
+                    }
+                }
                 question.cell.complete(Ok(message.payload));
-                match encode_finish(key.id, self.protocol_limits) {
+                match encode_finish_with_release(key.id, !has_result_caps, self.protocol_limits) {
                     Ok(finish) => self.effects.push_back(ActorEffect::Send(finish)),
                     Err(error) => self.protocol_failure(ConnectionError::Wire(error.to_string())),
                 }
             }
             ProtocolMessage::Finish(message) => {
-                let _ = self.answers.remove_id(message.question_id);
+                if let Some(answer) = self.answers.remove_id(message.question_id) {
+                    if message.release_result_caps {
+                        if let Err(error) = self
+                            .capabilities
+                            .apply_implicit_releases(&answer.result_exports)
+                        {
+                            self.protocol_failure(ConnectionError::Capability(error.to_string()));
+                        }
+                    }
+                }
+            }
+            ProtocolMessage::Release(release) => {
+                if let Err(error) = self.capabilities.apply_release(release) {
+                    self.protocol_failure(ConnectionError::Capability(error.to_string()));
+                }
             }
             ProtocolMessage::Abort(exception) => {
                 self.transition_terminal(ConnectionError::RemoteAbort(exception), false);
@@ -554,18 +747,87 @@ impl ConnectionActor {
         });
     }
 
-    fn handler_complete(&mut self, answer: AnswerKey, result: HandlerResult) {
+    fn receive_cap_table(
+        &mut self,
+        descriptors: &[CapDescriptor],
+    ) -> Result<Vec<u32>, ConnectionError> {
+        let mut imports = Vec::new();
+        for descriptor in descriptors {
+            let received = self
+                .capabilities
+                .receive(descriptor)
+                .map_err(|error| ConnectionError::Capability(error.to_string()))?;
+            if let ReceivedCapability::Imported(id) = received {
+                imports.push(id);
+            }
+        }
+        Ok(imports)
+    }
+
+    fn handler_complete(
+        &mut self,
+        answer: AnswerKey,
+        result: HandlerResult,
+        capabilities: Vec<OutgoingCapability>,
+    ) {
+        if matches!(result, HandlerResult::ResultsWithCapabilities { .. }) {
+            self.protocol_failure(ConnectionError::Protocol(
+                "raw capability descriptors cannot bypass actor accounting".to_owned(),
+            ));
+            return;
+        }
         if !self.answers.mark_returned(answer) {
             self.stats.stale_handler_completions =
                 self.stats.stale_handler_completions.saturating_add(1);
             return;
         }
+        let descriptors = match self.capabilities.describe_all(&capabilities) {
+            Ok(descriptors) => descriptors,
+            Err(error) => {
+                self.protocol_failure(ConnectionError::Capability(error.to_string()));
+                return;
+            }
+        };
+        let result_exports = sender_hosted_ids(&descriptors);
+        if !self
+            .answers
+            .record_result_exports(answer, result_exports.clone())
+        {
+            let _ = self.capabilities.apply_implicit_releases(&result_exports);
+            self.protocol_failure(ConnectionError::StaleAnswer(answer));
+            return;
+        }
+        let result = match (result, descriptors.is_empty()) {
+            (HandlerResult::Results(content), false) => HandlerResult::ResultsWithCapabilities {
+                content,
+                cap_table: descriptors,
+            },
+            (result, true) => result,
+            (result, false) => {
+                let _ = self.capabilities.apply_implicit_releases(&result_exports);
+                self.protocol_failure(ConnectionError::Protocol(format!(
+                    "capabilities cannot accompany handler result {result:?}"
+                )));
+                return;
+            }
+        };
+        let param_imports = self.answers.param_imports(answer).unwrap_or_default();
         match encode_return(answer.id, &result, self.protocol_limits) {
             Ok(message) => {
+                if let Err(error) = self
+                    .capabilities
+                    .apply_implicit_import_releases(&param_imports)
+                {
+                    self.protocol_failure(ConnectionError::Capability(error.to_string()));
+                    return;
+                }
                 self.stats.completed_handlers = self.stats.completed_handlers.saturating_add(1);
                 self.effects.push_back(ActorEffect::Send(message));
             }
-            Err(error) => self.protocol_failure(ConnectionError::Wire(error.to_string())),
+            Err(error) => {
+                let _ = self.capabilities.apply_implicit_releases(&result_exports);
+                self.protocol_failure(ConnectionError::Wire(error.to_string()));
+            }
         }
     }
 
@@ -606,6 +868,7 @@ impl ConnectionActor {
             question.cell.complete(Err(error.clone()));
         }
         self.answers.clear();
+        self.capabilities.clear();
         if let Ok(commands) = self.mailbox.drain() {
             for command in commands {
                 complete_rejected(command, error.clone());
@@ -626,18 +889,35 @@ enum ActorCommand {
         cell: Arc<QuestionCell>,
     },
     StartCall {
-        target: QuestionTarget,
+        target: OutgoingCallTarget,
         interface_id: u64,
         method_id: u16,
         params: Arc<OwnedMessage>,
+        capabilities: Vec<OutgoingCapability>,
         cell: Arc<QuestionCell>,
     },
     Incoming(Arc<OwnedMessage>),
     HandlerComplete {
         answer: AnswerKey,
         result: HandlerResult,
+        capabilities: Vec<OutgoingCapability>,
     },
     Shutdown,
+}
+
+enum OutgoingCallTarget {
+    Bootstrap(QuestionTarget),
+    Imported(u32),
+}
+
+fn sender_hosted_ids(descriptors: &[CapDescriptor]) -> Vec<u32> {
+    descriptors
+        .iter()
+        .filter_map(|descriptor| match descriptor {
+            CapDescriptor::SenderHosted(id) => Some(*id),
+            CapDescriptor::None | CapDescriptor::ReceiverHosted(_) => None,
+        })
+        .collect()
 }
 
 fn complete_rejected(command: ActorCommand, error: ConnectionError) {
@@ -783,6 +1063,7 @@ impl QuestionCell {
 
 struct QuestionState {
     cell: Arc<QuestionCell>,
+    param_exports: Vec<u32>,
 }
 
 struct QuestionSlot {
@@ -907,6 +1188,8 @@ enum AnswerPhase {
 struct AnswerState {
     kind: AnswerKind,
     phase: AnswerPhase,
+    result_exports: Vec<u32>,
+    param_imports: Vec<u32>,
 }
 
 struct AnswerTable {
@@ -928,7 +1211,12 @@ impl AnswerTable {
         self.values.len()
     }
 
-    fn insert(&mut self, id: u32, kind: AnswerKind) -> Result<AnswerKey, ConnectionError> {
+    fn insert(
+        &mut self,
+        id: u32,
+        kind: AnswerKind,
+        param_imports: Vec<u32>,
+    ) -> Result<AnswerKey, ConnectionError> {
         if self.values.contains_key(&id) {
             return Err(ConnectionError::DuplicateAnswer(id));
         }
@@ -947,6 +1235,8 @@ impl AnswerTable {
                 AnswerState {
                     kind,
                     phase: AnswerPhase::InProgress,
+                    result_exports: Vec::new(),
+                    param_imports,
                 },
             ),
         );
@@ -977,6 +1267,23 @@ impl AnswerTable {
         true
     }
 
+    fn record_result_exports(&mut self, key: AnswerKey, exports: Vec<u32>) -> bool {
+        let Some((generation, value)) = self.values.get_mut(&key.id) else {
+            return false;
+        };
+        if *generation != key.generation || value.phase != AnswerPhase::Returned {
+            return false;
+        }
+        value.result_exports = exports;
+        true
+    }
+
+    fn param_imports(&self, key: AnswerKey) -> Option<Vec<u32>> {
+        self.values.get(&key.id).and_then(|(generation, value)| {
+            (*generation == key.generation).then(|| value.param_imports.clone())
+        })
+    }
+
     fn remove_id(&mut self, id: u32) -> Option<AnswerState> {
         self.values.remove(&id).map(|(_, value)| value)
     }
@@ -993,12 +1300,16 @@ fn _assert_public_send_traits() {
     assert_send::<ConnectionActor>();
     assert_send::<QuestionFuture>();
     assert_send::<CompletionToken>();
+    assert_send_sync::<HostedCapability>();
+    assert_send_sync::<OutgoingCapability>();
+    assert_send::<CapabilityTables>();
 }
 
 #[cfg(test)]
 #[allow(clippy::panic)]
 mod tests {
     use super::*;
+    use crate::read_protocol_message;
     use std::sync::mpsc;
     use std::task::Waker;
 
@@ -1172,6 +1483,95 @@ mod tests {
     }
 
     #[test]
+    fn hosted_callback_and_batched_release_use_actor_owned_tables() {
+        let (owner_handle, mut owner) =
+            ConnectionActor::new(ActorLimits::default(), ProtocolLimits::default());
+        let (peer_handle, mut peer) =
+            ConnectionActor::new(ActorLimits::default(), ProtocolLimits::default());
+        let hosted = HostedCapability::new().expect("hosted identity");
+        let descriptors = owner
+            .capabilities
+            .describe_all(&[
+                OutgoingCapability::Hosted(hosted.clone()),
+                OutgoingCapability::Hosted(hosted.clone()),
+            ])
+            .expect("descriptors");
+        assert_eq!(owner.stats().active_exports, 1);
+        assert_eq!(owner.stats().export_references, 2);
+        peer.receive_cap_table(&descriptors).expect("imports");
+        assert_eq!(peer.stats().active_imports, 1);
+        assert_eq!(peer.stats().import_references, 2);
+
+        peer.release_import(0, 2).expect("release scheduled");
+        let Poll::Ready(Some(release)) = next(&mut peer) else {
+            panic!("release wire")
+        };
+        send_to(release, &owner_handle);
+        assert!(matches!(next(&mut owner), Poll::Pending));
+        assert_eq!(owner.stats().active_exports, 0);
+        assert_eq!(owner.stats().export_references, 0);
+
+        let descriptor = owner
+            .capabilities
+            .describe_all(&[OutgoingCapability::Hosted(hosted.clone())])
+            .expect("re-export");
+        assert_eq!(descriptor, vec![CapDescriptor::SenderHosted(0)]);
+        peer.receive_cap_table(&descriptor)
+            .expect("callback import");
+        let callback = HostedCapability::new().expect("callback identity");
+        let mut call = peer_handle
+            .call_imported(
+                0,
+                0xfeed,
+                7,
+                message(11),
+                vec![OutgoingCapability::Hosted(callback)],
+            )
+            .expect("callback call queued");
+        let Poll::Ready(Some(call_wire)) = next(&mut peer) else {
+            panic!("callback call wire")
+        };
+        assert_eq!(peer.stats().active_exports, 1);
+        send_to(call_wire, &owner_handle);
+        let Poll::Ready(Some(ActorEffect::Dispatch {
+            request:
+                IncomingRequest::Call {
+                    target: IncomingCallTarget::Hosted(actual),
+                    ..
+                },
+            completion,
+        })) = next(&mut owner)
+        else {
+            panic!("hosted callback dispatch")
+        };
+        assert_eq!(actual, hosted);
+        assert_eq!(owner.stats().active_imports, 1);
+        completion
+            .complete(HandlerResult::Results(message(12)))
+            .expect("callback completion");
+        let Poll::Ready(Some(return_wire)) = next(&mut owner) else {
+            panic!("callback return")
+        };
+        assert_eq!(owner.stats().active_imports, 0);
+        send_to(return_wire, &peer_handle);
+        let Poll::Ready(Some(finish_wire)) = next(&mut peer) else {
+            panic!("callback finish")
+        };
+        assert!(matches!(
+            poll_future(&mut call),
+            Poll::Ready(Ok(ReturnPayload::Results(_)))
+        ));
+        assert_eq!(peer.stats().active_exports, 0);
+        send_to(finish_wire, &owner_handle);
+        assert!(matches!(next(&mut owner), Poll::Pending));
+
+        peer.transition_terminal(ConnectionError::Disconnected, false);
+        owner.transition_terminal(ConnectionError::Disconnected, false);
+        assert_eq!(peer.stats().active_imports, 0);
+        assert_eq!(owner.stats().active_exports, 0);
+    }
+
+    #[test]
     fn finish_before_handler_completion_makes_the_generation_token_stale() {
         let (sender, mut sender_actor) =
             ConnectionActor::new(ActorLimits::default(), ProtocolLimits::default());
@@ -1188,7 +1588,7 @@ mod tests {
             panic!("dispatch")
         };
         receiver
-            .receive(encode_finish(key.id, ProtocolLimits::default()).expect("finish"))
+            .receive(crate::encode_finish(key.id, ProtocolLimits::default()).expect("finish"))
             .expect("finish queued");
         assert!(matches!(next(&mut receiver_actor), Poll::Pending));
         completion

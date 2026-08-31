@@ -103,6 +103,16 @@ impl<T: DuplexTransport> ConnectionDriver<T> {
         self.actor.stats()
     }
 
+    /// Releases settled import references and queues one batched Level-1
+    /// `Release` before subsequent transport reads.
+    pub fn release_import(
+        &mut self,
+        import_id: u32,
+        reference_count: u32,
+    ) -> Result<(), capnp_rpc_core::ConnectionError> {
+        self.actor.release_import(import_id, reference_count)
+    }
+
     pub fn poll_next_dispatch(
         &mut self,
         context: &mut Context<'_>,

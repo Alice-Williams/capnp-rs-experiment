@@ -14,3 +14,6 @@ workspace = true
 [dependencies]
 capnp-message = { path = "../capnp-message" }
 capnp-schema = { path = "../capnp-schema" }
+
+[dev-dependencies]
+capnp-io = { path = "../capnp-io" }

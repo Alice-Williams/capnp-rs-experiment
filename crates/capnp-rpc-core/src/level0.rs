@@ -1,8 +1,8 @@
-//! Pinned Level-0 RPC message bindings.
+//! Pinned Level-0/hosted-capability RPC message bindings.
 //!
-//! Level 0 deliberately has no import/export capability descriptors. Calls may
-//! target only the raw capability returned by a prior `Bootstrap`, and payload
-//! capability tables must be empty.
+//! M34 adds the settled Level-1 descriptor forms (`senderHosted` and
+//! `receiverHosted`) and `Release`. Promise, pipeline, third-party, and file
+//! descriptor behavior remains owned by later milestones.
 
 use std::sync::Arc;
 
@@ -22,6 +22,20 @@ pub struct BootstrapMessage {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CallTarget {
     BootstrapAnswer(u32),
+    ImportedCap(u32),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CapDescriptor {
+    None,
+    SenderHosted(u32),
+    ReceiverHosted(u32),
+}
+
+#[derive(Clone, Debug)]
+pub struct Payload {
+    pub content: DynamicAnyPointer,
+    pub cap_table: Vec<CapDescriptor>,
 }
 
 #[derive(Clone, Debug)]
@@ -30,12 +44,12 @@ pub struct CallMessage {
     pub target: CallTarget,
     pub interface_id: u64,
     pub method_id: u16,
-    pub params: DynamicAnyPointer,
+    pub params: Payload,
 }
 
 #[derive(Clone, Debug)]
 pub enum ReturnPayload {
-    Results(DynamicAnyPointer),
+    Results(Payload),
     Exception(RpcException),
     Canceled,
 }
@@ -55,10 +69,20 @@ pub struct FinishMessage {
     pub require_early_cancellation_workaround: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReleaseMessage {
+    pub id: u32,
+    pub reference_count: u32,
+}
+
 /// A handler completion submitted back to the owning connection actor.
 #[derive(Clone, Debug)]
 pub enum HandlerResult {
     Results(Arc<OwnedMessage>),
+    ResultsWithCapabilities {
+        content: Arc<OwnedMessage>,
+        cap_table: Vec<CapDescriptor>,
+    },
     Exception(RpcException),
     Canceled,
 }
@@ -87,6 +111,27 @@ pub fn encode_call(
     params: &Arc<OwnedMessage>,
     limits: ProtocolLimits,
 ) -> Result<Arc<OwnedMessage>, ProtocolError> {
+    encode_call_with_capabilities(
+        question_id,
+        target,
+        interface_id,
+        method_id,
+        params,
+        &[],
+        limits,
+    )
+}
+
+pub fn encode_call_with_capabilities(
+    question_id: u32,
+    target: CallTarget,
+    interface_id: u64,
+    method_id: u16,
+    params: &Arc<OwnedMessage>,
+    cap_table: &[CapDescriptor],
+    limits: ProtocolLimits,
+) -> Result<Arc<OwnedMessage>, ProtocolError> {
+    check_cap_table_len(cap_table.len(), limits)?;
     let content = opaque_root(params, limits)?;
     let schema = protocol_schema()?;
     let mut arena = arena(limits)?;
@@ -109,12 +154,15 @@ pub fn encode_call(
                     promised.set("questionId", DynamicInput::UInt32(answer_id))?;
                     promised.init_list("transform", 0)?;
                 }
+                CallTarget::ImportedCap(import_id) => {
+                    target_builder.set("importedCap", DynamicInput::UInt32(import_id))?;
+                }
             }
         }
         {
             let mut payload = call.init_struct("params")?;
             payload.set("content", DynamicInput::Pointer(&content))?;
-            payload.init_list("capTable", 0)?;
+            write_cap_table(&mut payload, cap_table)?;
         }
     }
     owned(arena, limits)
@@ -126,7 +174,10 @@ pub fn encode_return(
     limits: ProtocolLimits,
 ) -> Result<Arc<OwnedMessage>, ProtocolError> {
     let result_pointer = match result {
-        HandlerResult::Results(message) => Some(opaque_root(message, limits)?),
+        HandlerResult::Results(message)
+        | HandlerResult::ResultsWithCapabilities {
+            content: message, ..
+        } => Some(opaque_root(message, limits)?),
         HandlerResult::Exception(exception) => {
             check_exception_limits(exception, limits)?;
             None
@@ -147,6 +198,12 @@ pub fn encode_return(
                 payload.set("content", DynamicInput::Pointer(pointer))?;
                 payload.init_list("capTable", 0)?;
             }
+            (HandlerResult::ResultsWithCapabilities { cap_table, .. }, Some(pointer)) => {
+                check_cap_table_len(cap_table.len(), limits)?;
+                let mut payload = returned.init_struct("results")?;
+                payload.set("content", DynamicInput::Pointer(pointer))?;
+                write_cap_table(&mut payload, cap_table)?;
+            }
             (HandlerResult::Exception(exception), None) => {
                 let mut output = returned.init_struct("exception")?;
                 write_exception(&mut output, exception)?;
@@ -158,8 +215,36 @@ pub fn encode_return(
     owned(arena, limits)
 }
 
+pub fn encode_release(
+    id: u32,
+    reference_count: u32,
+    limits: ProtocolLimits,
+) -> Result<Arc<OwnedMessage>, ProtocolError> {
+    if reference_count == 0 {
+        return Err(ProtocolError::InvalidReferenceCount);
+    }
+    let schema = protocol_schema()?;
+    let mut arena = arena(limits)?;
+    {
+        let mut message =
+            capnp_schema::DynamicStructBuilder::root(&schema, &mut arena, MESSAGE_TYPE_ID)?;
+        let mut release = message.init_struct("release")?;
+        release.set("id", DynamicInput::UInt32(id))?;
+        release.set("referenceCount", DynamicInput::UInt32(reference_count))?;
+    }
+    owned(arena, limits)
+}
+
 pub fn encode_finish(
     question_id: u32,
+    limits: ProtocolLimits,
+) -> Result<Arc<OwnedMessage>, ProtocolError> {
+    encode_finish_with_release(question_id, true, limits)
+}
+
+pub fn encode_finish_with_release(
+    question_id: u32,
+    release_result_caps: bool,
     limits: ProtocolLimits,
 ) -> Result<Arc<OwnedMessage>, ProtocolError> {
     let schema = protocol_schema()?;
@@ -169,7 +254,7 @@ pub fn encode_finish(
             capnp_schema::DynamicStructBuilder::root(&schema, &mut arena, MESSAGE_TYPE_ID)?;
         let mut finish = message.init_struct("finish")?;
         finish.set("questionId", DynamicInput::UInt32(question_id))?;
-        finish.set("releaseResultCaps", DynamicInput::Bool(true))?;
+        finish.set("releaseResultCaps", DynamicInput::Bool(release_result_caps))?;
         finish.set(
             "requireEarlyCancellationWorkaround",
             DynamicInput::Bool(false),
@@ -185,46 +270,54 @@ pub(crate) fn read_bootstrap(root: &DynamicStruct) -> Result<BootstrapMessage, P
     })
 }
 
-pub(crate) fn read_call(root: &DynamicStruct) -> Result<CallMessage, ProtocolError> {
+pub(crate) fn read_call(
+    root: &DynamicStruct,
+    limits: ProtocolLimits,
+) -> Result<CallMessage, ProtocolError> {
     let call = structure(root.get("call")?, "call")?;
     let target = structure(call.get("target")?, "target")?;
-    if target.union_discriminant()? != Some(1) {
-        return Err(ProtocolError::UnsupportedLevel0("call target"));
-    }
-    let promised = structure(target.get("promisedAnswer")?, "promisedAnswer")?;
-    let transform = list(promised.get("transform")?, "transform")?;
-    if let Some(transform) = transform {
-        if transform.len()? != 0 {
-            return Err(ProtocolError::UnsupportedLevel0(
-                "non-empty promised-answer transform",
-            ));
+    let target = match target.union_discriminant()?.unwrap_or(u16::MAX) {
+        0 => CallTarget::ImportedCap(uint32(target.get("importedCap")?, "importedCap")?),
+        1 => {
+            let promised = structure(target.get("promisedAnswer")?, "promisedAnswer")?;
+            let transform = list(promised.get("transform")?, "transform")?;
+            if let Some(transform) = transform {
+                if transform.len()? != 0 {
+                    return Err(ProtocolError::UnsupportedLevel0(
+                        "non-empty promised-answer transform",
+                    ));
+                }
+            }
+            CallTarget::BootstrapAnswer(uint32(
+                promised.get("questionId")?,
+                "promisedAnswer.questionId",
+            )?)
         }
-    }
+        _ => return Err(ProtocolError::UnsupportedLevel0("call target")),
+    };
     let send_results_to = structure(call.get("sendResultsTo")?, "sendResultsTo")?;
     if send_results_to.union_discriminant()? != Some(0) {
         return Err(ProtocolError::UnsupportedLevel0("sendResultsTo"));
     }
     let params = structure(call.get("params")?, "params")?;
-    require_empty_cap_table(&params)?;
     Ok(CallMessage {
         question_id: uint32(call.get("questionId")?, "questionId")?,
-        target: CallTarget::BootstrapAnswer(uint32(
-            promised.get("questionId")?,
-            "promisedAnswer.questionId",
-        )?),
+        target,
         interface_id: uint64(call.get("interfaceId")?, "interfaceId")?,
         method_id: uint16(call.get("methodId")?, "methodId")?,
-        params: any_pointer(params.get("content")?, "params.content")?,
+        params: read_payload(&params, "params.content", limits)?,
     })
 }
 
-pub(crate) fn read_return(root: &DynamicStruct) -> Result<ReturnMessage, ProtocolError> {
+pub(crate) fn read_return(
+    root: &DynamicStruct,
+    limits: ProtocolLimits,
+) -> Result<ReturnMessage, ProtocolError> {
     let returned = structure(root.get("return")?, "return")?;
     let payload = match returned.union_discriminant()?.unwrap_or(u16::MAX) {
         0 => {
             let results = structure(returned.get("results")?, "results")?;
-            require_empty_cap_table(&results)?;
-            ReturnPayload::Results(any_pointer(results.get("content")?, "results.content")?)
+            ReturnPayload::Results(read_payload(&results, "results", limits)?)
         }
         1 => {
             let exception = structure(returned.get("exception")?, "exception")?;
@@ -238,6 +331,18 @@ pub(crate) fn read_return(root: &DynamicStruct) -> Result<ReturnMessage, Protoco
         release_param_caps: boolean(returned.get("releaseParamCaps")?, "releaseParamCaps")?,
         no_finish_needed: boolean(returned.get("noFinishNeeded")?, "noFinishNeeded")?,
         payload,
+    })
+}
+
+pub(crate) fn read_release(root: &DynamicStruct) -> Result<ReleaseMessage, ProtocolError> {
+    let release = structure(root.get("release")?, "release")?;
+    let reference_count = uint32(release.get("referenceCount")?, "referenceCount")?;
+    if reference_count == 0 {
+        return Err(ProtocolError::InvalidReferenceCount);
+    }
+    Ok(ReleaseMessage {
+        id: uint32(release.get("id")?, "id")?,
+        reference_count,
     })
 }
 
@@ -297,13 +402,77 @@ fn list(
     }
 }
 
-fn require_empty_cap_table(payload: &DynamicStruct) -> Result<(), ProtocolError> {
-    if let Some(cap_table) = list(payload.get("capTable")?, "capTable")? {
-        if cap_table.len()? != 0 {
-            return Err(ProtocolError::UnsupportedLevel0("payload capabilities"));
+fn check_cap_table_len(len: usize, limits: ProtocolLimits) -> Result<(), ProtocolError> {
+    if len > limits.max_cap_table_entries {
+        return Err(ProtocolError::Limit {
+            field: "capTable",
+            requested: len,
+            limit: limits.max_cap_table_entries,
+        });
+    }
+    Ok(())
+}
+
+fn write_cap_table(
+    payload: &mut capnp_schema::DynamicStructBuilder<'_, '_>,
+    cap_table: &[CapDescriptor],
+) -> Result<(), ProtocolError> {
+    let count = u32::try_from(cap_table.len()).map_err(|_| ProtocolError::MessageSizeOverflow)?;
+    let mut output = payload.init_list("capTable", count)?;
+    for (index, descriptor) in cap_table.iter().enumerate() {
+        let index = u32::try_from(index).map_err(|_| ProtocolError::MessageSizeOverflow)?;
+        let mut value = output.struct_element(index)?;
+        match descriptor {
+            CapDescriptor::None => value.activate("none")?,
+            CapDescriptor::SenderHosted(id) => {
+                value.set("senderHosted", DynamicInput::UInt32(*id))?;
+            }
+            CapDescriptor::ReceiverHosted(id) => {
+                value.set("receiverHosted", DynamicInput::UInt32(*id))?;
+            }
         }
     }
     Ok(())
+}
+
+fn read_payload(
+    payload: &DynamicStruct,
+    field: &'static str,
+    limits: ProtocolLimits,
+) -> Result<Payload, ProtocolError> {
+    let cap_table = match list(payload.get("capTable")?, "capTable")? {
+        None => Vec::new(),
+        Some(values) => {
+            let len =
+                usize::try_from(values.len()?).map_err(|_| ProtocolError::MessageSizeOverflow)?;
+            check_cap_table_len(len, limits)?;
+            let mut output = Vec::with_capacity(len);
+            for index in 0..values.len()? {
+                let value = structure(values.get(index)?, "capTable element")?;
+                let descriptor = match value.union_discriminant()?.unwrap_or(u16::MAX) {
+                    0 => CapDescriptor::None,
+                    1 => CapDescriptor::SenderHosted(uint32(
+                        value.get("senderHosted")?,
+                        "senderHosted",
+                    )?),
+                    3 => CapDescriptor::ReceiverHosted(uint32(
+                        value.get("receiverHosted")?,
+                        "receiverHosted",
+                    )?),
+                    2 => return Err(ProtocolError::UnsupportedLevel0("senderPromise")),
+                    4 => return Err(ProtocolError::UnsupportedLevel0("receiverAnswer")),
+                    5 => return Err(ProtocolError::UnsupportedLevel0("thirdPartyHosted")),
+                    _ => return Err(ProtocolError::UnsupportedLevel0("capability descriptor")),
+                };
+                output.push(descriptor);
+            }
+            output
+        }
+    };
+    Ok(Payload {
+        content: any_pointer(payload.get("content")?, field)?,
+        cap_table,
+    })
 }
 
 fn uint16(value: DynamicValue, field: &'static str) -> Result<u16, ProtocolError> {
@@ -389,7 +558,31 @@ mod tests {
         assert_eq!(call.target, CallTarget::BootstrapAnswer(7));
         assert_eq!(call.interface_id, 0xfeed);
         assert_eq!(call.method_id, 3);
-        assert!(matches!(call.params, DynamicAnyPointer::Struct(_)));
+        assert!(matches!(call.params.content, DynamicAnyPointer::Struct(_)));
+
+        let descriptors = vec![
+            CapDescriptor::SenderHosted(4),
+            CapDescriptor::SenderHosted(4),
+            CapDescriptor::ReceiverHosted(9),
+            CapDescriptor::None,
+        ];
+        let ProtocolMessage::Call(call) = read_protocol_message(
+            encode_call_with_capabilities(
+                10,
+                CallTarget::ImportedCap(12),
+                0xbeef,
+                5,
+                &data_message(43),
+                &descriptors,
+                limits,
+            )
+            .expect("capability call"),
+        )
+        .expect("capability call reads") else {
+            panic!("capability call")
+        };
+        assert_eq!(call.target, CallTarget::ImportedCap(12));
+        assert_eq!(call.params.cap_table, descriptors);
 
         for result in [
             HandlerResult::Results(data_message(88)),
@@ -422,6 +615,42 @@ mod tests {
                 release_result_caps: true,
                 require_early_cancellation_workaround: false,
             }))
+        ));
+
+        assert!(matches!(
+            read_protocol_message(encode_release(4, 2, limits).expect("release")),
+            Ok(ProtocolMessage::Release(ReleaseMessage {
+                id: 4,
+                reference_count: 2
+            }))
+        ));
+        assert!(matches!(
+            encode_release(4, 0, limits),
+            Err(ProtocolError::InvalidReferenceCount)
+        ));
+    }
+
+    #[test]
+    fn capability_table_limit_is_checked_before_allocation() {
+        let limits = ProtocolLimits {
+            max_cap_table_entries: 1,
+            ..ProtocolLimits::default()
+        };
+        assert!(matches!(
+            encode_call_with_capabilities(
+                1,
+                CallTarget::ImportedCap(0),
+                0,
+                0,
+                &data_message(1),
+                &[CapDescriptor::None, CapDescriptor::None],
+                limits,
+            ),
+            Err(ProtocolError::Limit {
+                field: "capTable",
+                requested: 2,
+                limit: 1
+            })
         ));
     }
 }

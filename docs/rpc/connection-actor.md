@@ -1,4 +1,4 @@
-# Two-party Level-0 connection actor
+# Two-party connection actor
 
 M33 implements the Level-0 lifecycle defined by the pinned `rpc.capnp` at
 Cap'n Proto commit `e7c9cd96f1505b5ae486db7821006c2f5dce5b5b`:
@@ -29,12 +29,10 @@ construction are bounded before growth.
 
 ## Lifecycle
 
-At Level 0, a `Call` can target only an active bootstrap answer and its
-`PromisedAnswer.transform` must be empty. Payload capability tables must be
-empty. Results are owned and contain no imported capabilities, so the caller
-can emit `Finish` as soon as it has retained the decoded `Return` payload.
-M34 changes this boundary when imports and exports acquire independent
-lifetimes.
+At Level 0, a `Call` can target an active bootstrap answer and its
+`PromisedAnswer.transform` must be empty. M34 also permits settled imported-cap
+targets and hosted/receiver-hosted payload descriptors. Their exact lifetime
+rules are documented in [capability-lifetimes.md](capability-lifetimes.md).
 
 An early `Finish` removes its answer entry. A later handler completion becomes
 a harmless stale-generation event. Shutdown closes the mailbox, rejects new
@@ -52,8 +50,8 @@ to M43.
 
 ## Explicit non-goals
 
-M33 does not implement capability descriptors or import/export refcounts,
-general promised-answer transforms, promise resolution, embargo, streaming
+M33/M34 do not implement promise descriptors, general promised-answer
+transforms, promise resolution, embargo, streaming
 flow control, cooperative handler cancellation, reconnect, scheduling policy,
 attached-resource meaning, or three-party protocol features. Those remain
 M34–M45.
