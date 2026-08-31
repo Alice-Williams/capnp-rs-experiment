@@ -68,10 +68,14 @@ implement the executor-neutral `DuplexTransport` boundary and are driven by
   and at least 100,000 sessions. Every session asserts empty connection-owned
   tables after disconnect; Linux RSS after warm-up may not grow by more than
   64 MiB.
+- `tools/verify-m40-soak-result.sh` accepts only a checked-in `PASS` result
+  with at least 86,400 elapsed seconds and 100,000 sessions, and binds it to
+  the exact soak example and runner hashes in the result metadata.
 - `tools/verify-m40-release-gates.sh` composes the interop, fuzz, soak,
   recorded parallel-performance, exact shared-budget, lifecycle, and shell
   gates. A shorter duration is a smoke test and must never be recorded as the
-  release result.
+  release result. Set `M40_USE_RECORDED_SOAK=1` only to verify the already
+  completed, hash-bound 24-hour result instead of starting another run.
 - The workspace forbids unsafe Rust. Miri remains mandatory for the disjoint
   builder storage boundary. The complete `capnp-wire` suite also runs in
   Miri's strict-alignment abstract machine, including deliberately unaligned

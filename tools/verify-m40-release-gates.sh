@@ -6,7 +6,11 @@ cd -- "$repo_root"
 
 bash tools/verify-m40-level1-interop.sh
 bash tools/run-m40-rpc-fuzz.sh
-bash tools/run-m40-level1-soak.sh
+if [[ ${M40_USE_RECORDED_SOAK:-0} == 1 ]]; then
+  bash tools/verify-m40-soak-result.sh
+else
+  bash tools/run-m40-level1-soak.sh
+fi
 
 # Re-check every recorded parallel release ratio and latency artifact. Each
 # verifier binds results to the checked-in source and rejects missing context.
@@ -29,6 +33,9 @@ fi
 cargo test --quiet -p capnp-message --features loom-tests \
   loom_proves_competing_charges_preserve_the_hard_limit
 cargo test --quiet -p capnp-rpc-core actor::tests
+cargo +nightly miri test --quiet -p capnp-wire
+cargo +nightly miri test --quiet -p capnp-message \
+  miri_disjoint_primitive_partitions_do_not_alias
 bash tools/check-shell-syntax.sh
 
 printf 'M40 release gates OK\n'
