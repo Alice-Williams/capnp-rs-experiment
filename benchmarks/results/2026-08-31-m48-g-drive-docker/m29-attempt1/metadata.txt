@@ -1,0 +1,16 @@
+format_version=1
+generated_utc=2026-08-31T17:35:37Z
+environment=Debian Trixie dev container under Docker Desktop
+kernel=Linux 6.18.33.2-microsoft-standard-WSL2 #1 SMP PREEMPT_DYNAMIC Thu Jun 18 21:54:43 UTC 2026 x86_64 GNU/Linux
+cpu_model=Intel(R) Core(TM) i7-6700K CPU @ 4.00GHz
+logical_cpus=8
+memory_bytes=25157021696
+rustc=rustc 1.98.0 (88d9e12ae 2026-08-18)
+base_git_commit=e3479b7a2337ae505bbd73aa2012cfb10510ea24
+parallel_module_sha256=4cffe096966efe48133977c61b415c339b6c538f8f89fd2cd55b06b67b4c1ddd
+benchmark_example_sha256=e8de6e4e62669678396ed6b2d691f27606bd4cd87fb1ebcc3a9e621236bf3b41
+rounds_per_item=128
+workers=4
+samples_per_mode=7
+parallel_item_threshold=16384
+timer=Rust Instant; median includes owned-view and partition-plan creation
