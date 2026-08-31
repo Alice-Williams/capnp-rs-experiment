@@ -27,6 +27,7 @@ use capnp_schema::{CompiledSchema, DynamicError};
 mod driver;
 mod dynamic;
 mod flow;
+mod join;
 mod level3;
 mod local;
 mod membrane;
@@ -52,6 +53,11 @@ pub use dynamic::{
 pub use flow::{
     AllAcked, FlowAck, FlowController, FlowError, FlowLimits, FlowMode, FlowReady, FlowSend,
     FlowStats,
+};
+pub use join::{
+    DistributedJoin, JoinAction, JoinBeginResult, JoinCandidate, JoinCompletion, JoinError,
+    JoinFinish, JoinId, JoinLimits, JoinNetwork, JoinProgress, JoinRequest, JoinResolution,
+    JoinStart, JoinedCapability, NewJoin,
 };
 pub use level3::{
     AcceptCompletion, AcceptFailure, AcceptId, AcceptState, AuthenticatedVatId, DisembargoAction,
