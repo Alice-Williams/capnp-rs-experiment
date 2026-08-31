@@ -32,6 +32,13 @@ jobs:
           bash tools/run-m40-rpc-fuzz.sh
           bash tools/run-m40-level1-soak.sh
 
+      - name: Smoke-test maximum-parity full-platform soak harness
+        env:
+          M48_SOAK_MIN_SESSIONS: 10
+          M48_SOAK_SECONDS: 0
+          M48_SOAK_WARMUP_SESSIONS: 2
+        run: bash tools/run-m48-full-platform-soak.sh
+
       - name: Model exact shared traversal accounting
         run: |
           cargo test -p capnp-message --features loom-tests loom_proves_competing_charges_preserve_the_hard_limit

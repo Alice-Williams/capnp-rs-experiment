@@ -2,7 +2,7 @@
 
 use std::error::Error;
 use std::io;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use capnp_compiler::request::compile_program;
 use capnp_compiler::semantic::{ModuleSources, ResolveLimits};
@@ -24,9 +24,13 @@ pub mod platform_example;
 /// The fallible result shared by the executable examples.
 pub type ExampleResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
+static ADDRESSBOOK_SCHEMA: OnceLock<Arc<CompiledSchema>> = OnceLock::new();
+static CALCULATOR_SCHEMA: OnceLock<Arc<CompiledSchema>> = OnceLock::new();
+
 /// Compiles the checked-in address-book schema with the native compiler.
 pub fn addressbook_schema() -> ExampleResult<Arc<CompiledSchema>> {
-    compile_schema(
+    cached_schema(
+        &ADDRESSBOOK_SCHEMA,
         "/addressbook.capnp",
         include_str!("../schemas/addressbook.capnp"),
     )
@@ -34,10 +38,26 @@ pub fn addressbook_schema() -> ExampleResult<Arc<CompiledSchema>> {
 
 /// Compiles the checked-in calculator schema with the native compiler.
 pub fn calculator_schema() -> ExampleResult<Arc<CompiledSchema>> {
-    compile_schema(
+    cached_schema(
+        &CALCULATOR_SCHEMA,
         "/calculator.capnp",
         include_str!("../schemas/calculator.capnp"),
     )
+}
+
+fn cached_schema(
+    cache: &OnceLock<Arc<CompiledSchema>>,
+    entry: &str,
+    source: &str,
+) -> ExampleResult<Arc<CompiledSchema>> {
+    if let Some(schema) = cache.get() {
+        return Ok(Arc::clone(schema));
+    }
+    let schema = compile_schema(entry, source)?;
+    match cache.set(Arc::clone(&schema)) {
+        Ok(()) => Ok(schema),
+        Err(schema) => Ok(cache.get().map_or(schema, Arc::clone)),
+    }
 }
 
 fn compile_schema(entry: &str, source: &str) -> ExampleResult<Arc<CompiledSchema>> {

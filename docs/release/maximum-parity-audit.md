@@ -73,3 +73,12 @@ The executable inventory check is `tools/verify-m48-inventory.sh`. It verifies
 that the manifest retains the required milestone/evidence states and that this
 audit continues to name every blocker; it never converts a candidate into a
 release merely because the fast test suite passes.
+
+The full-platform soak is `tools/run-m48-full-platform-soak.sh`. Its release
+defaults require at least 100,000 sessions and 172,800 seconds after warmup.
+Each session randomizes the order of the address-book, calculator, and platform
+scenarios while checking their complete observable results. The platform case
+includes normal stream completion, cancellation, authenticated Level 3
+handoff, Level 4 equality, and persistence across a simulated restart. CI only
+runs an explicitly bounded smoke configuration; smoke output is not release
+evidence.
