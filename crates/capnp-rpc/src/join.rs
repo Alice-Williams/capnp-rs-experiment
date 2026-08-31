@@ -20,6 +20,18 @@ use crate::{AuthenticatedVatId, IntroducedConnection};
 /// Opaque key parts and results are scoped to their authenticated source and
 /// destination connections. Implementations must reject a value replayed on a
 /// different connection, a forged value, or results naming different roots.
+///
+/// The distinct wire types prevent accidentally treating a key share as a
+/// successful proof:
+///
+/// ```compile_fail
+/// use capnp_rpc_core::{JoinKeyPart, JoinResult};
+///
+/// fn consume_result(_: JoinResult) {}
+/// fn cannot_substitute_key_part(part: JoinKeyPart) {
+///     consume_result(part);
+/// }
+/// ```
 pub trait JoinNetwork {
     type Connection: Clone + fmt::Debug + Eq + Hash;
     type VatId: Clone + fmt::Debug + Eq + Hash;
@@ -109,6 +121,18 @@ pub struct NewJoin<S> {
     pub key_parts: Vec<JoinKeyPart>,
 }
 
+/// One of the capability paths supplied to [`DistributedJoin::begin`].
+///
+/// ```
+/// use capnp_rpc::JoinCandidate;
+///
+/// let candidate: JoinCandidate<u8, u64> = JoinCandidate::Remote {
+///     connection: 2,
+///     import_id: 17,
+///     question_id: 31,
+/// };
+/// assert!(matches!(candidate, JoinCandidate::Remote { import_id: 17, .. }));
+/// ```
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum JoinCandidate<C, O> {
     Local(O),
@@ -412,6 +436,9 @@ impl<N: JoinNetwork> DistributedJoin<N> {
             ));
         }
 
+        while self.active.contains_key(&JoinId(self.next_id)) {
+            self.next_id = self.next_id.wrapping_add(1);
+        }
         let join_id = JoinId(self.next_id);
         self.next_id = self.next_id.wrapping_add(1);
         let mut requests = Vec::with_capacity(remote.len());
@@ -1094,6 +1121,33 @@ mod tests {
             Err(JoinError::DuplicateResult)
         ));
         assert_eq!(join.active_joins(), 1);
+    }
+
+    #[test]
+    fn a_valid_proof_cannot_satisfy_a_different_path_slot() {
+        let mut join = DistributedJoin::new(TestNetwork::new(), JoinLimits::default());
+        let (join_id, requests) = pending(
+            join.begin(vec![remote(1, 10, 101), remote(1, 11, 102)])
+                .expect("begin"),
+        );
+        let result = returned(
+            join.route_join(
+                &1,
+                requests[0].message.clone(),
+                JoinResolution::Root(Root {
+                    host: 5,
+                    object: 99,
+                }),
+            )
+            .expect("root"),
+        );
+        assert!(matches!(
+            join.add_result(join_id, 1, &1, 102, result),
+            Err(JoinError::Network(TestError::WrongPath))
+        ));
+        assert_eq!(join.active_joins(), 0);
+        assert_eq!(join.network().cancel_count, 1);
+        assert_eq!(join.next_failed_finish().expect("cleanup").question_id, 101);
     }
 
     #[test]
