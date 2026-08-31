@@ -71,6 +71,7 @@ revocation_membranes = "M42 implementation candidate: revocable servers and recu
 attached_resources = "M43 implementation candidate: generic one-owner attachments, pinned attachedFd binding, and bounded Unix SCM_RIGHTS transfer with capability fallback; activation awaits M40"
 level3_handoffs = "M44 implementation candidate: pinned Level-3 wire surface plus authenticated executor-neutral provision, accept, forwarding, return-routing, and embargo coordination; activation awaits M40"
 level4_join = "M45 implementation candidate: pinned Join wire surface plus authenticated network-parameterized distributed equality, transparent forwarding, result relay, and direct common-root connection; activation awaits M40 and M44"
+persistent_capabilities = "M46 implementation candidate: realm-branded SturdyRefs, typed save/restore, durable owner sealing, expiry, revocation, and fresh-connection restart recovery; activation awaits M40"
 parallel_read = "M29 zero-copy Arc-owned list partitions and deterministic retained-subtree work plans for scoped or external executors"
 parallel_build = "M30 disjoint primitive partitions plus sealed single-segment worker fragments with deterministic far-link finalization"
 batch_pipeline = "M31 bounded reservation-window scheduling for ordered concurrent process/build/pack work with no-pool single-item paths"
@@ -126,6 +127,19 @@ M42 = "implementation candidate; activation awaits M40 and M41 activation"
 M43 = "implementation candidate; activation awaits M40 completion"
 M44 = "implementation candidate; activation awaits M40 completion"
 M45 = "implementation candidate; activation awaits M40 and M44 activation"
+M46 = "implementation candidate; activation awaits M40 completion"
+
+[evidence.M46]
+crates = ["crates/capnp-rpc"]
+sources = ["pinned persistent.capnp Persistent<SturdyRef, Owner>.save interface", "pinned persistent annotation and realm/sealing guidance", "pinned rpc.capnp Level-2 SturdyRef guidance"]
+boundary = ["realm authenticates opaque tokens", "durable store commits canonical grants and revocation", "resolver maps live capabilities to stable object IDs and restores fresh live capabilities", "realm-branded tokens require explicit cross-realm transformation"]
+durable_state = ["grant ID", "stable object ID", "optional sealed owner", "optional expiry", "revocation flag", "no capability, import, export, question, transport, or connection ID"]
+restore_checks = ["bounded token before validation", "realm authentication", "durable grant existence", "exact token/store claims", "revocation", "expiry", "authenticated owner", "resolver invoked only after all checks"]
+lifecycle = ["save rejects already-expired grants before mutation", "dropping or cloning a token does not affect object ownership", "grant-specific and object-wide revocation survive restart", "restart restoration constructs fresh connection state"]
+oracle_check = "tools/verify-m46-persistent-capabilities.sh: pinned schema surface plus native restart, fresh-connection, owner, expiry, tamper, unknown, mismatch, revocation, and quota model tests"
+documentation = "docs/rpc/persistent-capabilities.md"
+limitations = ["activation awaits the M40 release gate", "application supplies database, cryptography, owner authentication, trusted clock, network dialer, stable object IDs, and realm transformations", "no universal C++ behavioral oracle exists because persistence formats and restoration are application-defined"]
+validation = "focused restart/security model, positive API and wrong-realm compile-fail docs; workspace Cargo, rustdoc, strict Clippy, shell syntax, MSRV, and all 30 Bazel tests"
 
 [evidence.M45]
 crates = ["crates/capnp-rpc-core", "crates/capnp-rpc"]

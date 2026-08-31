@@ -10,6 +10,25 @@ use std::fmt;
 use std::marker::PhantomData;
 
 /// An opaque, serializable SturdyRef branded by its application realm.
+///
+/// ```
+/// use capnp_rpc::SturdyRef;
+/// struct MyRealm;
+/// let token = SturdyRef::<MyRealm>::from_bytes(vec![1, 2, 3]);
+/// assert_eq!(token.as_bytes(), &[1, 2, 3]);
+/// ```
+///
+/// Realm branding prevents accidental cross-realm restore; an application must
+/// perform its explicitly authenticated transformation first.
+///
+/// ```compile_fail
+/// use capnp_rpc::SturdyRef;
+/// struct LocalRealm;
+/// struct NetworkRealm;
+/// fn restore_local(_: &SturdyRef<LocalRealm>) {}
+/// let foreign = SturdyRef::<NetworkRealm>::from_bytes(vec![1]);
+/// restore_local(&foreign);
+/// ```
 #[derive(Eq, Hash, PartialEq)]
 pub struct SturdyRef<R> {
     bytes: Vec<u8>,
@@ -807,5 +826,42 @@ mod tests {
             restarted.restore(&second, None, 3),
             Err(PersistenceError::Revoked)
         ));
+    }
+
+    #[test]
+    fn unknown_grants_and_store_claim_mismatches_fail_before_resolution() {
+        let mut manager = manager(10);
+        let mut outsider = TestRealm {
+            key: manager.realm().key,
+            next_grant: 99,
+        };
+        let unknown = outsider
+            .issue(&ObjectId(7), &SaveOptions::default())
+            .expect("valid outsider token")
+            .sturdy_ref;
+        assert!(matches!(
+            manager.restore(&unknown, None, 1),
+            Err(PersistenceError::UnknownReference)
+        ));
+
+        let token = manager
+            .save(
+                &Capability {
+                    object: ObjectId(7),
+                    connection: ConnectionId(1),
+                },
+                SaveOptions::default(),
+                1,
+            )
+            .expect("save");
+        let (realm, mut store, resolver) = manager.into_parts();
+        store.records[0].stable_object_id = ObjectId(8);
+        let mut corrupted =
+            PersistenceManager::new(realm, store, resolver, PersistenceLimits::default());
+        assert!(matches!(
+            corrupted.restore(&token, None, 2),
+            Err(PersistenceError::ClaimsMismatch)
+        ));
+        assert_eq!(corrupted.resolver().next_connection, 10);
     }
 }
