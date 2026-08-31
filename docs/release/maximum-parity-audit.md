@@ -82,3 +82,10 @@ includes normal stream completion, cancellation, authenticated Level 3
 handoff, Level 4 equality, and persistence across a simulated restart. CI only
 runs an explicitly bounded smoke configuration; smoke output is not release
 evidence.
+
+A release run must use `tools/run-m48-release-soak.sh` with a new
+`M48_SOAK_RESULT_DIR`. That wrapper refuses dirty worktrees and existing result
+directories, records the exact Git index inputs and toolchain, runs the
+48-hour gate, then invokes `tools/verify-m48-soak-result.sh`. The verifier
+rejects below-threshold results, inconsistent settings, excessive
+resident-memory growth, missing provenance, and any later source-input change.
