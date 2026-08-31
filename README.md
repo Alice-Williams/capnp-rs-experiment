@@ -92,6 +92,11 @@ messages and move-only ancillary resources, applies exact portable queue
 quotas, and exchanges pinned `abort` / `unimplemented` control messages without
 depending on an async executor.
 
+The [Level-0 connection actor](docs/rpc/connection-actor.md) adds bounded
+thread-safe command handles, generation-safe question/answer tables,
+bootstrap-pipelined calls, concurrent handler dispatch, ordered returns and
+finishes, and an executor-neutral duplex transport driver.
+
 This is experimental software and is not yet suitable for production use.
 
 ## License

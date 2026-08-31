@@ -62,7 +62,7 @@ generated_api = "M21 typed data and thread-safe local interface APIs with exact 
 native_compiler = "M26 native multi-file compile and id CLI, plugin-compatible request streaming, deterministic built-in Rust output, and self-hosted generation without a system capnp compiler"
 text_tools = "M27 bounded native text encode/decode/eval with standard, packed, and flat modes and pinned C++ short-format parity"
 json = "M28 bounded reflection codec and native binary/packed/flat JSON conversion with pinned C++ policy and annotations"
-rpc_level = "M32 pinned two-party schema binding, revision-tolerant abort/unimplemented control messages, and bounded executor-neutral owned transport envelopes; connection actor deferred to M33+"
+rpc_level = "M33 executor-neutral two-party Level-0 actor/driver with bounded mailbox, generation-safe question/answer tables, bootstrap pipelining, call/return/finish, abort, and deterministic shutdown; capability imports/exports deferred to M34"
 parallel_read = "M29 zero-copy Arc-owned list partitions and deterministic retained-subtree work plans for scoped or external executors"
 parallel_build = "M30 disjoint primitive partitions plus sealed single-segment worker fragments with deterministic far-link finalization"
 batch_pipeline = "M31 bounded reservation-window scheduling for ordered concurrent process/build/pack work with no-pool single-item paths"
@@ -106,6 +106,20 @@ M29 = "complete"
 M30 = "complete"
 M31 = "complete"
 M32 = "complete"
+M33 = "complete"
+
+[evidence.M33]
+crates = ["crates/capnp-rpc-core", "crates/capnp-rpc"]
+wire = ["pinned Bootstrap", "empty-transform PromisedAnswer bootstrap target", "Call with caller-directed empty-capability payload", "Return results/exception/canceled", "modern Finish defaults", "abort on invalid state", "unimplemented response handling"]
+ownership = "one ConnectionActor owns both tables; handles only append commands to a bounded FIFO mailbox; no protocol table is behind a shared mutex"
+tables = ["lowest-free outbound QuestionId allocation", "QuestionKey ID plus per-slot generation", "peer-selected sparse AnswerId map", "AnswerKey ID plus monotonic generation", "configured active question and answer limits", "generation exhaustion fails closed"]
+concurrency = ["ConnectionHandle, QuestionFuture, QuestionTarget, CompletionToken, ConnectionActor, and ConnectionDriver are Send by representation", "two real scoped handler threads complete call then bootstrap out of order", "actor processes completions serially", "no waker is invoked while a mutex guard is held", "no async block or await exists in actor or driver"]
+lifecycle = ["Return completes its one waiter and emits Finish before ID reuse", "Finish removes answer", "early Finish makes later completion a counted stale-generation no-op", "duplicate active AnswerId emits abort then close", "shutdown wakes all questions exactly once and rejects new work"]
+driver = "generic DuplexTransport bridge drains ordered sends before more reads, propagates pending send backpressure, surfaces dispatch tokens without choosing an executor, rejects Level-0 ancillary resources, and closes cleanly on EOF/shutdown"
+limits = ["bounded command mailbox", "bounded active questions", "bounded active answers", "M32 envelope/queue byte and resource quotas", "M32 protocol construction limits"]
+documentation = "docs/rpc/connection-actor.md"
+limitations = ["Level-0 calls target only an active bootstrap answer", "payload capability tables must be empty", "Finish is emitted immediately after retaining capability-free Level-0 results", "no general import/export descriptors or refcounts", "no cooperative cancellation/reconnect", "application scheduling remains caller-owned"]
+validation = "16 capnp-rpc-core and 3 capnp-rpc focused tests; Rust 1.98 and 1.85 workspace tests; Clippy -D warnings; doctests; complete 28-test Bazel suite"
 
 [evidence.M32]
 crate = "crates/capnp-rpc-core"

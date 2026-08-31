@@ -2,7 +2,8 @@
 //!
 //! M21 deliberately provides an in-memory transport boundary, typed response
 //! futures, streaming backpressure futures, and exact capability pipeline
-//! transforms. Network protocol tables and connection actors remain M32+.
+//! transforms. M33 adds the executor-neutral two-party driver around the
+//! single-owner Level-0 actor from `capnp-rpc-core`.
 
 use std::fmt;
 use std::future::Future;
@@ -12,6 +13,15 @@ use std::sync::Arc;
 
 use capnp_message::{OwnedMessage, OwnedPointerRef};
 use capnp_schema::{CompiledSchema, DynamicError};
+
+mod driver;
+
+pub use capnp_rpc_core::{
+    ActorLimits, AnswerKey, CompletionToken, ConnectionError, ConnectionHandle, ConnectionStats,
+    ExceptionType, HandlerResult, IncomingRequest, ProtocolLimits, QuestionFuture, QuestionKey,
+    QuestionTarget, ReturnPayload, RpcException,
+};
+pub use driver::{ConnectionDriver, DriverDispatch, DriverError};
 
 pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
 pub type MessageFuture = BoxFuture<Result<Arc<OwnedMessage>, RpcError>>;
@@ -24,6 +34,7 @@ pub enum RpcError {
     MissingResponse,
     PipelineExpectedStruct,
     PipelineExpectedCapability,
+    Connection(ConnectionError),
     Dynamic(DynamicError),
     Message(capnp_message::OwnedReadError),
 }
@@ -45,6 +56,12 @@ impl From<DynamicError> for RpcError {
 impl From<capnp_message::OwnedReadError> for RpcError {
     fn from(value: capnp_message::OwnedReadError) -> Self {
         Self::Message(value)
+    }
+}
+
+impl From<ConnectionError> for RpcError {
+    fn from(value: ConnectionError) -> Self {
+        Self::Connection(value)
     }
 }
 

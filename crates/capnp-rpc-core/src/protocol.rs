@@ -13,6 +13,11 @@ use capnp_schema::{
     LoadLimits, OpaquePointer,
 };
 
+use crate::level0::{
+    BootstrapMessage, CallMessage, FinishMessage, ReturnMessage, read_bootstrap, read_call,
+    read_finish, read_return,
+};
+
 pub const RPC_SCHEMA_SHA256: &str =
     "2ecc3049d4f7f2d48a3a368dbb9ef4b97b31c1365996d615bd19c267983a1931";
 pub const RPC_TWOPARTY_SCHEMA_SHA256: &str =
@@ -104,6 +109,10 @@ pub enum ProtocolMessage {
     /// old and revised peers must tolerate as the schema default.
     Unimplemented(Option<DynamicStruct>),
     Abort(RpcException),
+    Bootstrap(BootstrapMessage),
+    Call(CallMessage),
+    Return(ReturnMessage),
+    Finish(FinishMessage),
     /// Includes both later-level messages and discriminants added by a newer
     /// schema revision. M32 does not assign either category semantics.
     Unsupported {
@@ -118,6 +127,7 @@ pub enum ProtocolError {
     Message(OwnedReadError),
     Validation(ValidationError),
     FieldType(&'static str),
+    UnsupportedLevel0(&'static str),
     Limit {
         field: &'static str,
         requested: usize,
@@ -134,6 +144,9 @@ impl fmt::Display for ProtocolError {
             Self::Message(error) => error.fmt(formatter),
             Self::Validation(error) => error.fmt(formatter),
             Self::FieldType(field) => write!(formatter, "RPC field `{field}` has the wrong type"),
+            Self::UnsupportedLevel0(feature) => {
+                write!(formatter, "RPC feature `{feature}` is outside Level 0")
+            }
             Self::Limit {
                 field,
                 requested,
@@ -155,6 +168,7 @@ impl std::error::Error for ProtocolError {
             Self::Validation(error) => Some(error),
             Self::Schema(_)
             | Self::FieldType(_)
+            | Self::UnsupportedLevel0(_)
             | Self::Limit { .. }
             | Self::MessageSizeOverflow => None,
         }
@@ -257,6 +271,10 @@ pub fn encode_unimplemented(
 pub fn read_protocol_message(message: Arc<OwnedMessage>) -> Result<ProtocolMessage, ProtocolError> {
     let schema = protocol_schema()?;
     let root = DynamicStruct::root(schema, message, MESSAGE_TYPE_ID)?;
+    read_protocol_struct(root)
+}
+
+pub(crate) fn read_protocol_struct(root: DynamicStruct) -> Result<ProtocolMessage, ProtocolError> {
     let discriminant = root.union_discriminant()?.unwrap_or(u16::MAX);
     match discriminant {
         0 => match root.get("unimplemented")? {
@@ -273,11 +291,15 @@ pub fn read_protocol_message(message: Arc<OwnedMessage>) -> Result<ProtocolMessa
             ))),
             _ => Err(ProtocolError::FieldType("abort")),
         },
+        8 => Ok(ProtocolMessage::Bootstrap(read_bootstrap(&root)?)),
+        2 => Ok(ProtocolMessage::Call(read_call(&root)?)),
+        3 => Ok(ProtocolMessage::Return(read_return(&root)?)),
+        4 => Ok(ProtocolMessage::Finish(read_finish(&root)?)),
         discriminant => Ok(ProtocolMessage::Unsupported { discriminant }),
     }
 }
 
-fn read_exception(value: &DynamicStruct) -> Result<RpcException, ProtocolError> {
+pub(crate) fn read_exception(value: &DynamicStruct) -> Result<RpcException, ProtocolError> {
     let reason = match value.get("reason")? {
         DynamicValue::Text(value) => value,
         _ => return Err(ProtocolError::FieldType("reason")),
@@ -308,7 +330,7 @@ fn check_text(field: &'static str, value: &str, limit: usize) -> Result<(), Prot
     Ok(())
 }
 
-fn message_bytes(message: &OwnedMessage) -> Result<usize, ProtocolError> {
+pub(crate) fn message_bytes(message: &OwnedMessage) -> Result<usize, ProtocolError> {
     let mut total = 0usize;
     for index in 0..message.segment_count() {
         let id = u32::try_from(index).map_err(|_| ProtocolError::MessageSizeOverflow)?;
@@ -324,18 +346,45 @@ fn message_bytes(message: &OwnedMessage) -> Result<usize, ProtocolError> {
     Ok(total)
 }
 
-fn reader_limits(limits: ProtocolLimits) -> ReaderLimits {
+pub(crate) fn reader_limits(limits: ProtocolLimits) -> ReaderLimits {
     ReaderLimits {
         traversal_words: u64::from(limits.max_message_words),
         nesting_levels: 64,
     }
 }
 
-fn owned(
+pub(crate) fn owned(
     arena: ExclusiveArena,
     limits: ProtocolLimits,
 ) -> Result<Arc<OwnedMessage>, ProtocolError> {
     OwnedMessage::new(arena.into_segments(), reader_limits(limits)).map_err(Into::into)
+}
+
+pub(crate) fn opaque_root(
+    message: &Arc<OwnedMessage>,
+    limits: ProtocolLimits,
+) -> Result<OpaquePointer, ProtocolError> {
+    let copied = (0..message.segment_count())
+        .map(|index| {
+            message
+                .segment(u32::try_from(index).map_err(|_| ProtocolError::MessageSizeOverflow)?)
+                .map(|segment| segment.to_vec().into_boxed_slice())
+                .ok_or(ProtocolError::MessageSizeOverflow)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    OpaquePointer::from_root_segments(copied, reader_limits(limits)).map_err(Into::into)
+}
+
+pub(crate) fn write_exception(
+    output: &mut DynamicStructBuilder<'_, '_>,
+    exception: &RpcException,
+) -> Result<(), ProtocolError> {
+    output.set("reason", DynamicInput::Text(&exception.reason))?;
+    output.set("type", DynamicInput::Enum(exception.kind.ordinal()))?;
+    if !exception.trace.is_empty() {
+        output.set("trace", DynamicInput::Text(&exception.trace))?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

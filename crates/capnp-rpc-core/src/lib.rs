@@ -10,9 +10,20 @@
 //! semantics, cancellation, reconnect, and network-specific resource handling
 //! deliberately remain later milestones.
 
+mod actor;
+mod level0;
 mod protocol;
 mod transport;
 
+pub use actor::{
+    ActorEffect, ActorLimits, AnswerKey, CompletionToken, ConnectionActor, ConnectionError,
+    ConnectionHandle, ConnectionStats, IncomingRequest, QuestionFuture, QuestionKey,
+    QuestionTarget,
+};
+pub use level0::{
+    BootstrapMessage, CallMessage, CallTarget, FinishMessage, HandlerResult, ReturnMessage,
+    ReturnPayload, encode_bootstrap, encode_call, encode_finish, encode_return,
+};
 pub use protocol::{
     EXCEPTION_TYPE_ID, ExceptionType, MESSAGE_TYPE_ID, ProtocolError, ProtocolLimits,
     ProtocolMessage, RPC_SCHEMA_SHA256, RPC_TWOPARTY_SCHEMA_SHA256, RpcException, encode_abort,
