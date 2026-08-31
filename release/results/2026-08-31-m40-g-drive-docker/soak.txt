@@ -1,0 +1,9 @@
+status=INTERIM_STOPPED
+seed=7868967635439804779
+minimum_sessions=100000
+duration_seconds=86400
+elapsed_seconds=12420
+sessions=735873468
+rss_kib=3052
+stop=SIGTERM immediately after this durable progress checkpoint; process exit verified
+disposition=DEVELOPMENT_EVIDENCE_ONLY: approximately 3 hours 27 minutes; the 24-hour M40 release gate was not run to completion and did not pass

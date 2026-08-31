@@ -76,6 +76,10 @@ implement the executor-neutral `DuplexTransport` boundary and are driven by
   gates. A shorter duration is a smoke test and must never be recorded as the
   release result. Set `M40_USE_RECORDED_SOAK=1` only to verify the already
   completed, hash-bound 24-hour result instead of starting another run.
+- The preserved 2026-08-31 run is only an interim development soak: it was
+  stopped at 12,420 seconds and 735,873,468 sessions with 3,052 KiB RSS. Its
+  `INTERIM_STOPPED` record is deliberately rejected by the release verifier;
+  it does not satisfy or claim the 24-hour gate.
 - The workspace forbids unsafe Rust. Miri remains mandatory for the disjoint
   builder storage boundary. The complete `capnp-wire` suite also runs in
   Miri's strict-alignment abstract machine, including deliberately unaligned
