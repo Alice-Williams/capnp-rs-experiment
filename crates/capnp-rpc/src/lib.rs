@@ -26,6 +26,7 @@ use capnp_schema::{CompiledSchema, DynamicError};
 mod driver;
 mod dynamic;
 mod flow;
+mod level3;
 mod local;
 mod membrane;
 mod reconnect;
@@ -50,6 +51,11 @@ pub use dynamic::{
 pub use flow::{
     AllAcked, FlowAck, FlowController, FlowError, FlowLimits, FlowMode, FlowReady, FlowSend,
     FlowStats,
+};
+pub use level3::{
+    AcceptCompletion, AcceptFailure, AcceptId, AcceptState, AuthenticatedVatId, DisembargoAction,
+    HandoffPlan, IntroducedConnection, Introduction, Level3Error, Level3Limits, Level3Network,
+    Level3Router, ProvisionId, ReturnRoute,
 };
 pub use local::{
     CapabilityFailure, CapabilityList, CapabilityPipeline, CapabilityServerSet, FromLocalClient,
