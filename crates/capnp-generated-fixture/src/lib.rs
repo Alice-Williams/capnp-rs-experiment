@@ -24,8 +24,8 @@ pub mod streaming {
 mod tests {
     use std::future::Future;
     use std::pin::pin;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
     use std::task::{Context, Poll, Waker};
 
     use capnp_io::{FrameLimits, FrameRead, parse_frame};
@@ -141,6 +141,74 @@ mod tests {
     struct ByteService {
         schema: Arc<CompiledSchema>,
         writes: Arc<AtomicUsize>,
+    }
+
+    struct RecordingService {
+        response: Arc<OwnedMessage>,
+        methods: Arc<Mutex<Vec<u16>>>,
+    }
+
+    impl capnp_rpc::LocalService for RecordingService {
+        fn dispatch(
+            self: Arc<Self>,
+            _interface_id: u64,
+            method_id: u16,
+            _params: Arc<OwnedMessage>,
+        ) -> capnp_rpc::MessageFuture {
+            self.methods.lock().expect("recording lock").push(method_id);
+            let response = Arc::clone(&self.response);
+            Box::pin(async move { Ok(response) })
+        }
+    }
+
+    struct PipelineFactoryService {
+        response: Arc<OwnedMessage>,
+        stream: capnp_rpc::LocalClient,
+        provisional: bool,
+    }
+
+    impl capnp_rpc::LocalService for PipelineFactoryService {
+        fn dispatch(
+            self: Arc<Self>,
+            _interface_id: u64,
+            _method_id: u16,
+            _params: Arc<OwnedMessage>,
+        ) -> capnp_rpc::MessageFuture {
+            let response = Arc::clone(&self.response);
+            Box::pin(async move { Ok(response) })
+        }
+
+        fn dispatch_call(
+            self: Arc<Self>,
+            _interface_id: u64,
+            _method_id: u16,
+            _params: Arc<OwnedMessage>,
+        ) -> capnp_rpc::LocalCall {
+            let capabilities =
+                capnp_rpc::CapabilityList::from_clients([Some(self.stream.clone())], 4)
+                    .expect("bounded capability table");
+            let response = capnp_rpc::LocalResponse::with_capabilities(
+                Arc::clone(&self.response),
+                capabilities,
+            );
+            let response_future: capnp_rpc::LocalResponseFuture = if self.provisional {
+                Box::pin(std::future::pending())
+            } else {
+                Box::pin(async move { Ok(response) })
+            };
+            let mut call = capnp_rpc::LocalCall::new(response_future);
+            if self.provisional {
+                let mut pipeline = capnp_rpc::PipelineBuilder::default();
+                pipeline
+                    .set_capability(
+                        capnp_rpc::PipelineTransform::root().pointer_field(0),
+                        self.stream.clone(),
+                    )
+                    .expect("unique provisional path");
+                call.set_pipeline(pipeline).expect("pipeline set once");
+            }
+            call
+        }
     }
 
     impl super::streaming::byte_stream::Server for ByteService {
@@ -521,4 +589,342 @@ mod tests {
         block_on(streaming.completion()).expect("streaming completion");
         assert_eq!(writes.load(Ordering::SeqCst), 1);
     }
+
+    #[test]
+    fn promise_clients_queue_in_order_and_fail_stably() {
+        let schema = streaming_schema();
+        let response = {
+            let mut arena = ExclusiveArena::new(1, 16).expect("response arena");
+            super::streaming::stream_result::Builder::init_root(&schema, &mut arena)
+                .expect("response root");
+            owned_arena(arena)
+        };
+        let methods = Arc::new(Mutex::new(Vec::new()));
+        let service = Arc::new(RecordingService {
+            response,
+            methods: Arc::clone(&methods),
+        });
+        let (promise, resolver) = capnp_rpc::LocalClient::promise(Arc::clone(&schema));
+        let params = {
+            let mut arena = ExclusiveArena::new(1, 16).expect("params arena");
+            super::streaming::stream_result::Builder::init_root(&schema, &mut arena)
+                .expect("params root");
+            owned_arena(arena)
+        };
+        let first = promise.call_untyped(1, 7, Arc::clone(&params));
+        let second = promise.call_untyped(1, 9, Arc::clone(&params));
+        assert!(methods.lock().expect("recording lock").is_empty());
+        resolver
+            .fulfill(capnp_rpc::LocalClient::new(Arc::clone(&schema), service))
+            .expect("promise resolves once");
+        block_on(first.response()).expect("first queued response");
+        block_on(second.response()).expect("second queued response");
+        assert_eq!(*methods.lock().expect("recording lock"), [7, 9]);
+
+        let (left, left_resolver) = capnp_rpc::LocalClient::promise(Arc::clone(&schema));
+        let (right, right_resolver) = capnp_rpc::LocalClient::promise(Arc::clone(&schema));
+        left_resolver.fulfill(right.clone()).expect("first link");
+        assert!(matches!(
+            right_resolver.fulfill(left),
+            Err(capnp_rpc::RpcError::PromiseCycle)
+        ));
+
+        for failed in [
+            capnp_rpc::LocalClient::broken(Arc::clone(&schema), "fixture failure"),
+            capnp_rpc::LocalClient::disabled(Arc::clone(&schema)),
+        ] {
+            let error = block_on(failed.call_untyped(1, 0, Arc::clone(&params)).response())
+                .expect_err("failed clients reject every call");
+            assert!(matches!(error, capnp_rpc::RpcError::Shared(_)));
+        }
+    }
+
+    #[test]
+    fn response_and_provisional_pipelines_preserve_local_client_identity() {
+        let schema = streaming_schema();
+        let writes = Arc::new(AtomicUsize::new(0));
+        let stream = capnp_rpc::LocalClient::new(
+            Arc::clone(&schema),
+            Arc::new(super::streaming::byte_stream::LocalServer::new(
+                Arc::new(ByteService {
+                    schema: Arc::clone(&schema),
+                    writes: Arc::clone(&writes),
+                }),
+                Arc::clone(&schema),
+            )),
+        );
+        let response = {
+            let mut arena = ExclusiveArena::new(2, 32).expect("result arena");
+            super::streaming::open_results::Builder::init_root(&schema, &mut arena)
+                .expect("result root")
+                .set_stream(0)
+                .expect("capability index");
+            owned_arena(arena)
+        };
+        for provisional in [false, true] {
+            let factory =
+                super::streaming::stream_factory::Client::from_local(capnp_rpc::LocalClient::new(
+                    Arc::clone(&schema),
+                    Arc::new(PipelineFactoryService {
+                        response: Arc::clone(&response),
+                        stream: stream.clone(),
+                        provisional,
+                    }),
+                ));
+            let mut params = ExclusiveArena::new(2, 32).expect("params arena");
+            super::streaming::open_params::Builder::init_root(&schema, &mut params)
+                .expect("params root");
+            let pipeline = factory.open(owned_arena(params)).send_for_pipeline();
+            let client = pipeline
+                .stream()
+                .client()
+                .expect("generated pipeline binds client");
+            assert!(client.local().when_resolved().is_send());
+
+            let mut write = ExclusiveArena::new(2, 32).expect("write arena");
+            super::streaming::write_params::Builder::init_root(&schema, &mut write)
+                .expect("write root");
+            block_on(client.write(owned_arena(write)).completion()).expect("pipelined write");
+        }
+
+        let target_factory = capnp_rpc::LocalClient::new(
+            Arc::clone(&schema),
+            Arc::new(PipelineFactoryService {
+                response,
+                stream,
+                provisional: true,
+            }),
+        );
+        let (promised_factory, resolver) = capnp_rpc::LocalClient::promise(Arc::clone(&schema));
+        let promised_factory =
+            super::streaming::stream_factory::Client::from_local(promised_factory);
+        let mut params = ExclusiveArena::new(2, 32).expect("promised params arena");
+        super::streaming::open_params::Builder::init_root(&schema, &mut params)
+            .expect("promised params root");
+        let promised_stream = promised_factory
+            .open(owned_arena(params))
+            .send_for_pipeline()
+            .stream()
+            .client()
+            .expect("promised generated pipeline");
+        resolver
+            .fulfill(target_factory)
+            .expect("factory promise resolves");
+        let mut write = ExclusiveArena::new(2, 32).expect("promised write arena");
+        super::streaming::write_params::Builder::init_root(&schema, &mut write)
+            .expect("promised write root");
+        block_on(promised_stream.write(owned_arena(write)).completion())
+            .expect("promise pipeline forwards provisional client");
+        assert_eq!(writes.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn dynamic_inheritance_pipeline_tail_call_and_server_set_obey_capability_rules() {
+        let language_schema = language_schema();
+        let language_local = capnp_rpc::LocalClient::new(
+            Arc::clone(&language_schema),
+            Arc::new(super::language::generic_service::LocalServer::<
+                LanguageService,
+                String,
+            >::new(
+                Arc::new(LanguageService {
+                    schema: Arc::clone(&language_schema),
+                }),
+                Arc::clone(&language_schema),
+            )),
+        );
+        let dynamic = capnp_rpc::DynamicCapability::new(
+            Arc::clone(&language_schema),
+            language_local,
+            super::language::generic_service::TYPE_ID,
+        )
+        .expect("dynamic interface");
+        let inherited = dynamic.method("ping").expect("inherited method");
+        assert_eq!(
+            inherited.interface_id(),
+            super::language::base_service::TYPE_ID
+        );
+        let base = dynamic
+            .upcast(super::language::base_service::TYPE_ID)
+            .expect("declared upcast");
+        assert!(
+            base.upcast(super::language::generic_service::TYPE_ID)
+                .is_err(),
+            "upcast cannot move down the inheritance graph"
+        );
+        assert_eq!(
+            base.cast(super::language::generic_service::TYPE_ID)
+                .expect("explicit dynamic reinterpretation")
+                .interface_id(),
+            Some(super::language::generic_service::TYPE_ID)
+        );
+        let mut ping = ExclusiveArena::new(1, 16).expect("ping params");
+        super::language::ping_params::Builder::init_root(&language_schema, &mut ping)
+            .expect("ping root");
+        let response = block_on(
+            dynamic
+                .call("ping", owned_arena(ping))
+                .expect("dynamic call")
+                .response(),
+        )
+        .expect("dynamic response");
+        assert_eq!(
+            response.result().type_id(),
+            super::language::ping_results::TYPE_ID
+        );
+
+        let server_schema = Arc::clone(&language_schema);
+        let dynamic_server = capnp_rpc::DynamicCapability::from_server(
+            Arc::clone(&language_schema),
+            super::language::generic_service::TYPE_ID,
+            Arc::new(move |call: capnp_rpc::DynamicServerCall| {
+                assert_eq!(call.method().name(), "ping");
+                assert_eq!(
+                    call.params().type_id(),
+                    super::language::ping_params::TYPE_ID
+                );
+                let mut arena = ExclusiveArena::new(4, 64).expect("dynamic server result");
+                super::language::ping_results::Builder::init_root(&server_schema, &mut arena)
+                    .expect("dynamic server root")
+                    .set_value(81)
+                    .expect("dynamic server value");
+                let response = owned_arena(arena);
+                capnp_rpc::LocalCall::new(Box::pin(async move {
+                    Ok(capnp_rpc::LocalResponse::new(response))
+                }))
+            }),
+        )
+        .expect("dynamic server client");
+        let mut server_ping = ExclusiveArena::new(1, 16).expect("server ping params");
+        super::language::ping_params::Builder::init_root(&language_schema, &mut server_ping)
+            .expect("server ping root");
+        let server_response = block_on(
+            dynamic_server
+                .call("ping", owned_arena(server_ping))
+                .expect("dynamic server call")
+                .response(),
+        )
+        .expect("dynamic server response");
+        assert!(matches!(
+            server_response
+                .result()
+                .get("value")
+                .expect("dynamic value"),
+            capnp_schema::DynamicValue::UInt32(81)
+        ));
+
+        let streaming_schema = streaming_schema();
+        let raw_response = {
+            let mut arena = ExclusiveArena::new(2, 32).expect("result arena");
+            super::streaming::open_results::Builder::init_root(&streaming_schema, &mut arena)
+                .expect("result root");
+            owned_arena(arena)
+        };
+        let methods = Arc::new(Mutex::new(Vec::new()));
+        let server = Arc::new(RecordingService {
+            response: Arc::clone(&raw_response),
+            methods,
+        });
+        let set = capnp_rpc::CapabilityServerSet::new(Arc::clone(&streaming_schema));
+        let registered = set.add(Arc::clone(&server));
+        assert!(Arc::ptr_eq(
+            &set.try_get_local_server(&registered).expect("sync unwrap"),
+            &server
+        ));
+        let other_set =
+            capnp_rpc::CapabilityServerSet::<RecordingService>::new(Arc::clone(&streaming_schema));
+        assert!(other_set.try_get_local_server(&registered).is_none());
+        let ephemeral_server = Arc::new(RecordingService {
+            response: Arc::clone(&raw_response),
+            methods: Arc::new(Mutex::new(Vec::new())),
+        });
+        let ephemeral = other_set.add(Arc::clone(&ephemeral_server));
+        assert!(
+            other_set
+                .this_client(&ephemeral_server)
+                .expect("live registration")
+                .same_identity(&ephemeral)
+        );
+        drop(ephemeral);
+        assert!(other_set.this_client(&ephemeral_server).is_none());
+        assert_eq!(
+            Arc::strong_count(&ephemeral_server),
+            1,
+            "the set must not keep a dropped client/server registration alive"
+        );
+        let (promised, resolver) = capnp_rpc::LocalClient::promise(Arc::clone(&streaming_schema));
+        assert!(
+            set.try_get_local_server(&promised).is_none(),
+            "sync unwrap must not follow unresolved promises"
+        );
+        resolver
+            .fulfill(registered.clone())
+            .expect("server promise");
+        assert!(Arc::ptr_eq(
+            &block_on(set.get_local_server(promised))
+                .expect("async unwrap")
+                .expect("registered server"),
+            &server
+        ));
+
+        let capabilities =
+            capnp_rpc::CapabilityList::from_clients([Some(registered)], 2).expect("cap table");
+        let tail_service = Arc::new(PipelineFactoryService {
+            response: raw_response,
+            stream: capabilities.get(0).expect("cap slot").expect("cap"),
+            provisional: false,
+        });
+        let tail_client = capnp_rpc::LocalClient::new(Arc::clone(&streaming_schema), tail_service);
+        let params = {
+            let mut arena = ExclusiveArena::new(1, 16).expect("tail params");
+            super::streaming::stream_result::Builder::init_root(&streaming_schema, &mut arena)
+                .expect("tail params root");
+            owned_arena(arena)
+        };
+        let transferred = block_on(capnp_rpc::direct_tail_call(&tail_client, 1, 0, params))
+            .expect("tail response");
+        assert_eq!(
+            transferred.capabilities().len(),
+            1,
+            "tail calls transfer cap tables without proxying"
+        );
+
+        let dynamic_factory_service = Arc::new(PipelineFactoryService {
+            response: Arc::clone(transferred.message()),
+            stream: transferred
+                .capabilities()
+                .get(0)
+                .expect("dynamic cap slot")
+                .expect("dynamic cap"),
+            provisional: true,
+        });
+        let dynamic_factory = capnp_rpc::DynamicCapability::new(
+            Arc::clone(&streaming_schema),
+            capnp_rpc::LocalClient::new(Arc::clone(&streaming_schema), dynamic_factory_service),
+            super::streaming::stream_factory::TYPE_ID,
+        )
+        .expect("dynamic factory");
+        let mut open = ExclusiveArena::new(2, 32).expect("dynamic open params");
+        super::streaming::open_params::Builder::init_root(&streaming_schema, &mut open)
+            .expect("dynamic open root");
+        let dynamic_open = dynamic_factory
+            .call("open", owned_arena(open))
+            .expect("dynamic open call");
+        let dynamic_stream = dynamic_open
+            .pipeline()
+            .capability(&["stream"])
+            .expect("dynamic pipeline field");
+        assert_eq!(
+            dynamic_stream.interface_id(),
+            Some(super::streaming::byte_stream::TYPE_ID)
+        );
+    }
+
+    trait FutureIsSend: Future + Send {
+        fn is_send(&self) -> bool {
+            true
+        }
+    }
+
+    impl<T: Future + Send> FutureIsSend for T {}
 }

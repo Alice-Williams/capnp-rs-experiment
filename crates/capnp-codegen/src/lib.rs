@@ -1065,13 +1065,15 @@ fn emit_struct(
     writeln!(output, "    }}").map_err(|_| GenerateError::Format)?;
 
     writeln!(output, "    #[derive(Clone, Debug)]").map_err(|_| GenerateError::Format)?;
-    writeln!(output, "    pub struct Pipeline{declaration} {{ transform: capnp_rpc::PipelineTransform, marker: PhantomData<fn() -> {marker}> }}")
+    writeln!(output, "    pub struct Pipeline{declaration} {{ transform: capnp_rpc::PipelineTransform, source: Option<capnp_rpc::PipelineSource>, marker: PhantomData<fn() -> {marker}> }}")
         .map_err(|_| GenerateError::Format)?;
     writeln!(output, "    impl{implementation} Pipeline{arguments} {{")
         .map_err(|_| GenerateError::Format)?;
     writeln!(output, "        pub fn root() -> Self {{ Self::from_transform(capnp_rpc::PipelineTransform::root()) }}")
         .map_err(|_| GenerateError::Format)?;
-    writeln!(output, "        #[doc(hidden)]\n        pub fn from_transform(transform: capnp_rpc::PipelineTransform) -> Self {{ Self {{ transform, marker: PhantomData }} }}")
+    writeln!(output, "        #[doc(hidden)]\n        pub fn from_transform(transform: capnp_rpc::PipelineTransform) -> Self {{ Self::from_parts(transform, None) }}")
+        .map_err(|_| GenerateError::Format)?;
+    writeln!(output, "        #[doc(hidden)]\n        pub fn from_parts(transform: capnp_rpc::PipelineTransform, source: Option<capnp_rpc::PipelineSource>) -> Self {{ Self {{ transform, source, marker: PhantomData }} }}")
         .map_err(|_| GenerateError::Format)?;
     writeln!(
         output,
@@ -1081,6 +1083,19 @@ fn emit_struct(
     for field in &structure.fields {
         emit_pipeline_field(output, schema, field, names, &parameters)?;
     }
+    writeln!(output, "    }}").map_err(|_| GenerateError::Format)?;
+    writeln!(
+        output,
+        "    impl{implementation} capnp_rpc::PipelineBinding for Pipeline{arguments}"
+    )
+    .map_err(|_| GenerateError::Format)?;
+    if rpc_bounds.is_empty() {
+        writeln!(output, "    {{").map_err(|_| GenerateError::Format)?;
+    } else {
+        writeln!(output, "    where {rpc_bounds} {{").map_err(|_| GenerateError::Format)?;
+    }
+    writeln!(output, "        fn bind(mut self, source: capnp_rpc::PipelineSource) -> Self {{ self.source = Some(source); self }}")
+        .map_err(|_| GenerateError::Format)?;
     writeln!(output, "    }}").map_err(|_| GenerateError::Format)?;
 
     writeln!(output, "    #[allow(dead_code)]").map_err(|_| GenerateError::Format)?;
@@ -1361,6 +1376,19 @@ fn emit_interface(
         writeln!(output, "        pub fn {method_name}(&self) -> {target} {{ {target}::from_local(self.inner.clone()) }}")
             .map_err(|_| GenerateError::Format)?;
     }
+    writeln!(output, "    }}").map_err(|_| GenerateError::Format)?;
+    writeln!(
+        output,
+        "    impl{implementation} capnp_rpc::FromLocalClient for Client{arguments}"
+    )
+    .map_err(|_| GenerateError::Format)?;
+    if client_bounds.is_empty() {
+        writeln!(output, "    {{").map_err(|_| GenerateError::Format)?;
+    } else {
+        writeln!(output, "    where {client_bounds} {{").map_err(|_| GenerateError::Format)?;
+    }
+    writeln!(output, "        fn from_local_client(client: capnp_rpc::LocalClient) -> Self {{ Self::from_local(client) }}")
+        .map_err(|_| GenerateError::Format)?;
     writeln!(output, "    }}").map_err(|_| GenerateError::Format)?;
 
     let supertraits = interface
@@ -1664,15 +1692,10 @@ fn emit_pipeline_field(
         || "self.transform.clone()".to_owned(),
         |value| format!("self.transform.pointer_field({value})"),
     );
-    let constructor = if target.starts_with("capnp_rpc::") {
-        "new"
-    } else {
-        "from_transform"
-    };
     let expression = expression_path(&target);
     writeln!(
         output,
-        "        pub fn {method}(&self) -> {target} {{ {expression}::{constructor}({transform}) }}"
+        "        pub fn {method}(&self) -> {target} {{ {expression}::from_parts({transform}, self.source.clone()) }}"
     )
     .map_err(|_| GenerateError::Format)
 }

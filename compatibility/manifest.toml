@@ -66,6 +66,7 @@ rpc_level = "M38 cooperative cancellation, clean transport-complete shutdown, di
 flow_control = "M37 executor-neutral send-now/ack/readiness split with fixed extended windows, adaptive BDP windows, bounded in-flight bytes and waiters, and pinned C++ behavioral parity"
 rpc_lifecycle = "M38 last-lease cancellation, application opt-out, legacy Finish deferral, noFinishNeeded handling, waiter-complete disconnect, surfaced shutdown errors, and disconnect-only reconnect classification"
 rpc_scheduling = "M39 concurrent, FIFO serial, and keyed scheduling; bounded CPU/generic/Tokio-style executors; dedicated-thread non-Send local state"
+local_capabilities = "M41 implementation candidate: promise/broken/disabled clients, shared and provisional pipelines, dynamic clients/servers, raw tail transfer, bounded capability lists, and exact-set local unwrap; activation awaits M40"
 parallel_read = "M29 zero-copy Arc-owned list partitions and deterministic retained-subtree work plans for scoped or external executors"
 parallel_build = "M30 disjoint primitive partitions plus sealed single-segment worker fragments with deterministic far-link finalization"
 batch_pipeline = "M31 bounded reservation-window scheduling for ordered concurrent process/build/pack work with no-pool single-item paths"
@@ -116,6 +117,20 @@ M36 = "complete"
 M37 = "complete"
 M38 = "complete"
 M39 = "complete"
+M41 = "implementation candidate; activation awaits M40 completion"
+
+[evidence.M41]
+crates = ["crates/capnp-rpc", "crates/capnp-codegen", "crates/capnp-generated-fixture"]
+sources = ["pinned Cap'n Proto capability.h and capability.c++", "pinned capability-test.c++ lines 44-1210", "compiled schema interface/method/brand metadata"]
+clients = ["settled local Arc identity", "FIFO promise dispatch with one-shot settlement and cycle rejection", "stable broken/disabled/rejected failures", "response and pipeline independently retain one dispatch"]
+pipelines = ["checked pointer transforms", "bounded one-shot provisional PipelineBuilder", "final capability-table lookup", "generated nested/generic/implicit/AnyCapability propagation", "pipeline remains valid after dropping response"]
+dynamic = ["schema-validated client and server", "inherited declaring-interface dispatch", "method name and ordinal validation", "parameter/result struct validation", "named typed and AnyCapability pipeline fields"]
+tail_and_unwrap = ["raw response plus capability-table tail transfer", "nested pending-call reduction", "exact CapabilityServerSet identity", "sync unwrap never follows unresolved promises", "async unwrap waits for settlement"]
+limits = ["bounded capability table length", "bounded provisional pipeline entries", "duplicate provisional paths rejected", "pipeline can be installed once"]
+oracle_check = "tools/verify-m41-local-capabilities.sh: all 28 pinned C++ capability cases from Basic through clone() pass, followed by native promise/pipeline/dynamic/tail/server-set ports"
+documentation = "docs/rpc/local-capability-utilities.md"
+limitations = ["M40 release-soak completion is required before activation", "revocation and membranes begin at pinned RevocableServer and remain M42", "attached resources remain M43", "distributed handoff/equality/persistence remain M44-M46"]
+validation = "focused generated/runtime tests and pinned C++ capability corpus pass; workspace Cargo, docs, Clippy, and Bazel fast gates recorded on the development branch"
 
 [evidence.M39]
 crate = "crates/capnp-rpc"
