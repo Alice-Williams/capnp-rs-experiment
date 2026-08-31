@@ -1,6 +1,6 @@
 [package]
-name = "capnp-cli"
-description = "Native Cap'n Proto command-line tools"
+name = "capnp-text"
+description = "Schema-aware Cap'n Proto text parsing, printing, and evaluation"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,9 +12,6 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-capnp-codegen = { path = "../capnp-codegen" }
-capnp-compiler = { path = "../capnp-compiler" }
 capnp-io = { path = "../capnp-io" }
 capnp-message = { path = "../capnp-message" }
 capnp-schema = { path = "../capnp-schema" }
-capnp-text = { path = "../capnp-text" }

@@ -62,6 +62,9 @@ the [compile and ID replacement guide](docs/tooling/compile-and-id.md) for
 multi-file imports, Rust generation, external plugins, crate mappings, raw
 requests, and secure schema IDs.
 
+Native [text decode, encode, and evaluation](docs/tooling/text-tools.md) cover
+standard, packed, and flat messages plus imported and nested constants.
+
 This is experimental software and is not yet suitable for production use.
 
 ## License

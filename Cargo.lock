@@ -26,7 +26,10 @@ version = "0.1.0"
 dependencies = [
  "capnp-codegen",
  "capnp-compiler",
+ "capnp-io",
+ "capnp-message",
  "capnp-schema",
+ "capnp-text",
 ]
 
 [[package]]
@@ -118,6 +121,15 @@ version = "0.1.0"
 dependencies = [
  "capnp-io",
  "capnp-message",
+]
+
+[[package]]
+name = "capnp-text"
+version = "0.1.0"
+dependencies = [
+ "capnp-io",
+ "capnp-message",
+ "capnp-schema",
 ]
 
 [[package]]

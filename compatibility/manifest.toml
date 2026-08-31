@@ -55,6 +55,7 @@ rules_shell = "0.8.0"
 wire = "M10 borrowed and Arc-owned typed readers with stable coordinate references"
 generated_api = "M21 typed data and thread-safe local interface APIs with exact pipelines"
 native_compiler = "M26 native multi-file compile and id CLI, plugin-compatible request streaming, deterministic built-in Rust output, and self-hosted generation without a system capnp compiler"
+text_tools = "M27 bounded native text encode/decode/eval with standard, packed, and flat modes and pinned C++ short-format parity"
 rpc_level = "M21 in-memory local dispatch, inheritance, streaming completion, and capability pipelines; network protocol deferred to M32+"
 parallel_read = "not-started"
 parallel_build = "not-started"
@@ -92,6 +93,20 @@ M23 = "complete"
 M24 = "complete"
 M25 = "complete"
 M26 = "complete"
+M27 = "complete"
+
+[evidence.M27]
+crates = ["crates/capnp-text", "crates/capnp-cli", "crates/capnp-schema"]
+commands = ["capnp-cli decode [-I DIR]... [--packed|--flat] [--short] SCHEMA TYPE", "capnp-cli encode [-I DIR]... [--packed|--flat] SCHEMA TYPE", "capnp-cli eval [-I DIR]... [--short|-b|-p|--flat] SCHEMA NAME"]
+parser = ["struct, group, list, and nested-list literals", "all scalar types, enum names and ordinals, Text, escaped Data, and hexadecimal Data", "multiple top-level messages", "comments and trailing commas", "byte, one-based line, and one-based column diagnostics"]
+printer = ["schema codeOrder independent of metadata storage order", "active union arms including null pointer arms", "absent non-union pointer omission", "reference-compatible Text/Data escaping", "short and parseable pretty output", "finite, signed-zero, infinity, and NaN float spelling"]
+formats = ["standard framed streams", "packed streams", "single-message flat mode", "text and standard/packed/flat struct eval output"]
+evaluation = ["nested constants", "field defaults", "struct members", "list indexes", "source-level import aliases", "concrete generic brands"]
+oracle = "the original pinned C++ wire source text encodes byte-identically; the complete pinned C++ short decode corpus matches; standard, packed, pretty, direct/imported eval, and binary eval agree in both directions with C++ 2.0-dev"
+limits = ["input bytes", "value count", "nesting", "message words", "binary input bytes", "packed expansion", "standard frame limits"]
+negative = ["located scalar type errors", "unknown and duplicate fields", "invalid and oversized escapes", "unknown enum names", "flat multi-message output", "non-struct binary eval", "deterministic arbitrary text never panics under configured limits"]
+documentation = "docs/tooling/text-tools.md"
+validation = "Rust 1.98 and 1.85 focused tests; public API docs; Clippy -D warnings; pinned C++ 2.0-dev interoperability; fixture hashes; full workspace and Bazel gates"
 
 [evidence.M26]
 crate = "crates/capnp-cli"

@@ -239,6 +239,69 @@ impl DynamicStruct {
         self.get_field(field, structure)
     }
 
+    /// Resolves a field's runtime type through this value's current brand.
+    pub fn field_type(&self, name: &str) -> Result<Type, DynamicError> {
+        let structure = self.struct_schema()?;
+        let field = structure
+            .field(name)
+            .ok_or_else(|| DynamicError::UnknownField {
+                type_id: self.type_id,
+                name: name.to_owned(),
+            })?;
+        match &field.kind {
+            FieldKind::Slot { ty, .. } => Ok(self.resolve_type(ty)),
+            FieldKind::Group { type_id } => Ok(Type::Struct {
+                type_id: *type_id,
+                brand: self.brand.clone(),
+            }),
+        }
+    }
+
+    /// Reports whether a field has an on-wire value worth printing.
+    ///
+    /// Data fields and groups are always present. Pointer slots are present
+    /// only when their wire pointer is non-null, matching the reference text
+    /// printer's omission of absent pointer fields even when they have a
+    /// non-null schema default.
+    pub fn is_field_present(&self, name: &str) -> Result<bool, DynamicError> {
+        let structure = self.struct_schema()?;
+        let field = structure
+            .field(name)
+            .ok_or_else(|| DynamicError::UnknownField {
+                type_id: self.type_id,
+                name: name.to_owned(),
+            })?;
+        let active_union = if let Some(expected) = field.discriminant_value {
+            let actual = self.with_reader(|reader| {
+                Ok(reader.data()?.read_u16(structure.discriminant_offset, 0)?)
+            })?;
+            if actual != expected {
+                return Ok(false);
+            }
+            true
+        } else {
+            false
+        };
+        if active_union {
+            return Ok(true);
+        }
+        match &field.kind {
+            FieldKind::Group { .. } => Ok(true),
+            FieldKind::Slot { offset, ty, .. } => match self.resolve_type(ty) {
+                Type::Text
+                | Type::Data
+                | Type::List(_)
+                | Type::Struct { .. }
+                | Type::Interface { .. }
+                | Type::AnyPointer(_) => Ok(!matches!(
+                    self.pointer(u16_offset(*offset)?)?,
+                    OwnedPointerRef::Null
+                )),
+                _ => Ok(true),
+            },
+        }
+    }
+
     pub fn active_union_field(&self) -> Result<Option<&Field>, DynamicError> {
         let structure = self.struct_schema()?;
         if structure.discriminant_count == 0 {

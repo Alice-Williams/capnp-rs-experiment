@@ -8,7 +8,10 @@ rust_library(
     deps = [
         "//crates/capnp-codegen:capnp_codegen",
         "//crates/capnp-compiler:capnp_compiler",
+        "//crates/capnp-io:capnp_io",
+        "//crates/capnp-message:capnp_message",
         "//crates/capnp-schema:capnp_schema",
+        "//crates/capnp-text:capnp_text",
     ],
 )
 
@@ -24,5 +27,10 @@ rust_binary(
 rust_test(
     name = "capnp_cli_test",
     crate = ":capnp_cli_lib",
-    compile_data = ["//conformance:compiler_requests"],
+    compile_data = [
+        "//conformance:compiler_requests",
+        "//conformance:cpp_wire_frames",
+        "//conformance:text_fixtures",
+        "//conformance/schemas:schema_files",
+    ],
 )

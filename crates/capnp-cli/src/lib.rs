@@ -1,9 +1,10 @@
-//! Native `compile` and `id` command workflows.
+//! Native `compile`, `id`, `decode`, `encode`, and `eval` workflows.
 //!
 //! The compile frontend follows the pinned C++ tool's source-prefix, import
 //! search, raw request, and `capnpc-*` stdin contract. Rust output is built in;
-//! other plugins are child processes and receive one standard request. Text,
-//! JSON, and RPC tools remain later milestones.
+//! other plugins are child processes and receive one standard request. Text
+//! tools use the same native schema frontend. JSON and RPC tools remain later
+//! milestones.
 
 use std::collections::BTreeMap;
 use std::env;
@@ -12,12 +13,21 @@ use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 
 use capnp_codegen::{GenerateOptions, generate_requested_file_with_options};
 use capnp_compiler::request::{compile_program, emit_compiled_schema};
-use capnp_compiler::semantic::{ModuleSources, ResolveLimits};
+use capnp_compiler::semantic::{ModuleSources, ResolveLimits, ResolvedProgram};
 use capnp_compiler::{Statement, StatementBody, Token, TokenKind, parse_schema};
-use capnp_schema::{CapnpVersion, CompiledSchema, Node, NodeId, RequestedFile, SourceInfo};
+use capnp_io::{FrameLimits, FrameRead, encode_frame, pack, parse_frame, unpack};
+use capnp_message::ReaderLimits;
+use capnp_schema::{
+    CapnpVersion, CompiledSchema, Node, NodeId, NodeKind, RequestedFile, SourceInfo,
+};
+use capnp_text::{
+    EncodedMessage, FormatStyle, TextLimits, encode_structs, evaluate, evaluate_struct_message,
+    format_message,
+};
 
 const COMPILER_VERSION: CapnpVersion = CapnpVersion {
     major: 2,
@@ -29,6 +39,9 @@ const USAGE: &str = "\
 Usage:
   capnp-cli id
   capnp-cli compile --src-prefix DIR [-I DIR]... -o TARGET FILE...
+  capnp-cli decode [-I DIR]... [--packed|--flat] [--short] SCHEMA TYPE
+  capnp-cli encode [-I DIR]... [--packed|--flat] SCHEMA TYPE
+  capnp-cli eval [-I DIR]... [--short|-b|-p|--flat] SCHEMA NAME
 
 Compile targets:
   -o-                 write one binary CodeGeneratorRequest to stdout
@@ -39,6 +52,9 @@ Options:
   -I, --import-path DIR       add an absolute-import search root
   --src-prefix DIR            remove DIR from requested source filenames
   --import-map ID=RUST_PATH   map an imported file ID to an external Rust module
+  --packed                    read or write standard packed messages
+  --flat                      read or write one unframed single-segment message
+  --short                     print each text value on one line
   -h, --help                  show this help
 ";
 
@@ -84,12 +100,22 @@ struct CompileOptions {
 /// Runs the process command line against the real filesystem and standard IO.
 pub fn run_env() -> Result<(), CliError> {
     let arguments = env::args_os().skip(1).collect::<Vec<_>>();
+    let mut stdin = io::stdin().lock();
     let mut stdout = io::stdout().lock();
-    run(arguments, &mut stdout)
+    run_with_io(arguments, &mut stdin, &mut stdout)
 }
 
 /// Runs an explicit argument vector, writing normal output to `stdout`.
 pub fn run(arguments: Vec<std::ffi::OsString>, stdout: &mut dyn Write) -> Result<(), CliError> {
+    run_with_io(arguments, &mut io::empty(), stdout)
+}
+
+/// Runs an explicit argument vector with caller-provided standard streams.
+pub fn run_with_io(
+    arguments: Vec<std::ffi::OsString>,
+    stdin: &mut dyn Read,
+    stdout: &mut dyn Write,
+) -> Result<(), CliError> {
     let Some(command) = arguments.first().and_then(|value| value.to_str()) else {
         return Err(CliError::new(USAGE));
     };
@@ -104,8 +130,472 @@ pub fn run(arguments: Vec<std::ffi::OsString>, stdout: &mut dyn Write) -> Result
             Ok(())
         }
         "compile" => compile(parse_compile_options(&arguments[1..])?, stdout),
+        "decode" => decode(
+            parse_text_options(&arguments[1..], TextCommand::Decode)?,
+            stdin,
+            stdout,
+        ),
+        "encode" => encode(
+            parse_text_options(&arguments[1..], TextCommand::Encode)?,
+            stdin,
+            stdout,
+        ),
+        "eval" => eval(
+            parse_text_options(&arguments[1..], TextCommand::Eval)?,
+            stdout,
+        ),
         other => Err(CliError::new(format!("unknown command `{other}`\n{USAGE}"))),
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TextCommand {
+    Decode,
+    Encode,
+    Eval,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MessageMode {
+    Standard,
+    Packed,
+    Flat,
+}
+
+#[derive(Debug)]
+struct TextOptions {
+    command: TextCommand,
+    import_paths: Vec<PathBuf>,
+    mode: MessageMode,
+    binary_eval: bool,
+    style: FormatStyle,
+    schema_file: PathBuf,
+    target: String,
+}
+
+fn parse_text_options(
+    arguments: &[std::ffi::OsString],
+    command: TextCommand,
+) -> Result<TextOptions, CliError> {
+    let mut import_paths = Vec::new();
+    let mut mode = MessageMode::Standard;
+    let mut binary_eval = false;
+    let mut style = FormatStyle::Pretty;
+    let mut positional = Vec::new();
+    let mut index = 0;
+    while index < arguments.len() {
+        let value = arguments[index]
+            .to_str()
+            .ok_or_else(|| CliError::new("arguments must be valid UTF-8"))?;
+        let mut take_value = |option: &str| -> Result<String, CliError> {
+            index += 1;
+            arguments
+                .get(index)
+                .and_then(|value| value.to_str())
+                .map(str::to_owned)
+                .ok_or_else(|| CliError::new(format!("{option} requires a value")))
+        };
+        if value == "--" {
+            positional.extend(
+                arguments[index + 1..]
+                    .iter()
+                    .map(|value| {
+                        value
+                            .to_str()
+                            .map(str::to_owned)
+                            .ok_or_else(|| CliError::new("arguments must be valid UTF-8"))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+            );
+            break;
+        } else if value == "-I" || value == "--import-path" {
+            import_paths.push(PathBuf::from(take_value(value)?));
+        } else if let Some(path) = value.strip_prefix("-I").filter(|path| !path.is_empty()) {
+            import_paths.push(PathBuf::from(path));
+        } else if let Some(path) = value.strip_prefix("--import-path=") {
+            import_paths.push(PathBuf::from(path));
+        } else if value == "--packed" || value == "-p" {
+            set_message_mode(&mut mode, MessageMode::Packed)?;
+            binary_eval |= command == TextCommand::Eval;
+        } else if value == "--flat" {
+            set_message_mode(&mut mode, MessageMode::Flat)?;
+            binary_eval |= command == TextCommand::Eval;
+        } else if value == "-b" && command == TextCommand::Eval {
+            binary_eval = true;
+        } else if command == TextCommand::Eval && (value == "-o" || value == "--output") {
+            parse_eval_output(&take_value(value)?, &mut mode, &mut binary_eval)?;
+        } else if command == TextCommand::Eval {
+            if let Some(output) = value.strip_prefix("--output=") {
+                parse_eval_output(output, &mut mode, &mut binary_eval)?;
+            } else if let Some(output) = value.strip_prefix("-o").filter(|value| !value.is_empty())
+            {
+                parse_eval_output(output, &mut mode, &mut binary_eval)?;
+            } else if value == "--short" {
+                style = FormatStyle::Short;
+            } else if value == "-h" || value == "--help" {
+                return Err(CliError::new(USAGE));
+            } else if value.starts_with('-') {
+                return Err(CliError::new(format!(
+                    "unknown {} option `{value}`",
+                    text_command_name(command)
+                )));
+            } else {
+                positional.push(value.to_owned());
+            }
+        } else if value == "--short" {
+            if command == TextCommand::Encode {
+                return Err(CliError::new("--short is not an encode option"));
+            }
+            style = FormatStyle::Short;
+        } else if value == "-h" || value == "--help" {
+            return Err(CliError::new(USAGE));
+        } else if value.starts_with('-') {
+            return Err(CliError::new(format!(
+                "unknown {} option `{value}`",
+                text_command_name(command)
+            )));
+        } else {
+            positional.push(value.to_owned());
+        }
+        index += 1;
+    }
+    if positional.len() != 2 {
+        return Err(CliError::new(format!(
+            "{} requires SCHEMA and {}",
+            text_command_name(command),
+            if command == TextCommand::Eval {
+                "NAME"
+            } else {
+                "TYPE"
+            }
+        )));
+    }
+    Ok(TextOptions {
+        command,
+        import_paths,
+        mode,
+        binary_eval,
+        style,
+        schema_file: PathBuf::from(&positional[0]),
+        target: positional[1].clone(),
+    })
+}
+
+fn parse_eval_output(
+    output: &str,
+    mode: &mut MessageMode,
+    binary: &mut bool,
+) -> Result<(), CliError> {
+    match output {
+        "text" => {
+            *mode = MessageMode::Standard;
+            *binary = false;
+        }
+        "binary" => {
+            *mode = MessageMode::Standard;
+            *binary = true;
+        }
+        "packed" => {
+            *mode = MessageMode::Packed;
+            *binary = true;
+        }
+        "flat" => {
+            *mode = MessageMode::Flat;
+            *binary = true;
+        }
+        _ => {
+            return Err(CliError::new(format!(
+                "unknown eval output format `{output}`"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn set_message_mode(mode: &mut MessageMode, requested: MessageMode) -> Result<(), CliError> {
+    if *mode != MessageMode::Standard && *mode != requested {
+        return Err(CliError::new("--packed and --flat are mutually exclusive"));
+    }
+    *mode = requested;
+    Ok(())
+}
+
+const fn text_command_name(command: TextCommand) -> &'static str {
+    match command {
+        TextCommand::Decode => "decode",
+        TextCommand::Encode => "encode",
+        TextCommand::Eval => "eval",
+    }
+}
+
+struct ToolSchema {
+    schema: Arc<CompiledSchema>,
+    program: ResolvedProgram,
+    entry: String,
+    file_id: NodeId,
+}
+
+fn load_tool_schema(file: &Path, import_paths: &[PathBuf]) -> Result<ToolSchema, CliError> {
+    let physical = fs::canonicalize(file)
+        .map_err(|error| CliError::new(format!("cannot open {}: {error}", file.display())))?;
+    if !physical.is_file() {
+        return Err(CliError::new(format!("not a file: {}", physical.display())));
+    }
+    let prefix = physical
+        .parent()
+        .ok_or_else(|| CliError::new("schema file has no parent directory"))?
+        .to_owned();
+    let mut roots = vec![prefix.clone()];
+    for path in import_paths {
+        let path = canonical_directory(path, "import path")?;
+        if !roots.contains(&path) {
+            roots.push(path);
+        }
+    }
+    let entry = rooted_path(
+        physical
+            .strip_prefix(&prefix)
+            .map_err(|_| CliError::new("schema file escaped its parent directory"))?,
+    )?;
+    let mut loader = SourceLoader::new(roots);
+    loader.load(entry.clone(), physical)?;
+    let program = loader.sources.resolve(&entry, ResolveLimits::default());
+    if !program.is_valid() {
+        return Err(CliError::new(format_diagnostics(&program)));
+    }
+    let entries = program
+        .modules
+        .iter()
+        .map(|module| module.path.clone())
+        .collect::<Vec<_>>();
+    let schema = compile_entries(&loader.sources, &entries)?;
+    let file_id = program
+        .module(&entry)
+        .and_then(|module| module.file_id)
+        .ok_or_else(|| CliError::new("compiled schema has no requested file ID"))?;
+    Ok(ToolSchema {
+        schema: Arc::new(schema),
+        program,
+        entry,
+        file_id,
+    })
+}
+
+fn resolve_type(schema: &ToolSchema, target: &str) -> Result<NodeId, CliError> {
+    let components = target.split('.').collect::<Vec<_>>();
+    if components.is_empty() || components.iter().any(|component| component.is_empty()) {
+        return Err(CliError::new(format!("invalid type name `{target}`")));
+    }
+    let (mut scope, start) =
+        imported_scope(schema, components[0]).map_or((schema.file_id, 0), |scope| (scope, 1));
+    for component in &components[start..] {
+        scope = schema
+            .schema
+            .nested(scope, component)
+            .map(|node| node.id)
+            .ok_or_else(|| CliError::new(format!("unknown type `{target}`")))?;
+    }
+    match schema.schema.node(scope).map(|node| &node.kind) {
+        Some(NodeKind::Struct(_)) => Ok(scope),
+        _ => Err(CliError::new(format!("`{target}` is not a struct type"))),
+    }
+}
+
+fn imported_scope(schema: &ToolSchema, alias: &str) -> Option<NodeId> {
+    let module = schema.program.module(&schema.entry)?;
+    let binding = module
+        .imports
+        .iter()
+        .find(|binding| binding.parent.is_none() && binding.name == alias)?;
+    schema.program.module(&binding.resolved_path)?.file_id
+}
+
+fn resolve_eval_target<'a>(
+    schema: &ToolSchema,
+    target: &'a str,
+) -> Result<(NodeId, &'a str), CliError> {
+    let end = target
+        .bytes()
+        .position(|byte| matches!(byte, b'.' | b'['))
+        .unwrap_or(target.len());
+    let alias = &target[..end];
+    let Some(scope) = imported_scope(schema, alias) else {
+        return Ok((schema.file_id, target));
+    };
+    let remainder = target
+        .get(end..)
+        .and_then(|value| value.strip_prefix('.'))
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| CliError::new(format!("import alias `{alias}` needs a member name")))?;
+    Ok((scope, remainder))
+}
+
+fn decode(
+    options: TextOptions,
+    stdin: &mut dyn Read,
+    stdout: &mut dyn Write,
+) -> Result<(), CliError> {
+    debug_assert_eq!(options.command, TextCommand::Decode);
+    let loaded = load_tool_schema(&options.schema_file, &options.import_paths)?;
+    let type_id = resolve_type(&loaded, &options.target)?;
+    let input = read_bounded(stdin, 256 * 1024 * 1024, "binary input")?;
+    let unpacked;
+    let input = if options.mode == MessageMode::Packed {
+        unpacked = unpack(&input, 256 * 1024 * 1024)
+            .map_err(|error| CliError::new(format!("packed input: {error}")))?;
+        unpacked.as_slice()
+    } else {
+        input.as_slice()
+    };
+    if options.mode == MessageMode::Flat {
+        if input.is_empty() || input.len() % 8 != 0 {
+            return Err(CliError::new(
+                "flat input must be a non-empty whole number of words",
+            ));
+        }
+        write_decoded(
+            &loaded.schema,
+            type_id,
+            [Arc::<[u8]>::from(input)],
+            options.style,
+            stdout,
+        )?;
+        return Ok(());
+    }
+    let mut remaining = input;
+    while !remaining.is_empty() {
+        let FrameRead::Message {
+            frame,
+            remaining: rest,
+        } = parse_frame(remaining, FrameLimits::default())
+            .map_err(|error| CliError::new(format!("standard frame: {error}")))?
+        else {
+            break;
+        };
+        let segments = frame
+            .segments()
+            .iter()
+            .map(|segment| Arc::<[u8]>::from(segment.bytes()))
+            .collect::<Vec<_>>();
+        write_decoded(&loaded.schema, type_id, segments, options.style, stdout)?;
+        remaining = rest;
+    }
+    Ok(())
+}
+
+fn write_decoded(
+    schema: &Arc<CompiledSchema>,
+    type_id: NodeId,
+    segments: impl IntoIterator<Item = Arc<[u8]>>,
+    style: FormatStyle,
+    stdout: &mut dyn Write,
+) -> Result<(), CliError> {
+    let text = format_message(
+        Arc::clone(schema),
+        type_id,
+        segments,
+        style,
+        ReaderLimits::default(),
+    )
+    .map_err(|error| CliError::new(format!("text decode: {error}")))?;
+    writeln!(stdout, "{text}")?;
+    Ok(())
+}
+
+fn encode(
+    options: TextOptions,
+    stdin: &mut dyn Read,
+    stdout: &mut dyn Write,
+) -> Result<(), CliError> {
+    debug_assert_eq!(options.command, TextCommand::Encode);
+    let loaded = load_tool_schema(&options.schema_file, &options.import_paths)?;
+    let type_id = resolve_type(&loaded, &options.target)?;
+    let input = read_bounded(stdin, TextLimits::default().max_input_bytes, "text input")?;
+    let input = std::str::from_utf8(&input)
+        .map_err(|error| CliError::new(format!("text input is not UTF-8: {error}")))?;
+    let messages = encode_structs(&loaded.schema, type_id, input, TextLimits::default())
+        .map_err(|error| CliError::new(format!("text encode: {error}")))?;
+    write_encoded_messages(messages, options.mode, stdout)
+}
+
+fn write_encoded_messages(
+    messages: Vec<EncodedMessage>,
+    mode: MessageMode,
+    stdout: &mut dyn Write,
+) -> Result<(), CliError> {
+    if mode == MessageMode::Flat {
+        if messages.len() != 1 {
+            return Err(CliError::new("--flat requires exactly one input value"));
+        }
+        if messages[0].segments.len() != 1 {
+            return Err(CliError::new(
+                "flat output exceeded one segment; reduce the value size",
+            ));
+        }
+        stdout.write_all(&messages[0].segments[0])?;
+        return Ok(());
+    }
+    for message in messages {
+        let segments = message
+            .segments
+            .iter()
+            .map(AsRef::as_ref)
+            .collect::<Vec<&[u8]>>();
+        let framed = encode_frame(&segments, FrameLimits::default())
+            .map_err(|error| CliError::new(format!("standard frame: {error}")))?;
+        if mode == MessageMode::Packed {
+            let limit = framed
+                .len()
+                .checked_mul(2)
+                .and_then(|value| value.checked_add(16))
+                .ok_or_else(|| CliError::new("packed output limit overflow"))?;
+            let packed = pack(&framed, limit)
+                .map_err(|error| CliError::new(format!("packed output: {error}")))?;
+            stdout.write_all(&packed)?;
+        } else {
+            stdout.write_all(&framed)?;
+        }
+    }
+    Ok(())
+}
+
+fn eval(options: TextOptions, stdout: &mut dyn Write) -> Result<(), CliError> {
+    debug_assert_eq!(options.command, TextCommand::Eval);
+    let loaded = load_tool_schema(&options.schema_file, &options.import_paths)?;
+    let (scope, target) = resolve_eval_target(&loaded, &options.target)?;
+    if options.binary_eval {
+        let message = evaluate_struct_message(
+            Arc::clone(&loaded.schema),
+            scope,
+            target,
+            TextLimits::default(),
+        )
+        .map_err(|error| CliError::new(format!("eval: {error}")))?;
+        return write_encoded_messages(vec![message], options.mode, stdout);
+    }
+    let text = evaluate(Arc::clone(&loaded.schema), scope, target, options.style)
+        .map_err(|error| CliError::new(format!("eval: {error}")))?;
+    writeln!(stdout, "{text}")?;
+    Ok(())
+}
+
+fn read_bounded(
+    input: &mut dyn Read,
+    limit: usize,
+    description: &str,
+) -> Result<Vec<u8>, CliError> {
+    let take_limit = u64::try_from(limit)
+        .ok()
+        .and_then(|value| value.checked_add(1))
+        .ok_or_else(|| CliError::new(format!("{description} limit overflow")))?;
+    let mut bytes = Vec::new();
+    input.take(take_limit).read_to_end(&mut bytes)?;
+    if bytes.len() > limit {
+        return Err(CliError::new(format!(
+            "{description} exceeds {limit} bytes"
+        )));
+    }
+    Ok(bytes)
 }
 
 fn generate_id() -> Result<u64, CliError> {
@@ -334,18 +824,7 @@ fn compile_entries(
     for entry in entries {
         let program = sources.resolve(entry, ResolveLimits::default());
         if !program.is_valid() {
-            let diagnostics = program
-                .diagnostics
-                .iter()
-                .map(|value| {
-                    format!(
-                        "{}:{}-{}: {}",
-                        value.module, value.range.start, value.range.end, value.message
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            return Err(CliError::new(diagnostics));
+            return Err(CliError::new(format_diagnostics(&program)));
         }
         let schema = compile_program(&program, COMPILER_VERSION)
             .map_err(|error| CliError::new(format!("compile failed for {entry}: {error}")))?;
@@ -370,6 +849,20 @@ fn compile_entries(
         requested_files.into_values().collect(),
     )
     .map_err(|error| CliError::new(format!("merged request is invalid: {error}")))
+}
+
+fn format_diagnostics(program: &ResolvedProgram) -> String {
+    program
+        .diagnostics
+        .iter()
+        .map(|value| {
+            format!(
+                "{}:{}-{}: {}",
+                value.module, value.range.start, value.range.end, value.message
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn merge_values<T: Clone + PartialEq>(
@@ -712,6 +1205,137 @@ mod tests {
         let captured = fs::read(output.join("request.bin")).expect("captured request");
         CompiledSchema::from_code_generator_request(&captured, Default::default())
             .expect("plugin received a complete request");
+        fs::remove_dir_all(root).expect("temporary cleanup");
+    }
+
+    #[test]
+    fn decode_encode_standard_packed_and_flat_match_reference_text() {
+        let root = temporary("text-round-trip");
+        let schema = root.join("wire-fixture.capnp");
+        fs::write(
+            &schema,
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../conformance/schemas/wire-fixture.capnp"
+            )),
+        )
+        .expect("schema source");
+        let reference = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../conformance/fixtures/text/wire-short.txt"
+        ))
+        .trim_end();
+        let fixture = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../conformance/fixtures/cpp/",
+            "e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/wire-unpacked.bin"
+        ));
+        let mut decoded = Vec::new();
+        run_with_io(
+            args(&[
+                "decode",
+                "--short",
+                schema.to_str().expect("UTF-8 path"),
+                "WireFixture",
+            ]),
+            &mut io::Cursor::new(fixture),
+            &mut decoded,
+        )
+        .expect("reference frame decodes");
+        assert_eq!(
+            String::from_utf8(decoded).expect("text output"),
+            format!("{reference}\n")
+        );
+
+        for flag in [None, Some("--packed"), Some("--flat")] {
+            let mut arguments = vec!["encode"];
+            if let Some(flag) = flag {
+                arguments.push(flag);
+            }
+            arguments.push(schema.to_str().expect("UTF-8 path"));
+            arguments.push("WireFixture");
+            let mut binary = Vec::new();
+            run_with_io(
+                args(&arguments),
+                &mut io::Cursor::new(reference.as_bytes()),
+                &mut binary,
+            )
+            .expect("text encodes");
+            let mut decode_arguments = vec!["decode", "--short"];
+            if let Some(flag) = flag {
+                decode_arguments.push(flag);
+            }
+            decode_arguments.push(schema.to_str().expect("UTF-8 path"));
+            decode_arguments.push("WireFixture");
+            let mut output = Vec::new();
+            run_with_io(
+                args(&decode_arguments),
+                &mut io::Cursor::new(binary),
+                &mut output,
+            )
+            .expect("native binary decodes");
+            assert_eq!(
+                String::from_utf8(output).expect("text output"),
+                format!("{reference}\n"),
+                "mode {flag:?}"
+            );
+        }
+        fs::remove_dir_all(root).expect("temporary cleanup");
+    }
+
+    #[test]
+    fn eval_resolves_nested_and_import_qualified_constants() {
+        let root = temporary("eval");
+        let language = root.join("language-fixture.capnp");
+        let imports = root.join("import-fixture.capnp");
+        fs::write(
+            &language,
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../conformance/schemas/language-fixture.capnp"
+            )),
+        )
+        .expect("language schema");
+        fs::write(
+            &imports,
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../conformance/schemas/import-fixture.capnp"
+            )),
+        )
+        .expect("import schema");
+        fs::write(
+            root.join("wire-fixture.capnp"),
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../conformance/schemas/wire-fixture.capnp"
+            )),
+        )
+        .expect("wire schema");
+
+        let mut output = Vec::new();
+        run(
+            args(&[
+                "eval",
+                language.to_str().expect("UTF-8 path"),
+                "LanguageFixture.primes[4]",
+            ]),
+            &mut output,
+        )
+        .expect("nested list constant evaluates");
+        assert_eq!(output, b"11\n");
+
+        output.clear();
+        run(
+            args(&[
+                "eval",
+                imports.to_str().expect("UTF-8 path"),
+                "Language.LanguageFixture.sampleBox.value",
+            ]),
+            &mut output,
+        )
+        .expect("import-qualified constant evaluates");
+        assert_eq!(output, b"\"constant generic struct\"\n");
         fs::remove_dir_all(root).expect("temporary cleanup");
     }
 }

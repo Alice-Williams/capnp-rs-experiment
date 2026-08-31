@@ -80,6 +80,6 @@ the repository Dev Container, which is the supported unified tool environment.
 
 ## Current boundary
 
-M26 covers `compile` and `id`. Text `decode`, `encode`, and `eval` workflows are
-M27; JSON is M28. Packed message conversion is implemented by the libraries but
-is not exposed as a compile option.
+M26 covers `compile` and `id`. The M27 text workflows are documented in
+[`text-tools.md`](text-tools.md). JSON is M28. Packed message conversion is a
+text-tool message mode, not a schema compilation option.

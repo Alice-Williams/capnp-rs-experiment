@@ -27,6 +27,18 @@ filegroup(
 )
 
 filegroup(
+    name = "text_fixtures",
+    srcs = ["fixtures/source/wire-fixture.txt"] + glob(["fixtures/text/**"]),
+    visibility = ["//visibility:public"],
+)
+
+sh_test(
+    name = "text_fixture_hashes_test",
+    srcs = ["verify-text-fixtures.sh"],
+    data = glob(["fixtures/text/**"]),
+)
+
+filegroup(
     name = "schema_source_corpus",
     srcs = ["//conformance/schemas:schema_files"] + glob([
         "syntax/*.capnp",
