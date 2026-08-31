@@ -2,7 +2,8 @@
 set -euo pipefail
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-oracle=/opt/capnp-oracles/capnproto-e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/install/bin/capnp
+oracle_root=${CAPNP_ORACLE_ROOT:-/opt/capnp-oracles}
+oracle="$oracle_root/capnproto-e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/install/bin/capnp"
 unpacked="$repo_root/conformance/fixtures/cpp/e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/wire-unpacked.bin"
 cpp_packed="$repo_root/conformance/fixtures/cpp/e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/wire-packed.bin"
 native_packed=$(mktemp)

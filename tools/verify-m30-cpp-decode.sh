@@ -2,7 +2,8 @@
 set -euo pipefail
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-oracle_root=/opt/capnp-oracles/capnproto-e7c9cd96f1505b5ae486db7821006c2f5dce5b5b
+oracle_base=${CAPNP_ORACLE_ROOT:-/opt/capnp-oracles}
+oracle_root="$oracle_base/capnproto-e7c9cd96f1505b5ae486db7821006c2f5dce5b5b"
 work=$(mktemp -d)
 trap 'rm -rf -- "$work"' EXIT
 

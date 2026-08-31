@@ -3,7 +3,8 @@ set -euo pipefail
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 schema_root="$repo_root/conformance/schemas"
-default_oracle=/opt/capnp-oracles/capnproto-e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/install/bin/capnp
+oracle_root=${CAPNP_ORACLE_ROOT:-/opt/capnp-oracles}
+default_oracle="$oracle_root/capnproto-e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/install/bin/capnp"
 
 if [[ -n "${CAPNP:-}" ]]; then
     capnp_binary=$CAPNP
