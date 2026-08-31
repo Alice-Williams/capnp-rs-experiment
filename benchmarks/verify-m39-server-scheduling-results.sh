@@ -2,15 +2,18 @@
 set -euo pipefail
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-result_dir="$repo_root/benchmarks/results/2026-08-31-m39-g-drive-docker"
+result_dir=${1:-"$repo_root/benchmarks/results/2026-08-31-m39-g-drive-docker"}
 
 grep -Fx 'jobs=64' "$result_dir/metadata.txt"
 grep -Fx 'rounds_per_job=5000000' "$result_dir/metadata.txt"
 grep -Fx 'samples_per_configuration=7' "$result_dir/metadata.txt"
-grep -Fx 'scheduler_module_sha256=f69933c1c4c9fc5ef392a4d91c9b94e203ad7483ec4a8529542f5afb64730a53' \
+grep -Fx "scheduler_module_sha256=$(sha256sum "$repo_root/crates/capnp-rpc/src/scheduler.rs" | cut -d ' ' -f1)" \
     "$result_dir/metadata.txt"
-grep -Fx 'benchmark_example_sha256=633b3ca1f503e8985d8b3cbf8633ab071d01c3bf82f8c3dfd6838118ddbeeeeb' \
+grep -Fx "benchmark_example_sha256=$(sha256sum "$repo_root/crates/capnp-rpc/examples/server_scheduling.rs" | cut -d ' ' -f1)" \
     "$result_dir/metadata.txt"
+base_commit=$(sed -n 's/^base_git_commit=//p' "$result_dir/metadata.txt")
+git -C "$repo_root" cat-file -e "${base_commit}^{commit}"
+git -C "$repo_root" merge-base --is-ancestor "$base_commit" HEAD
 grep -E '^concurrent_four_to_one_ratio=([3-9]|[1-9][0-9]+)\.' "$result_dir/metadata.txt"
 
 awk -F '\t' '

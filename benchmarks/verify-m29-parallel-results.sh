@@ -2,15 +2,18 @@
 set -euo pipefail
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-result_dir="$repo_root/benchmarks/results/2026-08-31-m29-g-drive-docker"
+result_dir=${1:-"$repo_root/benchmarks/results/2026-08-31-m29-g-drive-docker"}
 
 grep -Fx 'workers=4' "$result_dir/metadata.txt"
 grep -Fx 'samples_per_mode=7' "$result_dir/metadata.txt"
 grep -Fx 'parallel_item_threshold=16384' "$result_dir/metadata.txt"
-grep -Fx 'parallel_module_sha256=4cffe096966efe48133977c61b415c339b6c538f8f89fd2cd55b06b67b4c1ddd' \
+grep -Fx "parallel_module_sha256=$(sha256sum "$repo_root/crates/capnp-message/src/parallel.rs" | cut -d ' ' -f1)" \
     "$result_dir/metadata.txt"
-grep -Fx 'benchmark_example_sha256=e8de6e4e62669678396ed6b2d691f27606bd4cd87fb1ebcc3a9e621236bf3b41' \
+grep -Fx "benchmark_example_sha256=$(sha256sum "$repo_root/crates/capnp-message/examples/parallel_read.rs" | cut -d ' ' -f1)" \
     "$result_dir/metadata.txt"
+base_commit=$(sed -n 's/^base_git_commit=//p' "$result_dir/metadata.txt")
+git -C "$repo_root" cat-file -e "${base_commit}^{commit}"
+git -C "$repo_root" merge-base --is-ancestor "$base_commit" HEAD
 
 awk -F '\t' '
     NR == 1 {

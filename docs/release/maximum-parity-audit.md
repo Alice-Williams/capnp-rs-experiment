@@ -91,3 +91,10 @@ directories, records the exact Git index inputs and toolchain, runs the
 48-hour gate, then invokes `tools/verify-m48-soak-result.sh`. The verifier
 rejects below-threshold results, inconsistent settings, excessive
 resident-memory growth, missing provenance, and any later source-input change.
+
+Release-commit performance evidence is checked by
+`tools/verify-m48-performance-results.sh`. The four underlying verifiers accept
+an explicit result directory, bind each artifact to the current benchmark and
+implementation source hashes, and require the producing commit to remain an
+ancestor. M48 uses fresh M29 parallel-read, M30 partitioned-build, M31 ordered
+batch, and M39 scheduling runs from one named result root.
