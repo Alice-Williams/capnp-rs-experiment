@@ -64,7 +64,8 @@ fn drain(
     loop {
         let mut context = Context::from_waker(Waker::noop());
         match actor.poll_next_effect(&mut context) {
-            Poll::Ready(Some(ActorEffect::Send(message))) => {
+            Poll::Ready(Some(ActorEffect::Send(message)))
+            | Poll::Ready(Some(ActorEffect::SendWithResources { message, .. })) => {
                 let segments = (0..message.segment_count())
                     .map(|index| {
                         message

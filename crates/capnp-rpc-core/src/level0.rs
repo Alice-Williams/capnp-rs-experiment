@@ -2,8 +2,9 @@
 //!
 //! M34 adds settled hosted descriptors and `Release`; M35 adds promised-answer
 //! transforms, `receiverAnswer`, redirected results, and Level-1 tail routing.
-//! M36 adds `senderPromise`, `Resolve`, and loopback `Disembargo`. Third-party
-//! and attached-resource behavior remains owned by later milestones.
+//! M36 adds `senderPromise`, `Resolve`, and loopback `Disembargo`. M43 adds the
+//! orthogonal `attachedFd` field and binds each received resource to at most
+//! one descriptor. Third-party behavior remains owned by later milestones.
 
 use std::sync::Arc;
 
@@ -14,6 +15,7 @@ use crate::protocol::{
     MESSAGE_TYPE_ID, ProtocolError, ProtocolLimits, RpcException, opaque_root, owned,
     protocol_schema, read_exception, write_exception,
 };
+use crate::{AttachedResource, OwnedResource};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BootstrapMessage {
@@ -46,6 +48,90 @@ pub enum CapDescriptor {
     SenderPromise(u32),
     ReceiverHosted(u32),
     ReceiverAnswer(PromisedAnswer),
+    /// A normal descriptor plus the orthogonal pinned `attachedFd` field.
+    Attached {
+        descriptor: Box<CapDescriptor>,
+        resource_index: u8,
+        resource: Option<AttachedResource>,
+    },
+}
+
+impl CapDescriptor {
+    pub fn with_attachment(self, resource_index: u8, resource: Option<AttachedResource>) -> Self {
+        let descriptor = match self {
+            Self::Attached { descriptor, .. } => descriptor,
+            descriptor => Box::new(descriptor),
+        };
+        Self::Attached {
+            descriptor,
+            resource_index,
+            resource,
+        }
+    }
+
+    pub fn descriptor(&self) -> &CapDescriptor {
+        match self {
+            Self::Attached { descriptor, .. } => descriptor,
+            descriptor => descriptor,
+        }
+    }
+
+    pub fn resource_index(&self) -> Option<u8> {
+        match self {
+            Self::Attached { resource_index, .. } => Some(*resource_index),
+            _ => None,
+        }
+    }
+
+    pub fn attached_resource(&self) -> Option<&AttachedResource> {
+        match self {
+            Self::Attached { resource, .. } => resource.as_ref(),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn set_attached_resource(&mut self, attached: Option<AttachedResource>) {
+        if let Self::Attached { resource, .. } = self {
+            *resource = attached;
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ResourceBindingStats {
+    pub received: usize,
+    pub attached: usize,
+    pub discarded: usize,
+}
+
+/// Moves each transport resource into at most one descriptor slot. Duplicate
+/// and out-of-range indices become resource-less, and every unused resource is
+/// dropped before this function returns.
+pub fn bind_attached_resources(
+    descriptors: &mut [CapDescriptor],
+    resources: Vec<OwnedResource>,
+) -> ResourceBindingStats {
+    let received = resources.len();
+    let mut slots = resources
+        .into_iter()
+        .map(|resource| Some(resource.into_attached()))
+        .collect::<Vec<_>>();
+    let mut attached = 0usize;
+    for descriptor in descriptors {
+        let resource = descriptor
+            .resource_index()
+            .and_then(|index| slots.get_mut(usize::from(index)))
+            .and_then(Option::take);
+        if resource.is_some() {
+            attached = attached.saturating_add(1);
+        }
+        descriptor.set_attached_resource(resource);
+    }
+    ResourceBindingStats {
+        received,
+        attached,
+        discarded: received.saturating_sub(attached),
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -708,7 +794,7 @@ fn write_cap_descriptor(
     descriptor: &CapDescriptor,
     limits: ProtocolLimits,
 ) -> Result<(), ProtocolError> {
-    match descriptor {
+    match descriptor.descriptor() {
         CapDescriptor::None => output.activate("none")?,
         CapDescriptor::SenderHosted(id) => {
             output.set("senderHosted", DynamicInput::UInt32(*id))?;
@@ -723,6 +809,17 @@ fn write_cap_descriptor(
             let mut promised = output.init_struct("receiverAnswer")?;
             write_promised_answer(&mut promised, promised_answer, limits)?;
         }
+        CapDescriptor::Attached { .. } => {
+            return Err(ProtocolError::UnsupportedFeature(
+                "nested attached capability descriptor",
+            ));
+        }
+    }
+    if let Some(index) = descriptor.resource_index() {
+        if index == u8::MAX {
+            return Err(ProtocolError::InvalidAttachedResourceIndex);
+        }
+        output.set("attachedFd", DynamicInput::UInt8(index))?;
     }
     Ok(())
 }
@@ -775,7 +872,7 @@ fn read_cap_descriptor(
     value: &DynamicStruct,
     limits: ProtocolLimits,
 ) -> Result<CapDescriptor, ProtocolError> {
-    match value.union_discriminant()?.unwrap_or(u16::MAX) {
+    let descriptor = match value.union_discriminant()?.unwrap_or(u16::MAX) {
         0 => Ok(CapDescriptor::None),
         1 => Ok(CapDescriptor::SenderHosted(uint32(
             value.get("senderHosted")?,
@@ -797,7 +894,13 @@ fn read_cap_descriptor(
         }
         5 => Err(ProtocolError::UnsupportedFeature("thirdPartyHosted")),
         _ => Err(ProtocolError::UnsupportedFeature("capability descriptor")),
-    }
+    }?;
+    let attached = uint8(value.get("attachedFd")?, "attachedFd")?;
+    Ok(if attached == u8::MAX {
+        descriptor
+    } else {
+        descriptor.with_attachment(attached, None)
+    })
 }
 
 fn write_promised_answer(
@@ -894,6 +997,13 @@ fn uint16(value: DynamicValue, field: &'static str) -> Result<u16, ProtocolError
     }
 }
 
+fn uint8(value: DynamicValue, field: &'static str) -> Result<u8, ProtocolError> {
+    match value {
+        DynamicValue::UInt8(value) => Ok(value),
+        _ => Err(ProtocolError::FieldType(field)),
+    }
+}
+
 fn uint32(value: DynamicValue, field: &'static str) -> Result<u32, ProtocolError> {
     match value {
         DynamicValue::UInt32(value) => Ok(value),
@@ -931,6 +1041,7 @@ mod tests {
     use super::*;
     use crate::{ProtocolMessage, read_protocol_message};
     use capnp_message::ReaderLimits;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn data_message(value: u64) -> Arc<OwnedMessage> {
         let mut arena = ExclusiveArena::new(2, 16).expect("arena");
@@ -1171,5 +1282,97 @@ mod tests {
                 })
             ));
         }
+    }
+
+    #[test]
+    fn attached_descriptor_round_trips_and_reserved_index_is_rejected() {
+        let limits = ProtocolLimits::default();
+        let descriptors = [CapDescriptor::SenderHosted(4).with_attachment(7, None)];
+        let encoded = encode_call_with_capabilities(
+            1,
+            CallTarget::ImportedCap(0),
+            0,
+            0,
+            &data_message(1),
+            &descriptors,
+            limits,
+        )
+        .expect("attached descriptor");
+        let ProtocolMessage::Call(call) =
+            read_protocol_message(encoded).expect("attached descriptor reads")
+        else {
+            panic!("call")
+        };
+        assert_eq!(call.params.cap_table, descriptors);
+        assert_eq!(call.params.cap_table[0].resource_index(), Some(7));
+        assert!(call.params.cap_table[0].attached_resource().is_none());
+
+        assert!(matches!(
+            encode_call_with_capabilities(
+                1,
+                CallTarget::ImportedCap(0),
+                0,
+                0,
+                &data_message(1),
+                &[CapDescriptor::None.with_attachment(u8::MAX, None)],
+                limits,
+            ),
+            Err(ProtocolError::InvalidAttachedResourceIndex)
+        ));
+    }
+
+    #[test]
+    fn resource_binding_has_one_owner_and_first_descriptor_wins_duplicates() {
+        struct CountDrop(Arc<AtomicUsize>);
+        impl Drop for CountDrop {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let drops = Arc::new(AtomicUsize::new(0));
+        let mut descriptors = vec![
+            CapDescriptor::SenderHosted(1).with_attachment(0, None),
+            CapDescriptor::SenderHosted(2).with_attachment(0, None),
+            CapDescriptor::SenderHosted(3).with_attachment(9, None),
+            CapDescriptor::SenderHosted(4).with_attachment(1, None),
+        ];
+        let resources = (0..3)
+            .map(|_| OwnedResource::new(CountDrop(Arc::clone(&drops)), 0))
+            .collect();
+        assert_eq!(
+            bind_attached_resources(&mut descriptors, resources),
+            ResourceBindingStats {
+                received: 3,
+                attached: 2,
+                discarded: 1,
+            }
+        );
+        assert!(descriptors[0].attached_resource().is_some());
+        assert!(descriptors[1].attached_resource().is_none());
+        assert!(descriptors[2].attached_resource().is_none());
+        assert!(descriptors[3].attached_resource().is_some());
+        assert_eq!(
+            drops.load(Ordering::SeqCst),
+            1,
+            "unused resource closes now"
+        );
+        drop(descriptors);
+        assert_eq!(drops.load(Ordering::SeqCst), 3, "each owner closes once");
+    }
+
+    #[test]
+    fn missing_transport_resource_keeps_the_rpc_capability_as_fallback() {
+        let mut descriptors = [CapDescriptor::SenderHosted(8).with_attachment(0, None)];
+        assert_eq!(
+            bind_attached_resources(&mut descriptors, Vec::new()),
+            ResourceBindingStats {
+                received: 0,
+                attached: 0,
+                discarded: 0,
+            }
+        );
+        assert_eq!(descriptors[0].descriptor(), &CapDescriptor::SenderHosted(8));
+        assert!(descriptors[0].attached_resource().is_none());
     }
 }

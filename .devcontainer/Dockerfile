@@ -10,6 +10,7 @@ ARG BAZELISK_VERSION=1.29.0
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         build-essential \
+        binutils-gold \
         ca-certificates \
         capnproto \
         clang \

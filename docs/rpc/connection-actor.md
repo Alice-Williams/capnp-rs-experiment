@@ -49,9 +49,9 @@ pinned `abort` before close.
 
 `ConnectionDriver<T>` connects the actor to any M32 `DuplexTransport`. It
 drains ordered outgoing envelopes before reading more input, surfaces handler
-dispatches without selecting an executor, propagates transport backpressure,
-and rejects ancillary resources because their capability association belongs
-to M43.
+dispatches without selecting an executor and propagates transport backpressure.
+M43 extends send/receive effects with atomically associated resources and binds
+them to the pinned capability-table `attachedFd` indices.
 
 ## Explicit non-goals
 

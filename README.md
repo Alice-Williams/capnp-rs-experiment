@@ -116,6 +116,11 @@ FIFO serial, and per-key execution policies, bounded generic/Tokio-style and CPU
 executor adapters, plus a dedicated-thread local server that isolates non-Send
 state behind thread-safe clients.
 
+[Attached resources](docs/rpc/attached-resources.md) add one-owner generic
+resource handles, the pinned `attachedFd` capability-table semantics, and a
+bounded Unix `SCM_RIGHTS` transport with safe excess-descriptor closure and an
+RPC-capability fallback when descriptors are unavailable.
+
 The [Level-1 release candidate report](docs/rpc/level-1-release-candidate.md)
 defines the executable Rust/C++ matrix and fuzz, soak, performance, and security
 gates. Applications coming from the established Rust implementation should use

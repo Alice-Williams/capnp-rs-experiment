@@ -34,10 +34,11 @@ pub use capability::{
 pub use level0::{
     BootstrapMessage, CallMessage, CallTarget, CapDescriptor, DisembargoContext, DisembargoMessage,
     FinishMessage, HandlerResult, Payload, PipelineOp, PromiseResolution, PromisedAnswer,
-    ReleaseMessage, ResolveMessage, ReturnMessage, ReturnPayload, SendResultsTo, encode_bootstrap,
-    encode_call, encode_call_with_capabilities, encode_call_with_options, encode_disembargo,
-    encode_finish, encode_finish_with_options, encode_finish_with_release, encode_release,
-    encode_resolve, encode_return, encode_return_with_options,
+    ReleaseMessage, ResolveMessage, ResourceBindingStats, ReturnMessage, ReturnPayload,
+    SendResultsTo, bind_attached_resources, encode_bootstrap, encode_call,
+    encode_call_with_capabilities, encode_call_with_options, encode_disembargo, encode_finish,
+    encode_finish_with_options, encode_finish_with_release, encode_release, encode_resolve,
+    encode_return, encode_return_with_options,
 };
 pub use protocol::{
     EXCEPTION_TYPE_ID, ExceptionType, MESSAGE_TYPE_ID, ProtocolError, ProtocolLimits,
@@ -46,6 +47,6 @@ pub use protocol::{
     read_protocol_message_with_limits,
 };
 pub use transport::{
-    DuplexTransport, EnvelopeLimits, MemoryTransport, OwnedResource, TransportEnvelope,
-    TransportError, memory_transport_pair,
+    AttachedResource, DuplexTransport, EnvelopeLimits, MemoryTransport, OwnedResource,
+    TransportEnvelope, TransportError, memory_transport_pair,
 };

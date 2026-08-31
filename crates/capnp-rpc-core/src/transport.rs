@@ -61,11 +61,27 @@ impl OwnedResource {
         self.value.is::<T>()
     }
 
+    pub fn downcast_ref<T: Any + Send>(&self) -> Option<&T> {
+        self.value.downcast_ref::<T>()
+    }
+
     pub fn downcast<T: Any + Send>(self) -> Result<T, Self> {
         let Self { value, byte_charge } = self;
         match value.downcast::<T>() {
             Ok(value) => Ok(*value),
             Err(value) => Err(Self { value, byte_charge }),
+        }
+    }
+
+    /// Converts this move-only transport value into a clonable ownership
+    /// handle. If the value is already an `AttachedResource`, its existing
+    /// ownership identity is preserved.
+    pub fn into_attached(self) -> AttachedResource {
+        match self.downcast::<AttachedResource>() {
+            Ok(resource) => resource,
+            Err(resource) => AttachedResource {
+                inner: Arc::new(Mutex::new(resource)),
+            },
         }
     }
 }
@@ -78,6 +94,74 @@ impl fmt::Debug for OwnedResource {
             .finish_non_exhaustive()
     }
 }
+
+/// A clonable handle to one move-only resource owner.
+///
+/// Cloning this value never duplicates the underlying descriptor or object.
+/// The resource is dropped exactly once after the last handle and any queued
+/// transport envelope are gone. Access is limited to a synchronous closure so
+/// a resource lock cannot be held across `.await`.
+#[derive(Clone)]
+pub struct AttachedResource {
+    inner: Arc<Mutex<OwnedResource>>,
+}
+
+impl AttachedResource {
+    /// Creates one shared owner for a transport-specific resource.
+    ///
+    /// The resource must be movable between the connection actor and
+    /// transport. Thread-local values are therefore rejected at compile time:
+    ///
+    /// ```compile_fail
+    /// use std::rc::Rc;
+    /// let local = Rc::new(());
+    /// let _ = capnp_rpc_core::AttachedResource::new(local, 0);
+    /// ```
+    pub fn new<T: Any + Send + 'static>(value: T, byte_charge: usize) -> Self {
+        OwnedResource::new(value, byte_charge).into_attached()
+    }
+
+    pub fn with<T: Any + Send, R>(&self, inspect: impl FnOnce(&T) -> R) -> Option<R> {
+        let resource = self.lock_resource();
+        resource.downcast_ref::<T>().map(inspect)
+    }
+
+    pub fn byte_charge(&self) -> usize {
+        self.lock_resource().byte_charge()
+    }
+
+    pub fn same_identity(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+
+    pub fn into_transport_resource(self) -> OwnedResource {
+        let charge = self.byte_charge();
+        OwnedResource::new(self, charge)
+    }
+
+    fn lock_resource(&self) -> MutexGuard<'_, OwnedResource> {
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+impl fmt::Debug for AttachedResource {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AttachedResource")
+            .field("byte_charge", &self.byte_charge())
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for AttachedResource {
+    fn eq(&self, other: &Self) -> bool {
+        self.same_identity(other)
+    }
+}
+
+impl Eq for AttachedResource {}
 
 /// One complete message and the resources delivered atomically with it.
 #[derive(Debug)]
@@ -566,6 +650,36 @@ mod tests {
         let resource = resources.pop().expect("one resource");
         assert!(resource.is::<CountDrop>());
         drop(resource);
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn attached_resource_clones_share_one_drop_owner() {
+        struct CountDrop(Arc<AtomicUsize>);
+        impl Drop for CountDrop {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let drops = Arc::new(AtomicUsize::new(0));
+        let first = AttachedResource::new(CountDrop(Arc::clone(&drops)), 9);
+        let second = first.clone();
+        assert!(first.same_identity(&second));
+        assert_eq!(second.byte_charge(), 9);
+        assert!(second.with::<CountDrop, _>(|_| ()).is_some());
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                first.with::<CountDrop, _>(|_| panic!("poison resource access"));
+            }))
+            .is_err()
+        );
+        assert_eq!(second.byte_charge(), 9, "poison does not lose ownership");
+        drop(first);
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+        let transport = second.into_transport_resource();
+        assert!(transport.is::<AttachedResource>());
+        drop(transport);
         assert_eq!(drops.load(Ordering::SeqCst), 1);
     }
 

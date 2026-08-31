@@ -73,7 +73,6 @@ pub enum DriverError<E> {
     Actor(ConnectionError),
     Envelope(TransportError),
     Transport(E),
-    UnexpectedResources(usize),
 }
 
 impl<E: fmt::Display> fmt::Display for DriverError<E> {
@@ -82,12 +81,6 @@ impl<E: fmt::Display> fmt::Display for DriverError<E> {
             Self::Actor(error) => error.fmt(formatter),
             Self::Envelope(error) => error.fmt(formatter),
             Self::Transport(error) => error.fmt(formatter),
-            Self::UnexpectedResources(count) => {
-                write!(
-                    formatter,
-                    "Level-0 RPC received {count} ancillary resources"
-                )
-            }
         }
     }
 }
@@ -98,7 +91,6 @@ impl<E: std::error::Error + 'static> std::error::Error for DriverError<E> {
             Self::Actor(error) => Some(error),
             Self::Envelope(error) => Some(error),
             Self::Transport(error) => Some(error),
-            Self::UnexpectedResources(_) => None,
         }
     }
 }
@@ -108,8 +100,9 @@ impl<E: std::error::Error + 'static> std::error::Error for DriverError<E> {
 /// Each ready item is an application dispatch. The caller may run independent
 /// dispatches on any executor and return through their `DriverCompletion`s.
 /// Outbound frames are drained before further inbound reads, preserving actor
-/// order and transport backpressure. `Ready(Ok(None))` means the transport is
-/// closed and all actor waiters have been completed.
+/// order, attached-resource ownership, and transport backpressure.
+/// `Ready(Ok(None))` means the transport is closed and all actor waiters have
+/// been completed.
 pub struct ConnectionDriver<T: DuplexTransport> {
     transport: T,
     actor: ConnectionActor,
@@ -251,6 +244,17 @@ impl<T: DuplexTransport> ConnectionDriver<T> {
                         };
                     continue;
                 }
+                Poll::Ready(Some(ActorEffect::SendWithResources { message, resources })) => {
+                    self.outbound =
+                        match TransportEnvelope::new(message, resources, self.envelope_limits) {
+                            Ok(envelope) => Some(envelope),
+                            Err(error) => {
+                                self.request_shutdown();
+                                return Poll::Ready(Err(DriverError::Envelope(error)));
+                            }
+                        };
+                    continue;
+                }
                 Poll::Ready(Some(ActorEffect::Dispatch {
                     request,
                     completion,
@@ -280,13 +284,9 @@ impl<T: DuplexTransport> ConnectionDriver<T> {
                 Poll::Pending => return Poll::Pending,
                 Poll::Ready(Ok(Some(envelope))) => {
                     let (message, resources) = envelope.into_parts();
-                    if !resources.is_empty() {
-                        let count = resources.len();
-                        drop(resources);
-                        self.request_shutdown();
-                        return Poll::Ready(Err(DriverError::UnexpectedResources(count)));
-                    }
-                    self.handle.receive(message).map_err(DriverError::Actor)?;
+                    self.handle
+                        .receive_with_resources(message, resources)
+                        .map_err(DriverError::Actor)?;
                 }
                 Poll::Ready(Ok(None)) => {
                     self.request_shutdown();

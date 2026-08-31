@@ -13,14 +13,15 @@
 //! `senderPromise`, exact promise references, and released-ID tombstones that
 //! prevent reuse until a late resolver is observed. Route resolution and
 //! embargo ordering remain owned exclusively by the connection actor;
-//! third-party handoff and attached resources remain later milestones.
+//! M43 layers attached-resource ownership onto ordinary descriptors while
+//! third-party handoff remains a later milestone.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::{CapDescriptor, PromisedAnswer, ReleaseMessage};
+use crate::{AttachedResource, CapDescriptor, PromisedAnswer, ReleaseMessage};
 
 static NEXT_HOSTED_IDENTITY: AtomicU64 = AtomicU64::new(1);
 static NEXT_PROMISE_IDENTITY: AtomicU64 = AtomicU64::new(1);
@@ -121,6 +122,37 @@ pub enum OutgoingCapability {
     ReceiverAnswer(PromisedAnswer),
     /// A capability imported from this peer and now sent back to it.
     ReceiverHosted(u32),
+    Attached {
+        capability: Box<OutgoingCapability>,
+        resource: AttachedResource,
+    },
+}
+
+impl OutgoingCapability {
+    pub fn with_attachment(self, resource: AttachedResource) -> Self {
+        let capability = match self {
+            Self::Attached { capability, .. } => capability,
+            capability => Box::new(capability),
+        };
+        Self::Attached {
+            capability,
+            resource,
+        }
+    }
+
+    pub fn capability(&self) -> &OutgoingCapability {
+        match self {
+            Self::Attached { capability, .. } => capability,
+            capability => capability,
+        }
+    }
+
+    pub fn attached_resource(&self) -> Option<&AttachedResource> {
+        match self {
+            Self::Attached { resource, .. } => Some(resource),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -150,6 +182,7 @@ pub enum CapabilityError {
     ExportLimit { limit: usize },
     ExportIdExhausted,
     ReferenceCountOverflow,
+    AttachedResourceLimit { limit: usize },
     UnknownImport(u32),
     UnknownExport(u32),
     ExcessRelease { id: u32, requested: u32, held: u64 },
@@ -191,10 +224,11 @@ enum ExportIdentity {
     Promise(u64),
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct ImportEntry {
     references: u64,
     promise: bool,
+    attachment: Option<AttachedResource>,
 }
 
 /// Connection-local import/export tables. The connection actor is the sole
@@ -251,6 +285,9 @@ impl CapabilityTables {
             OutgoingCapability::ReceiverAnswer(promised_answer) => {
                 Ok(CapDescriptor::ReceiverAnswer(promised_answer.clone()))
             }
+            OutgoingCapability::Attached { .. } => Err(CapabilityError::UnsupportedDescriptor(
+                "attached capabilities require describe_all_with_resources",
+            )),
         }
     }
 
@@ -313,6 +350,45 @@ impl CapabilityTables {
         result
     }
 
+    /// Describes a complete payload and assigns one distinct `attachedFd`
+    /// index to every attached capability. The returned transport resources
+    /// retain their underlying owners until the envelope write completes.
+    pub fn describe_all_with_resources(
+        &mut self,
+        capabilities: &[OutgoingCapability],
+    ) -> Result<(Vec<CapDescriptor>, Vec<crate::OwnedResource>), CapabilityError> {
+        const MAX_ATTACHED_RESOURCES: usize = u8::MAX as usize;
+        let snapshot = self.clone();
+        let mut descriptors = Vec::with_capacity(capabilities.len());
+        let mut resources = Vec::new();
+        for capability in capabilities {
+            let mut descriptor = match self.describe(capability.capability()) {
+                Ok(descriptor) => descriptor,
+                Err(error) => {
+                    *self = snapshot;
+                    return Err(error);
+                }
+            };
+            if let Some(resource) = capability.attached_resource() {
+                if resources.len() >= MAX_ATTACHED_RESOURCES {
+                    *self = snapshot;
+                    return Err(CapabilityError::AttachedResourceLimit {
+                        limit: MAX_ATTACHED_RESOURCES,
+                    });
+                }
+                let index = u8::try_from(resources.len()).map_err(|_| {
+                    CapabilityError::AttachedResourceLimit {
+                        limit: MAX_ATTACHED_RESOURCES,
+                    }
+                })?;
+                descriptor = descriptor.with_attachment(index, Some(resource.clone()));
+                resources.push(resource.clone().into_transport_resource());
+            }
+            descriptors.push(descriptor);
+        }
+        Ok((descriptors, resources))
+    }
+
     pub fn receive(
         &mut self,
         descriptor: &CapDescriptor,
@@ -344,6 +420,7 @@ impl CapabilityTables {
                         ImportEntry {
                             references: 1,
                             promise: false,
+                            attachment: None,
                         },
                     );
                 }
@@ -374,6 +451,7 @@ impl CapabilityTables {
                         ImportEntry {
                             references: 1,
                             promise: true,
+                            attachment: None,
                         },
                     );
                 }
@@ -394,7 +472,34 @@ impl CapabilityTables {
             CapDescriptor::ReceiverAnswer(promised_answer) => {
                 Ok(ReceivedCapability::ReceiverAnswer(promised_answer.clone()))
             }
+            CapDescriptor::Attached {
+                descriptor,
+                resource,
+                ..
+            } => {
+                let received = self.receive(descriptor)?;
+                if let (
+                    Some(resource),
+                    ReceivedCapability::Imported(id) | ReceivedCapability::PromiseImported(id),
+                ) = (resource, &received)
+                {
+                    let entry = self
+                        .imports
+                        .get_mut(id)
+                        .ok_or(CapabilityError::UnknownImport(*id))?;
+                    if entry.attachment.is_none() {
+                        entry.attachment = Some(resource.clone());
+                    }
+                }
+                Ok(received)
+            }
         }
+    }
+
+    pub fn import_attachment(&self, id: u32) -> Option<AttachedResource> {
+        self.imports
+            .get(&id)
+            .and_then(|entry| entry.attachment.clone())
     }
 
     pub fn release_import(
@@ -570,6 +675,7 @@ fn reference_total(mut values: impl Iterator<Item = u64>) -> u64 {
 #[allow(clippy::panic)]
 mod tests {
     use super::*;
+    use crate::{OwnedResource, bind_attached_resources};
 
     #[test]
     fn duplicate_descriptors_share_identity_but_count_exactly() {
@@ -693,5 +799,67 @@ mod tests {
         assert_eq!(table.stats().export_references, 1);
         table.clear();
         assert_eq!(table.stats(), CapabilityStats::default());
+    }
+
+    #[test]
+    fn attached_capabilities_move_resources_and_preserve_first_import_owner() {
+        let hosted = HostedCapability::new().expect("identity");
+        let first = AttachedResource::new(11_u32, 4);
+        let second = AttachedResource::new(22_u32, 4);
+        let outgoing = [
+            OutgoingCapability::Hosted(hosted.clone()).with_attachment(first.clone()),
+            OutgoingCapability::Hosted(hosted).with_attachment(second.clone()),
+        ];
+        let mut sender = CapabilityTables::new(8, 8);
+        assert!(matches!(
+            sender.describe(&outgoing[0]),
+            Err(CapabilityError::UnsupportedDescriptor(_))
+        ));
+        let (mut descriptors, resources) = sender
+            .describe_all_with_resources(&outgoing)
+            .expect("attached payload");
+        assert_eq!(resources.len(), 2);
+        assert_eq!(descriptors[0].resource_index(), Some(0));
+        assert_eq!(descriptors[1].resource_index(), Some(1));
+        assert_eq!(
+            bind_attached_resources(&mut descriptors, resources).attached,
+            2
+        );
+
+        let mut receiver = CapabilityTables::new(8, 8);
+        assert_eq!(
+            receiver.receive(&descriptors[0]),
+            Ok(ReceivedCapability::Imported(0))
+        );
+        assert_eq!(
+            receiver.receive(&descriptors[1]),
+            Ok(ReceivedCapability::Imported(0))
+        );
+        let imported = receiver.import_attachment(0).expect("first attachment");
+        assert!(imported.same_identity(&first));
+        assert_eq!(imported.with::<u32, _>(|value| *value), Some(11));
+        assert!(!imported.same_identity(&second));
+    }
+
+    #[test]
+    fn attached_resource_index_quota_is_transactional() {
+        let capabilities = (0..=u8::MAX)
+            .map(|value| {
+                OutgoingCapability::None.with_attachment(AttachedResource::new(u16::from(value), 0))
+            })
+            .collect::<Vec<_>>();
+        let mut table = CapabilityTables::new(8, 8);
+        assert!(matches!(
+            table.describe_all_with_resources(&capabilities),
+            Err(CapabilityError::AttachedResourceLimit { limit: 255 })
+        ));
+        assert_eq!(table.stats(), CapabilityStats::default());
+
+        let mut descriptors = vec![CapDescriptor::None.with_attachment(0, None)];
+        let stats = bind_attached_resources(
+            &mut descriptors,
+            vec![OwnedResource::new(AttachedResource::new(1_u8, 0), 0)],
+        );
+        assert_eq!(stats.attached, 1);
     }
 }

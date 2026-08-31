@@ -11,7 +11,8 @@
 //! capability recreation after disconnect.
 //! M39 adds explicit concurrent, serial, keyed, and dedicated-local scheduling
 //! policies. M40 freezes these executor-neutral APIs as the two-party Level-1
-//! release candidate; higher-level routing, membranes, attached resources,
+//! release candidate. M41 and M42 add mature local capabilities and membranes;
+//! M43 adds generic attachments and Unix `SCM_RIGHTS`. Higher-level routing,
 //! join/equality, and persistence remain explicit non-goals.
 
 use std::fmt;
@@ -29,14 +30,17 @@ mod local;
 mod membrane;
 mod reconnect;
 mod scheduler;
+#[cfg(unix)]
+mod unix_transport;
 
 pub use capnp_rpc_core::{
-    ActorLimits, AnswerKey, CancellationSignal, CapDescriptor, CapabilityError, CapabilityStats,
-    CapabilityTables, CompletionToken, ConnectionError, ConnectionHandle, ConnectionStats,
-    ExceptionType, HandlerResult, HostedCapability, IncomingCallTarget, IncomingRequest,
-    LocalCompletionToken, OutgoingCapability, Payload, PromiseCapability, PromiseResolver,
-    ProtocolLimits, QuestionFuture, QuestionKey, QuestionTarget, ReceivedCapability, ReturnPayload,
-    RpcException,
+    ActorLimits, AnswerKey, AttachedResource, CancellationSignal, CapDescriptor, CapabilityError,
+    CapabilityStats, CapabilityTables, CompletionToken, ConnectionError, ConnectionHandle,
+    ConnectionStats, DuplexTransport, EnvelopeLimits, ExceptionType, HandlerResult,
+    HostedCapability, IncomingCallTarget, IncomingRequest, LocalCompletionToken,
+    OutgoingCapability, OwnedResource, Payload, PromiseCapability, PromiseResolver, ProtocolLimits,
+    QuestionFuture, QuestionKey, QuestionTarget, ReceivedCapability, ReturnPayload, RpcException,
+    TransportEnvelope,
 };
 pub use driver::{ConnectionDriver, DriverCompletion, DriverDispatch, DriverError, DriverShutdown};
 pub use dynamic::{
@@ -63,6 +67,8 @@ pub use scheduler::{
     Concurrent, ExecutorService, GenericExecutor, Keyed, LocalServer, SchedulerError, Serial,
     TaskExecutor, ThreadPoolExecutor, TokioExecutor,
 };
+#[cfg(unix)]
+pub use unix_transport::{UnixScmRightsTransport, UnixTransportError};
 
 pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
 pub type MessageFuture = BoxFuture<Result<Arc<OwnedMessage>, RpcError>>;

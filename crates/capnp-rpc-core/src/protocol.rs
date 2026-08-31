@@ -17,9 +17,10 @@ use capnp_schema::{
 
 use crate::level0::{
     BootstrapMessage, CallMessage, DisembargoMessage, FinishMessage, ReleaseMessage,
-    ResolveMessage, ReturnMessage, read_bootstrap, read_call, read_disembargo, read_finish,
-    read_release, read_resolve, read_return,
+    ResolveMessage, ReturnMessage, bind_attached_resources, read_bootstrap, read_call,
+    read_disembargo, read_finish, read_release, read_resolve, read_return,
 };
+use crate::{OwnedResource, ResourceBindingStats, ReturnPayload};
 
 pub const RPC_SCHEMA_SHA256: &str =
     "2ecc3049d4f7f2d48a3a368dbb9ef4b97b31c1365996d615bd19c267983a1931";
@@ -130,6 +131,39 @@ pub enum ProtocolMessage {
     },
 }
 
+impl ProtocolMessage {
+    pub fn bind_resources(&mut self, resources: Vec<OwnedResource>) -> ResourceBindingStats {
+        match self {
+            Self::Call(message) => {
+                bind_attached_resources(&mut message.params.cap_table, resources)
+            }
+            Self::Return(message) => match &mut message.payload {
+                ReturnPayload::Results(payload) => {
+                    bind_attached_resources(&mut payload.cap_table, resources)
+                }
+                _ => discard_resources(resources),
+            },
+            Self::Resolve(message) => match &mut message.resolution {
+                crate::PromiseResolution::Cap(descriptor) => {
+                    bind_attached_resources(core::slice::from_mut(descriptor), resources)
+                }
+                crate::PromiseResolution::Exception(_) => discard_resources(resources),
+            },
+            _ => discard_resources(resources),
+        }
+    }
+}
+
+fn discard_resources(resources: Vec<OwnedResource>) -> ResourceBindingStats {
+    let received = resources.len();
+    drop(resources);
+    ResourceBindingStats {
+        received,
+        attached: 0,
+        discarded: received,
+    }
+}
+
 #[derive(Debug)]
 pub enum ProtocolError {
     Schema(String),
@@ -138,6 +172,7 @@ pub enum ProtocolError {
     Validation(ValidationError),
     FieldType(&'static str),
     UnsupportedFeature(&'static str),
+    InvalidAttachedResourceIndex,
     InvalidReferenceCount,
     InvalidPipelineTransform,
     Limit {
@@ -161,6 +196,9 @@ impl fmt::Display for ProtocolError {
                     formatter,
                     "RPC feature `{feature}` is outside the implemented subset"
                 )
+            }
+            Self::InvalidAttachedResourceIndex => {
+                formatter.write_str("RPC attached resource index 255 is reserved for no resource")
             }
             Self::InvalidReferenceCount => {
                 formatter.write_str("RPC release reference count must be non-zero")
@@ -190,6 +228,7 @@ impl std::error::Error for ProtocolError {
             Self::Schema(_)
             | Self::FieldType(_)
             | Self::UnsupportedFeature(_)
+            | Self::InvalidAttachedResourceIndex
             | Self::InvalidReferenceCount
             | Self::InvalidPipelineTransform
             | Self::Limit { .. }

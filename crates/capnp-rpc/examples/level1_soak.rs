@@ -270,6 +270,9 @@ fn transfer_one_send(
 ) -> Result<(), Box<dyn Error>> {
     match next(actor) {
         Poll::Ready(Some(ActorEffect::Send(message))) => peer.receive(message).map_err(Into::into),
+        Poll::Ready(Some(ActorEffect::SendWithResources { message, resources })) => peer
+            .receive_with_resources(message, resources)
+            .map_err(Into::into),
         _ => Err(failure("expected an actor send effect")),
     }
 }
@@ -285,6 +288,9 @@ fn drain_sends(actor: &mut ConnectionActor, peer: &ConnectionHandle) -> Result<(
     for _ in 0..32 {
         match next(actor) {
             Poll::Ready(Some(ActorEffect::Send(message))) => peer.receive(message)?,
+            Poll::Ready(Some(ActorEffect::SendWithResources { message, resources })) => {
+                peer.receive_with_resources(message, resources)?
+            }
             Poll::Pending | Poll::Ready(None) => return Ok(()),
             Poll::Ready(Some(ActorEffect::CloseTransport)) => {}
             Poll::Ready(Some(ActorEffect::Dispatch { .. } | ActorEffect::DispatchLocal { .. })) => {
@@ -299,7 +305,11 @@ fn drain_effects(actor: &mut ConnectionActor) -> Result<(), Box<dyn Error>> {
     for _ in 0..32 {
         match next(actor) {
             Poll::Pending | Poll::Ready(None) => return Ok(()),
-            Poll::Ready(Some(ActorEffect::CloseTransport | ActorEffect::Send(_))) => {}
+            Poll::Ready(Some(
+                ActorEffect::CloseTransport
+                | ActorEffect::Send(_)
+                | ActorEffect::SendWithResources { .. },
+            )) => {}
             Poll::Ready(Some(ActorEffect::Dispatch { .. } | ActorEffect::DispatchLocal { .. })) => {
                 return Err(failure("unexpected dispatch while draining actor"));
             }

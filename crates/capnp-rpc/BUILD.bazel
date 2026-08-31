@@ -1,16 +1,19 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("@crates//:defs.bzl", "aliases", "all_crate_deps")
 
 rust_library(
     name = "capnp_rpc",
     srcs = glob(["src/**/*.rs"]),
     crate_name = "capnp_rpc",
     edition = "2024",
+    aliases = aliases(),
     deps = [
         "//crates/capnp-async:capnp_async",
+        "//crates/capnp-io:capnp_io",
         "//crates/capnp-message:capnp_message",
         "//crates/capnp-rpc-core:capnp_rpc_core",
         "//crates/capnp-schema:capnp_schema",
-    ],
+    ] + all_crate_deps(normal = True),
     visibility = ["//visibility:public"],
 )
 
