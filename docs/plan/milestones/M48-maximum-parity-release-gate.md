@@ -13,12 +13,22 @@ Publish the full-platform release and feature-by-feature C++/spec parity report.
 - [x] Restate the compatibility sources, invariants, and explicit non-goals in module or design documentation.
 - [x] Implement only this milestone's deliverable behind the narrowest crate boundary that owns the invariant.
 - [x] Add the independent fixtures and positive, negative, property, compile, concurrency, fuzz, or benchmark coverage appropriate to this boundary.
-- [ ] Run Cargo and Bazel validation in the Linux development container.
+- [x] Run Cargo and Bazel validation in the Linux development container.
 - [ ] Record evidence and update compatibility/manifest.toml.
 
 ## Required exit evidence
 
 All inventories are implemented or explicitly Rust-inapplicable; Level 0–4/persistence matrices, multi-day fault/soak, performance, and security gates pass.
+
+## Authoritative release run
+
+Commit `c92e060cbaf75d47bd53cac7b5ae63ec47d5ba9a` passed the complete local
+`tools/verify-m48-security-gates.sh` composition and GitHub CI run 110. The
+immutable 48-hour run started at `2026-08-31T19:57:25Z`; its durable
+checkpoints are written to
+`release/results/2026-08-31-m48-c92e060-g-drive-docker` by the named isolated
+container `capnp-m48-soak-c92e060`. The result remains live and uncommitted
+until it records `status=PASS`.
 
 ## Scope boundary
 

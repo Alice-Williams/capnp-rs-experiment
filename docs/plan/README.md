@@ -63,21 +63,21 @@ wire safety or protocol ordering.
 
 ### Phase 3 — Reflection and generated Rust APIs
 
-- [M17 — Compiled schema model and introspection](milestones/M17-compiled-schema-model-and-introspection.md)
-- [M18 — Dynamic value, struct, and list API](milestones/M18-dynamic-value-struct-and-list-api.md)
-- [M19 — Codegen: structs, enums, unions, lists](milestones/M19-codegen-core-data-apis.md)
-- [M20 — Codegen: generics, brands, constants, annotations](milestones/M20-codegen-generics-brands-constants-annotations.md)
-- [M21 — Codegen: interfaces and pipelines](milestones/M21-codegen-interfaces-and-pipelines.md)
+- [M17 — Compiled schema model and introspection](milestones/M17-compiled-schema-model-and-introspection.md) — complete
+- [M18 — Dynamic value, struct, and list API](milestones/M18-dynamic-value-struct-and-list-api.md) — complete
+- [M19 — Codegen: structs, enums, unions, lists](milestones/M19-codegen-core-data-apis.md) — complete
+- [M20 — Codegen: generics, brands, constants, annotations](milestones/M20-codegen-generics-brands-constants-annotations.md) — complete
+- [M21 — Codegen: interfaces and pipelines](milestones/M21-codegen-interfaces-and-pipelines.md) — complete
 
 ### Phase 4 — Native compiler and developer tools
 
-- [M22 — Lexer and lossless syntax tree](milestones/M22-lexer-and-lossless-syntax-tree.md)
-- [M23 — Names, imports, IDs, constants, type resolution](milestones/M23-semantic-resolution.md)
-- [M24 — Struct layout, unions/groups, evolution](milestones/M24-layout-and-evolution-compiler.md)
-- [M25 — Native request and self-hosted generation](milestones/M25-native-request-and-self-hosted-generation.md)
-- [M26 — compile and id CLI](milestones/M26-compile-and-id-cli.md)
-- [M27 — Text decode, encode, and eval](milestones/M27-text-tools.md)
-- [M28 — C++-parity JSON codec](milestones/M28-json-codec.md)
+- [M22 — Lexer and lossless syntax tree](milestones/M22-lexer-and-lossless-syntax-tree.md) — complete
+- [M23 — Names, imports, IDs, constants, type resolution](milestones/M23-semantic-resolution.md) — complete
+- [M24 — Struct layout, unions/groups, evolution](milestones/M24-layout-and-evolution-compiler.md) — complete
+- [M25 — Native request and self-hosted generation](milestones/M25-native-request-and-self-hosted-generation.md) — complete
+- [M26 — compile and id CLI](milestones/M26-compile-and-id-cli.md) — complete
+- [M27 — Text decode, encode, and eval](milestones/M27-text-tools.md) — complete
+- [M28 — C++-parity JSON codec](milestones/M28-json-codec.md) — complete
 
 ### Phase 5 — Parallel data processing
 
@@ -95,15 +95,15 @@ wire safety or protocol ordering.
 - [M37 — Streaming and adaptive flow control](milestones/M37-streaming-and-flow-control.md) — complete
 - [M38 — Cancellation, disconnect, and reconnect](milestones/M38-cancellation-disconnect-and-reconnect.md) — complete
 - [M39 — Thread-safe server scheduling](milestones/M39-thread-safe-server-scheduling.md) — complete
-- [M40 — Level-1 release gate](milestones/M40-level-1-release-gate.md)
+- [M40 — Level-1 release gate](milestones/M40-level-1-release-gate.md) — in progress; authoritative 24-hour soak running at `c92e060`
 
 ### Phase 7 — Maximum RPC and C++ product parity
 
 - [M41 — Mature local capability utilities](milestones/M41-local-capability-utilities.md) — implementation candidate; activation awaits M40
 - [M42 — Revocation and membranes](milestones/M42-revocation-and-membranes.md) — implementation candidate; activation awaits M40 and M41
 - [M43 — Attached descriptors/resources](milestones/M43-attached-resources.md) — implementation candidate; activation awaits M40
-- [M44 — Level-3 introductions and handoffs](milestones/M44-level-3-handoffs.md)
-- [M45 — Level-4 Join and distributed equality](milestones/M45-level-4-join.md)
-- [M46 — Persistent capabilities and SturdyRefs](milestones/M46-persistent-capabilities.md)
+- [M44 — Level-3 introductions and handoffs](milestones/M44-level-3-handoffs.md) — implementation candidate; activation awaits M40
+- [M45 — Level-4 Join and distributed equality](milestones/M45-level-4-join.md) — implementation candidate; activation awaits M40 and M44
+- [M46 — Persistent capabilities and SturdyRefs](milestones/M46-persistent-capabilities.md) — implementation candidate; activation awaits M40
 - [M47 — C++ compatibility adapters and examples](milestones/M47-compatibility-adapters-and-examples.md) — implementation candidate; activation awaits M40-M46
-- [M48 — Maximum-parity release gate](milestones/M48-maximum-parity-release-gate.md)
+- [M48 — Maximum-parity release gate](milestones/M48-maximum-parity-release-gate.md) — in progress; authoritative 48-hour soak running at `c92e060`
