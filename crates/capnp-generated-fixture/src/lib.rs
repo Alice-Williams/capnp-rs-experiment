@@ -25,8 +25,8 @@ mod tests {
     use std::future::Future;
     use std::pin::pin;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, Mutex};
-    use std::task::{Context, Poll, Waker};
+    use std::sync::{Arc, Barrier, Mutex};
+    use std::task::{Context, Poll, Wake, Waker};
 
     use capnp_io::{FrameLimits, FrameRead, parse_frame};
     use capnp_message::{ExclusiveArena, OwnedMessage, ReaderLimits};
@@ -165,6 +165,69 @@ mod tests {
         response: Arc<OwnedMessage>,
         stream: capnp_rpc::LocalClient,
         provisional: bool,
+    }
+
+    struct MembraneEchoService {
+        response: Arc<OwnedMessage>,
+        observed: Arc<Mutex<Vec<capnp_rpc::LocalClient>>>,
+    }
+
+    impl capnp_rpc::LocalService for MembraneEchoService {
+        fn dispatch(
+            self: Arc<Self>,
+            _interface_id: u64,
+            _method_id: u16,
+            _params: Arc<OwnedMessage>,
+        ) -> capnp_rpc::MessageFuture {
+            let response = Arc::clone(&self.response);
+            Box::pin(async move { Ok(response) })
+        }
+
+        fn dispatch_request(
+            self: Arc<Self>,
+            _interface_id: u64,
+            _method_id: u16,
+            request: capnp_rpc::LocalRequest,
+        ) -> capnp_rpc::LocalCall {
+            let incoming = request
+                .capabilities()
+                .get(0)
+                .expect("request capability slot")
+                .expect("request capability");
+            self.observed
+                .lock()
+                .expect("observed lock")
+                .push(incoming.clone());
+            let capabilities = capnp_rpc::CapabilityList::from_clients([Some(incoming.clone())], 4)
+                .expect("response capability table");
+            let response = capnp_rpc::LocalResponse::with_capabilities(
+                Arc::clone(&self.response),
+                capabilities,
+            );
+            let mut pipeline = capnp_rpc::PipelineBuilder::default();
+            pipeline
+                .set_capability(
+                    capnp_rpc::PipelineTransform::root().pointer_field(0),
+                    incoming,
+                )
+                .expect("provisional capability");
+            capnp_rpc::LocalCall::new(Box::pin(async move { Ok(response) }))
+                .with_pipeline(pipeline)
+                .expect("pipeline installed once")
+        }
+    }
+
+    struct NeverService;
+
+    impl capnp_rpc::LocalService for NeverService {
+        fn dispatch(
+            self: Arc<Self>,
+            _interface_id: u64,
+            _method_id: u16,
+            _params: Arc<OwnedMessage>,
+        ) -> capnp_rpc::MessageFuture {
+            Box::pin(std::future::pending())
+        }
     }
 
     impl capnp_rpc::LocalService for PipelineFactoryService {
@@ -917,6 +980,369 @@ mod tests {
         assert_eq!(
             dynamic_stream.interface_id(),
             Some(super::streaming::byte_stream::TYPE_ID)
+        );
+    }
+
+    #[test]
+    fn membrane_wraps_each_crossing_once_across_requests_results_pipelines_and_copies() {
+        let schema = streaming_schema();
+        let response = {
+            let mut arena = ExclusiveArena::new(2, 32).expect("membrane response arena");
+            super::streaming::open_results::Builder::init_root(&schema, &mut arena)
+                .expect("membrane response root")
+                .set_stream(0)
+                .expect("membrane response cap");
+            owned_arena(arena)
+        };
+        let original = capnp_rpc::LocalClient::new(
+            Arc::clone(&schema),
+            Arc::new(RecordingService {
+                response: Arc::clone(&response),
+                methods: Arc::new(Mutex::new(Vec::new())),
+            }),
+        );
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let target = capnp_rpc::LocalClient::new(
+            Arc::clone(&schema),
+            Arc::new(MembraneEchoService {
+                response: Arc::clone(&response),
+                observed: Arc::clone(&observed),
+            }),
+        );
+        let membrane = capnp_rpc::Membrane::new(Arc::new(PassPolicy));
+        let wrapped = membrane.wrap(target.clone());
+        assert!(wrapped.same_identity(&membrane.wrap(target.clone())));
+        assert!(target.same_identity(&membrane.reverse_wrap(wrapped.clone())));
+
+        let request_caps = capnp_rpc::CapabilityList::from_clients([Some(original.clone())], 4)
+            .expect("request cap table");
+        let request =
+            capnp_rpc::LocalRequest::with_capabilities(Arc::clone(&response), request_caps);
+        let call = wrapped.call_untyped_request(1, 0, request.clone());
+        let pipelined = call
+            .pipeline
+            .clone()
+            .client(capnp_rpc::PipelineTransform::root().pointer_field(0));
+        let pipelined = block_on(pipelined.when_resolved()).expect("membrane pipeline resolves");
+        assert!(pipelined.same_identity(&original));
+        let returned = block_on(call.response()).expect("membrane response");
+        let returned = returned
+            .capabilities()
+            .get(0)
+            .expect("returned cap slot")
+            .expect("returned cap");
+        assert!(returned.same_identity(&original));
+
+        let seen = observed.lock().expect("observed lock")[0].clone();
+        assert!(!seen.same_identity(&original));
+        assert!(seen.same_identity(&membrane.reverse_wrap(original.clone())));
+
+        let copied_inside = membrane
+            .copy_request_into(&request)
+            .expect("copy request into membrane");
+        let copied_outside = membrane
+            .copy_request_out(&copied_inside)
+            .expect("copy request out of membrane");
+        assert!(
+            copied_outside
+                .capabilities()
+                .get(0)
+                .expect("copied cap slot")
+                .expect("copied cap")
+                .same_identity(&original)
+        );
+
+        let (promise, resolver) = capnp_rpc::LocalClient::promise(Arc::clone(&schema));
+        let wrapped_promise = membrane.wrap(promise.clone());
+        assert!(promise.same_identity(&membrane.reverse_wrap(wrapped_promise.clone())));
+        resolver.fulfill(target).expect("promise resolves");
+        let first = block_on(wrapped_promise.when_resolved()).expect("first resolution");
+        let second = block_on(wrapped_promise.when_resolved()).expect("second resolution");
+        assert!(first.same_identity(&second));
+
+        let (concurrent, concurrent_resolver) =
+            capnp_rpc::LocalClient::promise(Arc::clone(&schema));
+        let concurrent = membrane.wrap(concurrent);
+        let barrier = Arc::new(Barrier::new(3));
+        let threads = (0..2)
+            .map(|_| {
+                let client = concurrent.clone();
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    block_on(client.when_resolved()).expect("concurrent membrane resolution")
+                })
+            })
+            .collect::<Vec<_>>();
+        barrier.wait();
+        concurrent_resolver
+            .fulfill(first)
+            .expect("concurrent promise resolves");
+        let resolved = threads
+            .into_iter()
+            .map(|thread| thread.join().expect("resolution thread"))
+            .collect::<Vec<_>>();
+        assert!(resolved[0].same_identity(&resolved[1]));
+    }
+
+    #[test]
+    fn revocable_server_cancels_outstanding_and_rejects_later_calls_without_leaks() {
+        let schema = streaming_schema();
+        let response = {
+            let mut arena = ExclusiveArena::new(1, 16).expect("revocable params arena");
+            super::streaming::stream_result::Builder::init_root(&schema, &mut arena)
+                .expect("revocable params root");
+            owned_arena(arena)
+        };
+        let revocable =
+            capnp_rpc::RevocableServer::new(Arc::clone(&schema), Arc::new(NeverService));
+        assert!(!revocable.is_in_use());
+        let client = revocable.get_client();
+        assert!(revocable.is_in_use());
+        let call = client.call_untyped(1, 0, Arc::clone(&response));
+        drop(client);
+        assert!(revocable.is_in_use(), "outstanding call retains use");
+        let wake_count = Arc::new(WakeCount(AtomicUsize::new(0)));
+        let waker = Waker::from(Arc::clone(&wake_count));
+        let mut context = Context::from_waker(&waker);
+        let mut response_future = pin!(call.response());
+        assert!(matches!(
+            response_future.as_mut().poll(&mut context),
+            Poll::Pending
+        ));
+        revocable.revoke().expect("first revoke");
+        assert!(
+            wake_count.0.load(Ordering::SeqCst) > 0,
+            "revocation wakes an outstanding call"
+        );
+        let revoked_result = response_future.as_mut().poll(&mut context);
+        assert!(
+            matches!(revoked_result, Poll::Ready(Err(_))),
+            "revoked call must complete with an error"
+        );
+        let Poll::Ready(Err(error)) = revoked_result else {
+            return;
+        };
+        assert!(format!("{error:?}").to_lowercase().contains("revoked"));
+        assert!(!revocable.is_in_use());
+
+        let error = block_on(
+            revocable
+                .get_client()
+                .call_untyped(1, 0, Arc::clone(&response))
+                .response(),
+        )
+        .expect_err("later call is rejected");
+        assert!(format!("{error:?}").to_lowercase().contains("revoked"));
+        assert!(!revocable.is_in_use());
+        assert!(matches!(
+            revocable.revoke(),
+            Err(capnp_rpc::RpcError::MembraneAlreadyRevoked)
+        ));
+
+        let policy_calls = Arc::new(AtomicUsize::new(0));
+        let membrane = capnp_rpc::Membrane::new(Arc::new(CountPolicy {
+            calls: Arc::clone(&policy_calls),
+        }));
+        let target = capnp_rpc::LocalClient::new(
+            Arc::clone(&schema),
+            Arc::new(RecordingService {
+                response: Arc::clone(&response),
+                methods: Arc::new(Mutex::new(Vec::new())),
+            }),
+        );
+        let client = membrane.wrap(target);
+        membrane.revoke("policy test").expect("membrane revoke");
+        block_on(client.call_untyped(1, 0, response).response())
+            .expect_err("revoked forward fails");
+        assert_eq!(
+            policy_calls.load(Ordering::SeqCst),
+            1,
+            "new calls still consult policy with a broken target after revocation"
+        );
+    }
+
+    struct PassPolicy;
+
+    impl capnp_rpc::MembranePolicy for PassPolicy {}
+
+    struct CountPolicy {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl capnp_rpc::MembranePolicy for CountPolicy {
+        fn inbound_call(
+            &self,
+            _interface_id: u64,
+            _method_id: u16,
+            _target: &capnp_rpc::LocalClient,
+        ) -> capnp_rpc::MembraneDecision {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            capnp_rpc::MembraneDecision::Forward
+        }
+    }
+
+    struct WakeCount(AtomicUsize);
+
+    impl Wake for WakeCount {
+        fn wake(self: Arc<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn wake_by_ref(self: &Arc<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    struct RedirectPolicy {
+        redirect: capnp_rpc::LocalClient,
+    }
+
+    impl capnp_rpc::MembranePolicy for RedirectPolicy {
+        fn inbound_call(
+            &self,
+            _interface_id: u64,
+            method_id: u16,
+            _target: &capnp_rpc::LocalClient,
+        ) -> capnp_rpc::MembraneDecision {
+            match method_id {
+                1 => capnp_rpc::MembraneDecision::Redirect(self.redirect.clone()),
+                2 => capnp_rpc::MembraneDecision::Reject(capnp_rpc::CapabilityFailure::Denied(
+                    "blocked by membrane policy".to_owned(),
+                )),
+                _ => capnp_rpc::MembraneDecision::Forward,
+            }
+        }
+
+        fn outbound_call(
+            &self,
+            _interface_id: u64,
+            method_id: u16,
+            _target: &capnp_rpc::LocalClient,
+        ) -> capnp_rpc::MembraneDecision {
+            self.inbound_call(0, method_id, _target)
+        }
+
+        fn should_resolve_before_redirecting(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn membrane_resolves_reflected_promises_before_redirecting_but_intercepts_settled_calls() {
+        let schema = streaming_schema();
+        let response = {
+            let mut arena = ExclusiveArena::new(1, 16).expect("policy response arena");
+            super::streaming::stream_result::Builder::init_root(&schema, &mut arena)
+                .expect("policy response root");
+            owned_arena(arena)
+        };
+        let outside_methods = Arc::new(Mutex::new(Vec::new()));
+        let outside = capnp_rpc::LocalClient::new(
+            Arc::clone(&schema),
+            Arc::new(RecordingService {
+                response: Arc::clone(&response),
+                methods: Arc::clone(&outside_methods),
+            }),
+        );
+        let redirect_methods = Arc::new(Mutex::new(Vec::new()));
+        let redirect = capnp_rpc::LocalClient::new(
+            Arc::clone(&schema),
+            Arc::new(RecordingService {
+                response: Arc::clone(&response),
+                methods: Arc::clone(&redirect_methods),
+            }),
+        );
+        let membrane = capnp_rpc::Membrane::new(Arc::new(RedirectPolicy { redirect }));
+        let inside_view = membrane.reverse_wrap(outside.clone());
+        let (promise, resolver) = capnp_rpc::LocalClient::promise(Arc::clone(&schema));
+        let outside_promise = membrane.wrap(promise);
+        resolver
+            .fulfill(inside_view.clone())
+            .expect("reflected promise resolves");
+
+        block_on(
+            outside_promise
+                .call_untyped(1, 1, Arc::clone(&response))
+                .response(),
+        )
+        .expect("reflected promise bypasses redirect after unwrapping");
+        assert_eq!(*outside_methods.lock().expect("outside methods"), [1]);
+        assert!(
+            redirect_methods
+                .lock()
+                .expect("redirect methods")
+                .is_empty()
+        );
+
+        let error = block_on(
+            outside_promise
+                .call_untyped(1, 2, Arc::clone(&response))
+                .response(),
+        )
+        .expect_err("policy rejects blocked method");
+        assert!(format!("{error}").contains("blocked by membrane policy"));
+        assert_eq!(*outside_methods.lock().expect("outside methods"), [1]);
+
+        block_on(inside_view.call_untyped(1, 1, response).response())
+            .expect("settled outbound call redirects");
+        assert_eq!(*redirect_methods.lock().expect("redirect methods"), [1]);
+    }
+
+    #[test]
+    fn membrane_limits_reject_before_dispatch_or_registry_growth() {
+        let schema = streaming_schema();
+        let response = {
+            let mut arena = ExclusiveArena::new(1, 16).expect("limit response arena");
+            super::streaming::stream_result::Builder::init_root(&schema, &mut arena)
+                .expect("limit response root");
+            owned_arena(arena)
+        };
+        let methods = Arc::new(Mutex::new(Vec::new()));
+        let make_client = || {
+            capnp_rpc::LocalClient::new(
+                Arc::clone(&schema),
+                Arc::new(RecordingService {
+                    response: Arc::clone(&response),
+                    methods: Arc::clone(&methods),
+                }),
+            )
+        };
+        let wrapper_limited = capnp_rpc::Membrane::with_limits(
+            Arc::new(PassPolicy),
+            capnp_rpc::MembraneLimits {
+                max_wrappers: 1,
+                max_outstanding_calls: 4,
+            },
+        );
+        let first = wrapper_limited.wrap(make_client());
+        block_on(first.call_untyped(1, 0, Arc::clone(&response)).response())
+            .expect("first wrapper is admitted");
+        let rejected = wrapper_limited.wrap(make_client());
+        let error = block_on(
+            rejected
+                .call_untyped(1, 0, Arc::clone(&response))
+                .response(),
+        )
+        .expect_err("wrapper limit rejects");
+        assert!(format!("{error:?}").contains("MembraneLimit"));
+        assert_eq!(*methods.lock().expect("methods"), [0]);
+
+        let call_limited = capnp_rpc::Membrane::with_limits(
+            Arc::new(PassPolicy),
+            capnp_rpc::MembraneLimits {
+                max_wrappers: 1,
+                max_outstanding_calls: 0,
+            },
+        );
+        let rejected = call_limited.wrap(make_client());
+        let error = block_on(rejected.call_untyped(1, 3, response).response())
+            .expect_err("outstanding-call limit rejects");
+        assert!(format!("{error:?}").contains("MembraneLimit"));
+        assert_eq!(
+            *methods.lock().expect("methods"),
+            [0],
+            "limit failure occurs before target dispatch"
         );
     }
 

@@ -67,6 +67,7 @@ flow_control = "M37 executor-neutral send-now/ack/readiness split with fixed ext
 rpc_lifecycle = "M38 last-lease cancellation, application opt-out, legacy Finish deferral, noFinishNeeded handling, waiter-complete disconnect, surfaced shutdown errors, and disconnect-only reconnect classification"
 rpc_scheduling = "M39 concurrent, FIFO serial, and keyed scheduling; bounded CPU/generic/Tokio-style executors; dedicated-thread non-Send local state"
 local_capabilities = "M41 implementation candidate: promise/broken/disabled clients, shared and provisional pipelines, dynamic clients/servers, raw tail transfer, bounded capability lists, and exact-set local unwrap; activation awaits M40"
+revocation_membranes = "M42 implementation candidate: revocable servers and recursive bidirectional capability membranes with stable identity, promise resolution, policy interception, and bounded wrapper/call resources; activation awaits M40 and M41"
 parallel_read = "M29 zero-copy Arc-owned list partitions and deterministic retained-subtree work plans for scoped or external executors"
 parallel_build = "M30 disjoint primitive partitions plus sealed single-segment worker fragments with deterministic far-link finalization"
 batch_pipeline = "M31 bounded reservation-window scheduling for ordered concurrent process/build/pack work with no-pool single-item paths"
@@ -118,6 +119,20 @@ M37 = "complete"
 M38 = "complete"
 M39 = "complete"
 M41 = "implementation candidate; activation awaits M40 completion"
+M42 = "implementation candidate; activation awaits M40 and M41 activation"
+
+[evidence.M42]
+crates = ["crates/capnp-rpc", "crates/capnp-codegen", "crates/capnp-generated-fixture"]
+sources = ["pinned Cap'n Proto membrane.h and membrane.c++", "pinned capability.h RevocableServer", "pinned capability-test.c++ line 1420", "pinned membrane-test.c++ lines 189-398"]
+crossings = ["inside and outside clients wrap once", "same-policy reverse crossings unwrap", "request capability tables cross in the reverse direction", "results and provisional pipelines cross in the forward direction", "message-copy helpers transform every capability table entry"]
+identity_and_resolution = ["weak per-direction registries preserve wrapper identity without retaining targets", "promise wrappers resolve to stable wrapped targets", "concurrent resolution observes one identity", "reflected promises may resolve before policy redirection"]
+policy = ["Forward wraps the target", "Redirect returns the policy-selected capability without rewrapping", "Reject fails before target dispatch", "post-revocation policy calls receive a broken target"]
+revocation = ["outstanding forwarded calls are woken and fail", "later forwarded calls reject", "RevocableServer reports use without retaining clients", "one-shot revocation is explicit"]
+limits = ["checked wrapper registry bound", "checked outstanding forwarded-call bound", "limit failure occurs before target dispatch or registry growth"]
+oracle_check = "tools/verify-m42-membranes.sh: pinned C++ RevocableServer case and all 17 local/remote object, promise, copy, concurrent-resolution, reflection, and revoke membrane cases pass, followed by native ports"
+documentation = "docs/rpc/revocation-and-membranes.md"
+limitations = ["activation awaits the M40 release gate and M41 activation", "attached descriptors/resources remain M43", "distributed handoff/equality/persistence remain M44-M46"]
+validation = "focused generated/runtime tests and exact pinned C++ corpus pass; workspace Cargo all-target tests, doctests and compile-fail docs, rustdoc -D warnings, Clippy -D warnings, shell syntax, and complete 30-test Bazel suite pass"
 
 [evidence.M41]
 crates = ["crates/capnp-rpc", "crates/capnp-codegen", "crates/capnp-generated-fixture"]

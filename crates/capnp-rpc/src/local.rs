@@ -24,6 +24,8 @@ pub enum CapabilityFailure {
     Broken(String),
     Disabled,
     Rejected(String),
+    Revoked(String),
+    Denied(String),
 }
 
 impl fmt::Display for CapabilityFailure {
@@ -32,11 +34,61 @@ impl fmt::Display for CapabilityFailure {
             Self::Broken(reason) => write!(formatter, "broken capability: {reason}"),
             Self::Disabled => formatter.write_str("capability is disabled"),
             Self::Rejected(reason) => write!(formatter, "capability promise rejected: {reason}"),
+            Self::Revoked(reason) if reason.is_empty() => {
+                formatter.write_str("capability was revoked")
+            }
+            Self::Revoked(reason) => write!(formatter, "capability was revoked: {reason}"),
+            Self::Denied(reason) => write!(formatter, "membrane policy denied call: {reason}"),
         }
     }
 }
 
 impl std::error::Error for CapabilityFailure {}
+
+/// A local request message and its process-local capability table.
+#[derive(Clone, Debug)]
+pub struct LocalRequest {
+    message: Arc<OwnedMessage>,
+    capabilities: CapabilityList,
+}
+
+impl LocalRequest {
+    pub fn new(message: Arc<OwnedMessage>) -> Self {
+        Self {
+            message,
+            capabilities: CapabilityList::default(),
+        }
+    }
+
+    pub fn with_capabilities(message: Arc<OwnedMessage>, capabilities: CapabilityList) -> Self {
+        Self {
+            message,
+            capabilities,
+        }
+    }
+
+    pub fn message(&self) -> &Arc<OwnedMessage> {
+        &self.message
+    }
+
+    pub fn capabilities(&self) -> &CapabilityList {
+        &self.capabilities
+    }
+
+    pub fn into_message(self) -> Arc<OwnedMessage> {
+        self.message
+    }
+
+    pub fn into_parts(self) -> (Arc<OwnedMessage>, CapabilityList) {
+        (self.message, self.capabilities)
+    }
+}
+
+impl From<Arc<OwnedMessage>> for LocalRequest {
+    fn from(message: Arc<OwnedMessage>) -> Self {
+        Self::new(message)
+    }
+}
 
 /// A response message and its process-local capability table.
 #[derive(Clone, Debug)]
@@ -155,6 +207,19 @@ impl CapabilityList {
         self.entries.push(client);
         Ok(index)
     }
+
+    pub fn map_clients(
+        &self,
+        mut map: impl FnMut(LocalClient) -> LocalClient,
+    ) -> Result<Self, RpcError> {
+        Self::from_clients(
+            self.entries
+                .iter()
+                .cloned()
+                .map(|client| client.map(&mut map)),
+            self.limit,
+        )
+    }
 }
 
 /// A checked path through result pointer fields.
@@ -199,10 +264,25 @@ impl PipelineTransform {
 }
 
 /// Provisional capability paths published synchronously by a local call.
-#[derive(Clone, Debug)]
+type PipelineFallback =
+    Arc<dyn Fn(&PipelineTransform) -> Option<LocalClient> + Send + Sync + 'static>;
+
+#[derive(Clone)]
 pub struct PipelineBuilder {
     capabilities: BTreeMap<PipelineTransform, LocalClient>,
     limit: usize,
+    fallback: Option<PipelineFallback>,
+}
+
+impl fmt::Debug for PipelineBuilder {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PipelineBuilder")
+            .field("capabilities", &self.capabilities)
+            .field("limit", &self.limit)
+            .field("has_fallback", &self.fallback.is_some())
+            .finish()
+    }
 }
 
 impl Default for PipelineBuilder {
@@ -216,6 +296,7 @@ impl PipelineBuilder {
         Self {
             capabilities: BTreeMap::new(),
             limit,
+            fallback: None,
         }
     }
 
@@ -238,7 +319,19 @@ impl PipelineBuilder {
     }
 
     fn get(&self, transform: &PipelineTransform) -> Option<LocalClient> {
-        self.capabilities.get(transform).cloned()
+        self.capabilities.get(transform).cloned().or_else(|| {
+            self.fallback
+                .as_ref()
+                .and_then(|fallback| fallback(transform))
+        })
+    }
+
+    pub(crate) fn with_fallback(limit: usize, fallback: PipelineFallback) -> Self {
+        Self {
+            capabilities: BTreeMap::new(),
+            limit,
+            fallback: Some(fallback),
+        }
     }
 }
 
@@ -288,6 +381,13 @@ impl LocalCall {
     pub fn into_response(self) -> LocalResponseFuture {
         self.response
     }
+
+    pub(crate) fn from_parts(
+        response: LocalResponseFuture,
+        pipeline: Option<PipelineBuilder>,
+    ) -> Self {
+        Self { response, pipeline }
+    }
 }
 
 #[derive(Clone)]
@@ -301,8 +401,17 @@ struct SettledClient {
     registration: Option<RegisteredServer>,
 }
 
+pub(crate) trait ClientResolution: Send + Sync + 'static {
+    fn resolve(&self) -> BoxFuture<Result<LocalClient, RpcError>>;
+    fn try_resolve(&self) -> Option<LocalClient>;
+}
+
 enum ClientKind {
     Settled(SettledClient),
+    Proxy {
+        settled: SettledClient,
+        resolution: Arc<dyn ClientResolution>,
+    },
     Promise(Arc<PromiseState>),
     Pipeline(PipelineSource),
     Failed(CapabilityFailure),
@@ -317,6 +426,20 @@ struct ClientCore {
 pub struct LocalClient {
     schema: Arc<CompiledSchema>,
     core: Arc<ClientCore>,
+}
+
+pub(crate) struct WeakLocalClient {
+    schema: Weak<CompiledSchema>,
+    core: Weak<ClientCore>,
+}
+
+impl WeakLocalClient {
+    pub(crate) fn upgrade(&self) -> Option<LocalClient> {
+        Some(LocalClient {
+            schema: self.schema.upgrade()?,
+            core: self.core.upgrade()?,
+        })
+    }
 }
 
 impl fmt::Debug for LocalClient {
@@ -345,6 +468,25 @@ impl LocalClient {
                     service,
                     registration,
                 }),
+            }),
+        }
+    }
+
+    pub(crate) fn proxy(
+        schema: Arc<CompiledSchema>,
+        service: Arc<dyn LocalService>,
+        resolution: Arc<dyn ClientResolution>,
+    ) -> Self {
+        Self {
+            schema,
+            core: Arc::new(ClientCore {
+                kind: ClientKind::Proxy {
+                    settled: SettledClient {
+                        service,
+                        registration: None,
+                    },
+                    resolution,
+                },
             }),
         }
     }
@@ -399,6 +541,17 @@ impl LocalClient {
         Arc::ptr_eq(&self.core, &other.core)
     }
 
+    pub(crate) fn downgrade(&self) -> WeakLocalClient {
+        WeakLocalClient {
+            schema: Arc::downgrade(&self.schema),
+            core: Arc::downgrade(&self.core),
+        }
+    }
+
+    pub(crate) fn requires_resolution(&self) -> bool {
+        !matches!(self.core.kind, ClientKind::Settled(_))
+    }
+
     pub fn call<R, P>(
         &self,
         interface_id: u64,
@@ -410,7 +563,21 @@ impl LocalClient {
         R: TypedReader,
         P: PipelineBinding,
     {
-        let call = self.start_call(interface_id, method_id, params);
+        self.call_request(interface_id, method_id, LocalRequest::new(params), pipeline)
+    }
+
+    pub fn call_request<R, P>(
+        &self,
+        interface_id: u64,
+        method_id: u16,
+        request: LocalRequest,
+        pipeline: P,
+    ) -> PendingCall<R, P>
+    where
+        R: TypedReader,
+        P: PipelineBinding,
+    {
+        let call = self.start_request(interface_id, method_id, request);
         let source = PipelineSource::root(Arc::clone(&self.schema), call.clone());
         PendingCall {
             call,
@@ -426,9 +593,18 @@ impl LocalClient {
         method_id: u16,
         params: Arc<OwnedMessage>,
     ) -> StreamingCall {
+        self.call_streaming_request(interface_id, method_id, LocalRequest::new(params))
+    }
+
+    pub fn call_streaming_request(
+        &self,
+        interface_id: u64,
+        method_id: u16,
+        request: LocalRequest,
+    ) -> StreamingCall {
         // Starting the call remains synchronous so generated streaming calls
         // retain their send-now/E-order contract.
-        let call = self.start_call(interface_id, method_id, params);
+        let call = self.start_request(interface_id, method_id, request);
         StreamingCall {
             completion: Box::pin(async move {
                 call.await_response().await?;
@@ -444,7 +620,17 @@ impl LocalClient {
         method_id: u16,
         params: Arc<OwnedMessage>,
     ) -> UntypedPendingCall {
-        let call = self.start_call(interface_id, method_id, params);
+        self.call_untyped_request(interface_id, method_id, LocalRequest::new(params))
+    }
+
+    #[doc(hidden)]
+    pub fn call_untyped_request(
+        &self,
+        interface_id: u64,
+        method_id: u16,
+        request: LocalRequest,
+    ) -> UntypedPendingCall {
+        let call = self.start_request(interface_id, method_id, request);
         UntypedPendingCall {
             pipeline: UntypedPipeline {
                 source: PipelineSource::root(Arc::clone(&self.schema), call.clone()),
@@ -466,6 +652,9 @@ impl LocalClient {
                 }
                 match &current.core.kind {
                     ClientKind::Settled(_) => return Ok(current),
+                    ClientKind::Proxy { resolution, .. } => {
+                        current = resolution.resolve().await?;
+                    }
                     ClientKind::Failed(failure) => {
                         return Err(RpcError::LocalCapability(failure.clone()));
                     }
@@ -483,11 +672,12 @@ impl LocalClient {
         })
     }
 
-    fn try_resolved(&self) -> Option<LocalClient> {
+    pub(crate) fn try_resolved(&self) -> Option<LocalClient> {
         let mut current = self.clone();
         for _ in 0..64 {
             match &current.core.kind {
                 ClientKind::Settled(_) => return Some(current),
+                ClientKind::Proxy { resolution, .. } => current = resolution.try_resolve()?,
                 ClientKind::Failed(_) => return None,
                 ClientKind::Promise(state) => current = state.try_resolved()?,
                 ClientKind::Pipeline(pipeline) => current = pipeline.try_resolved_client()?,
@@ -518,6 +708,10 @@ impl LocalClient {
                     Some(client) => client,
                     None => return false,
                 },
+                ClientKind::Proxy { resolution, .. } => match resolution.try_resolve() {
+                    Some(client) => client,
+                    None => return false,
+                },
                 ClientKind::Settled(_) | ClientKind::Failed(_) => return false,
             };
         }
@@ -529,10 +723,19 @@ impl LocalClient {
         method_id: u16,
         params: Arc<OwnedMessage>,
     ) -> SharedCall {
+        self.start_request(interface_id, method_id, LocalRequest::new(params))
+    }
+
+    pub(crate) fn start_request(
+        &self,
+        interface_id: u64,
+        method_id: u16,
+        request: LocalRequest,
+    ) -> SharedCall {
         match &self.core.kind {
-            ClientKind::Settled(settled) => {
+            ClientKind::Settled(settled) | ClientKind::Proxy { settled, .. } => {
                 let LocalCall { response, pipeline } =
-                    Arc::clone(&settled.service).dispatch_call(interface_id, method_id, params);
+                    Arc::clone(&settled.service).dispatch_request(interface_id, method_id, request);
                 SharedCall::new(response, pipeline.unwrap_or_default())
             }
             ClientKind::Failed(failure) => {
@@ -544,7 +747,7 @@ impl LocalClient {
                     Box::pin(async move {
                         let target = pipeline.resolve_client().await?;
                         target
-                            .start_call(interface_id, method_id, params)
+                            .start_request(interface_id, method_id, request)
                             .await_response()
                             .await
                     }),
@@ -552,7 +755,7 @@ impl LocalClient {
                 )
             }
             ClientKind::Promise(state) => {
-                state.enqueue(interface_id, method_id, params, Arc::clone(&self.schema))
+                state.enqueue(interface_id, method_id, request, Arc::clone(&self.schema))
             }
         }
     }
@@ -561,7 +764,7 @@ impl LocalClient {
 struct QueuedCall {
     interface_id: u64,
     method_id: u16,
-    params: Arc<OwnedMessage>,
+    request: LocalRequest,
     deferred: DeferredCallResolver,
 }
 
@@ -595,7 +798,7 @@ impl PromiseState {
         &self,
         interface_id: u64,
         method_id: u16,
-        params: Arc<OwnedMessage>,
+        request: LocalRequest,
         _schema: Arc<CompiledSchema>,
     ) -> SharedCall {
         let (future, deferred, state) = deferred_call();
@@ -607,7 +810,7 @@ impl PromiseState {
                     inner.calls.push_back(QueuedCall {
                         interface_id,
                         method_id,
-                        params,
+                        request,
                         deferred,
                     });
                     return outer;
@@ -620,7 +823,7 @@ impl PromiseState {
                 QueuedCall {
                     interface_id,
                     method_id,
-                    params,
+                    request,
                     deferred,
                 },
                 &resolution,
@@ -660,7 +863,7 @@ impl PromiseState {
 
 fn assign_queued(call: QueuedCall, resolution: &Result<LocalClient, CapabilityFailure>) {
     let assigned = match resolution {
-        Ok(client) => client.start_call(call.interface_id, call.method_id, call.params),
+        Ok(client) => client.start_request(call.interface_id, call.method_id, call.request),
         Err(failure) => SharedCall::failed(RpcError::LocalCapability(failure.clone())),
     };
     call.deferred.assign(assigned);
@@ -747,7 +950,7 @@ impl Drop for PromiseClientResolver {
 }
 
 #[derive(Clone)]
-struct SharedCall {
+pub(crate) struct SharedCall {
     inner: Arc<SharedCallInner>,
     pipeline: SharedPipeline,
 }
@@ -866,7 +1069,7 @@ impl SharedCall {
         Poll::Ready(output)
     }
 
-    fn await_response(&self) -> SharedCallFuture {
+    pub(crate) fn await_response(&self) -> SharedCallFuture {
         SharedCallFuture { call: self.clone() }
     }
 
@@ -877,7 +1080,7 @@ impl SharedCall {
         }
     }
 
-    fn provisional(&self, transform: &PipelineTransform) -> Option<LocalClient> {
+    pub(crate) fn provisional(&self, transform: &PipelineTransform) -> Option<LocalClient> {
         match &self.pipeline {
             SharedPipeline::Local(pipeline) => lock(pipeline).get(transform),
             SharedPipeline::Deferred(state) => {
@@ -894,7 +1097,7 @@ fn clone_shared_result(
     result.clone().map_err(RpcError::Shared)
 }
 
-struct SharedCallFuture {
+pub(crate) struct SharedCallFuture {
     call: SharedCall,
 }
 
@@ -1269,6 +1472,33 @@ pub fn direct_tail_call(
 ) -> LocalResponseFuture {
     let call = client.start_call(interface_id, method_id, params);
     Box::pin(async move { call.await_response().await })
+}
+
+pub(crate) fn deferred_client_call(
+    client: BoxFuture<Result<LocalClient, RpcError>>,
+    interface_id: u64,
+    method_id: u16,
+    request: LocalRequest,
+) -> LocalCall {
+    let (deferred, resolver, state) = deferred_call();
+    let response = Box::pin(async move {
+        match client.await {
+            Ok(client) => resolver.assign(client.start_request(interface_id, method_id, request)),
+            Err(error) => resolver.assign(SharedCall::failed(error)),
+        }
+        deferred.await
+    });
+    let shared = SharedCall::deferred(response, state);
+    let response = {
+        let shared = shared.clone();
+        Box::pin(async move { shared.await_response().await }) as LocalResponseFuture
+    };
+    let pipeline_call = shared;
+    let pipeline = PipelineBuilder::with_fallback(
+        DEFAULT_CAPABILITY_LIMIT,
+        Arc::new(move |transform| pipeline_call.provisional(transform)),
+    );
+    LocalCall::from_parts(response, Some(pipeline))
 }
 
 /// Reduces a future of a remote-style pending call to one pending response.

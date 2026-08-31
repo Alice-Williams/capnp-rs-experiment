@@ -26,6 +26,7 @@ mod driver;
 mod dynamic;
 mod flow;
 mod local;
+mod membrane;
 mod reconnect;
 mod scheduler;
 
@@ -48,10 +49,12 @@ pub use flow::{
 };
 pub use local::{
     CapabilityFailure, CapabilityList, CapabilityPipeline, CapabilityServerSet, FromLocalClient,
-    LocalCall, LocalClient, LocalResponse, PendingCall, PipelineBinding, PipelineBuilder,
-    PipelineSource, PipelineTransform, PromiseClientResolver, StreamingCall, TypedPipeline,
-    UntypedPendingCall, UntypedPipeline, direct_tail_call, flatten_pending, tail_call,
+    LocalCall, LocalClient, LocalRequest, LocalResponse, PendingCall, PipelineBinding,
+    PipelineBuilder, PipelineSource, PipelineTransform, PromiseClientResolver, StreamingCall,
+    TypedPipeline, UntypedPendingCall, UntypedPipeline, direct_tail_call, flatten_pending,
+    tail_call,
 };
+pub use membrane::{Membrane, MembraneDecision, MembraneLimits, MembranePolicy, RevocableServer};
 pub use reconnect::{
     CapabilityReconnector, ReconnectLease, RetryDisposition, classify_connection_error,
     classify_exception,
@@ -67,15 +70,30 @@ pub type LocalResponseFuture = BoxFuture<Result<LocalResponse, RpcError>>;
 
 #[derive(Debug)]
 pub enum RpcError {
-    Unimplemented { interface_id: u64, method_id: u16 },
+    Unimplemented {
+        interface_id: u64,
+        method_id: u16,
+    },
     UnknownInterface(u64),
-    UnknownMethod { interface_id: u64, method_id: u16 },
+    UnknownMethod {
+        interface_id: u64,
+        method_id: u16,
+    },
     MissingResponse,
     LocalCapability(CapabilityFailure),
     Shared(Arc<RpcError>),
-    CapabilityLimit { requested: usize, limit: usize },
-    CapabilityIndex { index: usize, length: usize },
-    PipelineLimit { requested: usize, limit: usize },
+    CapabilityLimit {
+        requested: usize,
+        limit: usize,
+    },
+    CapabilityIndex {
+        index: usize,
+        length: usize,
+    },
+    PipelineLimit {
+        requested: usize,
+        limit: usize,
+    },
     DuplicatePipelinePath,
     PipelineAlreadySet,
     PromiseAlreadyResolved,
@@ -83,10 +101,25 @@ pub enum RpcError {
     MissingCapability(u32),
     UnboundPipeline,
     DynamicNotInterface(u64),
-    DynamicMethodName { interface_id: u64, name: String },
-    DynamicField { type_id: u64, name: String },
-    DynamicPipelineType { type_id: u64, name: String },
+    DynamicMethodName {
+        interface_id: u64,
+        name: String,
+    },
+    DynamicField {
+        type_id: u64,
+        name: String,
+    },
+    DynamicPipelineType {
+        type_id: u64,
+        name: String,
+    },
     DynamicUntypedCapability,
+    MembraneAlreadyRevoked,
+    MembraneLimit {
+        resource: &'static str,
+        requested: usize,
+        limit: usize,
+    },
     Scheduler(SchedulerError),
     PipelineExpectedStruct,
     PipelineExpectedCapability,
@@ -142,6 +175,15 @@ pub trait LocalService: Send + Sync + 'static {
         params: Arc<OwnedMessage>,
     ) -> LocalCall {
         LocalCall::from_message_future(self.dispatch(interface_id, method_id, params))
+    }
+
+    fn dispatch_request(
+        self: Arc<Self>,
+        interface_id: u64,
+        method_id: u16,
+        request: LocalRequest,
+    ) -> LocalCall {
+        self.dispatch_call(interface_id, method_id, request.into_message())
     }
 }
 

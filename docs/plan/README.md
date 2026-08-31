@@ -100,7 +100,7 @@ wire safety or protocol ordering.
 ### Phase 7 — Maximum RPC and C++ product parity
 
 - [M41 — Mature local capability utilities](milestones/M41-local-capability-utilities.md) — implementation candidate; activation awaits M40
-- [M42 — Revocation and membranes](milestones/M42-revocation-and-membranes.md)
+- [M42 — Revocation and membranes](milestones/M42-revocation-and-membranes.md) — implementation candidate; activation awaits M40 and M41
 - [M43 — Attached descriptors/resources](milestones/M43-attached-resources.md)
 - [M44 — Level-3 introductions and handoffs](milestones/M44-level-3-handoffs.md)
 - [M45 — Level-4 Join and distributed equality](milestones/M45-level-4-join.md)

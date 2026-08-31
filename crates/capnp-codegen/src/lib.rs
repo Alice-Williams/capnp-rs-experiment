@@ -1331,7 +1331,7 @@ fn emit_interface(
             "Reader",
         )?;
         if method.result_struct_type == STREAM_RESULT_TYPE_ID {
-            writeln!(output, "        pub fn {method_name}{method_generics}(&self, params: Arc<capnp_message::OwnedMessage>) -> capnp_rpc::StreamingCall {{ self.inner.call_streaming(TYPE_ID, {}, params) }}", method.code_order)
+            writeln!(output, "        pub fn {method_name}{method_generics}(&self, params: impl Into<capnp_rpc::LocalRequest>) -> capnp_rpc::StreamingCall {{ self.inner.call_streaming_request(TYPE_ID, {}, params.into()) }}", method.code_order)
                 .map_err(|_| GenerateError::Format)?;
         } else {
             let results = method_struct_type(
@@ -1353,7 +1353,7 @@ fn emit_interface(
                 "Pipeline",
             )?;
             let pipeline_expression = expression_path(&pipeline);
-            writeln!(output, "        pub fn {method_name}{method_generics}(&self, params: Arc<capnp_message::OwnedMessage>) -> capnp_rpc::PendingCall<{results}, {pipeline}> {{ self.inner.call(TYPE_ID, {}, params, {pipeline_expression}::root()) }}", method.code_order)
+            writeln!(output, "        pub fn {method_name}{method_generics}(&self, params: impl Into<capnp_rpc::LocalRequest>) -> capnp_rpc::PendingCall<{results}, {pipeline}> {{ self.inner.call_request(TYPE_ID, {}, params.into(), {pipeline_expression}::root()) }}", method.code_order)
                 .map_err(|_| GenerateError::Format)?;
         }
         let _ = params;
