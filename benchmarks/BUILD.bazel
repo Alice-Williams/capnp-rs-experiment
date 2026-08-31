@@ -29,3 +29,15 @@ sh_test(
     srcs = ["verify-m29-parallel-results.sh"],
     data = glob(["results/2026-08-31-m29-g-drive-docker/**"]),
 )
+
+sh_test(
+    name = "m30_parallel_runner_syntax_test",
+    srcs = ["run-m30-parallel-build.sh"],
+    args = ["--syntax-check-only"],
+)
+
+sh_test(
+    name = "m30_parallel_results_test",
+    srcs = ["verify-m30-parallel-results.sh"],
+    data = glob(["results/2026-08-31-m30-g-drive-docker/**"]),
+)

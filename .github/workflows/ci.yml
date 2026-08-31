@@ -26,6 +26,7 @@ jobs:
         run: |
           cargo test -p capnp-message --features loom-tests loom_proves_competing_charges_preserve_the_hard_limit
           cargo test -p capnp-message --features loom-tests loom_parallel_plan_preserves_precharge_and_nested_budget
+          cargo test -p capnp-message --features loom-tests loom_lane_arrival_order_finalizes_deterministically
 
       - name: Check public API examples and compile failures
         run: cargo test --workspace --doc
@@ -54,3 +55,15 @@ jobs:
 
       - name: Test Bazel workspace
         run: bazel test //...
+
+  miri-partitioned-builder:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Miri
+        run: rustup toolchain install nightly-2026-08-31 --profile minimal --component miri
+
+      - name: Check disjoint partition storage under Miri
+        run: cargo +nightly-2026-08-31 miri test -p capnp-message miri_disjoint_primitive_partitions_do_not_alias

@@ -337,6 +337,40 @@ impl ExclusiveArena {
             .collect()
     }
 
+    pub(crate) fn primitive_list_storage_mut<T: PrimitiveListValue>(
+        &mut self,
+        reference: ListOffset,
+    ) -> Result<&mut [u8], ArenaError> {
+        if reference.arena_id != self.arena_id || reference.element_size != T::ELEMENT_SIZE {
+            return Err(ArenaError::AllocationOverflow);
+        }
+        let start = byte_offset(reference.content)?;
+        let bytes = usize::try_from(reference.content_words)
+            .ok()
+            .and_then(|words| words.checked_mul(8))
+            .ok_or(ArenaError::AllocationOverflow)?;
+        let end = start
+            .checked_add(bytes)
+            .ok_or(ArenaError::AllocationOverflow)?;
+        self.segment_mut(reference.content.segment_id)?
+            .get_mut(start..end)
+            .ok_or(ArenaError::AllocationOverflow)
+    }
+
+    pub(crate) fn set_pointer_list_far(
+        &mut self,
+        reference: ListOffset,
+        index: u32,
+        target_segment: u32,
+    ) -> Result<(), ArenaError> {
+        if reference.arena_id != self.arena_id || reference.element_size != ElementSize::Pointer {
+            return Err(ArenaError::AllocationOverflow);
+        }
+        check_index(index, reference.element_count)?;
+        let slot = add_words(reference.content, u64::from(index))?;
+        self.write_pointer(slot, WirePointer::new_far(false, 0, target_segment)?)
+    }
+
     /// Initializes the root once and returns the arena's exclusive struct view.
     pub fn init_root_struct(
         &mut self,

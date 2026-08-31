@@ -65,3 +65,19 @@ The checked-in qualification run is
 threshold, and sizes can be changed with the `M29_BENCH_*` environment
 variables; altered runs are evidence for that configuration, not the default
 gate.
+
+## Partitioned-build benchmark
+
+M30 compares the ordinary exclusive arena with byte-identical construction
+through disjoint mutable primitive-list partitions. The deterministic workload
+includes CPU work representative of independent application encoding, then
+checks every serial and parallel output byte. Four-worker qualification is
+2.5x and below-threshold cases must stay on one partition within 5%:
+
+```console
+bash benchmarks/run-m30-parallel-build.sh benchmarks/results/<run-name>
+```
+
+The checked-in qualification run is
+`results/2026-08-31-m30-g-drive-docker`. `M30_BENCH_*` variables control work,
+workers, samples, threshold, and sizes for new non-overwriting runs.

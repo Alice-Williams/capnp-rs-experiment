@@ -14,6 +14,8 @@ mod list;
 mod owned;
 #[cfg(all(feature = "std", target_has_atomic = "64"))]
 mod parallel;
+#[cfg(all(feature = "std", target_has_atomic = "64"))]
+mod parallel_builder;
 mod primitive;
 mod structure;
 mod validation;
@@ -51,6 +53,11 @@ pub use owned::{
 pub use parallel::{
     ListPartition, ListPartitionPlan, MapReduceError, ParallelReadOptions, PlanError, SubtreeBatch,
     SubtreePlan, SubtreeWork,
+};
+#[cfg(all(feature = "std", target_has_atomic = "64"))]
+pub use parallel_builder::{
+    BuildLane, ParallelBuildError, ParallelBuildOptions, PartitionedPointerList,
+    PartitionedPrimitiveList, PrimitiveBuildPartition, SealedBuildLane,
 };
 pub use primitive::{DataSection, EnumValue, PrimitiveError, PrimitiveType, PrimitiveValue};
 pub use structure::{

@@ -76,6 +76,11 @@ Native [parallel immutable reads](docs/tooling/parallel-read.md) share owned
 messages without copying, preserve exact traversal accounting across workers,
 and expose executor-neutral list partitions and deterministic subtree batches.
 
+Opt-in [partitioned parallel construction](docs/tooling/parallel-build.md)
+provides disjoint primitive-list slices and sealed worker fragments with
+deterministic far-pointer finalization, while keeping ordinary builders
+exclusive and capability registration out of the concurrent boundary.
+
 This is experimental software and is not yet suitable for production use.
 
 ## License
