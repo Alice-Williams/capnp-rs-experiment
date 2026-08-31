@@ -26,15 +26,15 @@ bash benchmarks/verify-m39-server-scheduling-results.sh \
 # This workspace forbids unsafe Rust. The hostile decoders, exact shared
 # budgets, bounded actor tables, disconnect cleanup, and shell/compile gates
 # therefore make up the M40 security boundary.
-if rg -n --glob '*.rs' 'unsafe[[:space:]]*\{' crates; then
+if git grep -n -E 'unsafe[[:space:]]*\{' -- '*.rs'; then
   printf 'M40 security gate failed: unsafe block found\n' >&2
   exit 1
 fi
 cargo test --quiet -p capnp-message --features loom-tests \
   loom_proves_competing_charges_preserve_the_hard_limit
 cargo test --quiet -p capnp-rpc-core actor::tests
-cargo +nightly miri test --quiet -p capnp-wire
-cargo +nightly miri test --quiet -p capnp-message \
+cargo +nightly-2026-08-31 miri test --quiet -p capnp-wire
+cargo +nightly-2026-08-31 miri test --quiet -p capnp-message \
   miri_disjoint_primitive_partitions_do_not_alias
 bash tools/check-shell-syntax.sh
 

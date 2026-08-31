@@ -1,6 +1,6 @@
 format_version=1
 candidate=1.0.0-rc.1
-base_git_commit=9f23b0fe71a7fe4bc9c3852042c4d7d87821baa5
+base_git_commit=c99fd72123816fbef3c26d94ecd412a6837502d5
 environment=Debian Trixie dev container under Docker Desktop
 kernel=Linux 6.18.33.2-microsoft-standard-WSL2 x86_64
 cpu_model=Intel(R) Core(TM) i7-6700K CPU @ 4.00GHz
