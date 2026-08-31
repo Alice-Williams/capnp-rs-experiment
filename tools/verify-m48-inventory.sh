@@ -31,7 +31,7 @@ for phrase in \
   'multi-day full-platform fault/soak' \
   'former nested-interface declaration compiler blocker is resolved' \
   'C++ facilities that are Rust-inapplicable' \
-  'Performance artifacts' \
+  'performance blocker is resolved' \
   'final security gate'
 do
   grep -Fq "$phrase" "$audit"
