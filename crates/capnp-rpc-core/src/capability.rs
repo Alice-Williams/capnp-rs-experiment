@@ -472,6 +472,11 @@ impl CapabilityTables {
             CapDescriptor::ReceiverAnswer(promised_answer) => {
                 Ok(ReceivedCapability::ReceiverAnswer(promised_answer.clone()))
             }
+            CapDescriptor::ThirdPartyHosted(third_party) => {
+                // A Level-3 pickup may run concurrently, but the vine is an
+                // ordinary sender export and remains the fail-safe route.
+                self.receive(&CapDescriptor::SenderHosted(third_party.vine_id))
+            }
             CapDescriptor::Attached {
                 descriptor,
                 resource,
@@ -675,7 +680,9 @@ fn reference_total(mut values: impl Iterator<Item = u64>) -> u64 {
 #[allow(clippy::panic)]
 mod tests {
     use super::*;
-    use crate::{OwnedResource, bind_attached_resources};
+    use crate::{
+        OwnedResource, ThirdPartyCapDescriptor, ThirdPartyToContact, bind_attached_resources,
+    };
 
     #[test]
     fn duplicate_descriptors_share_identity_but_count_exactly() {
@@ -725,6 +732,28 @@ mod tests {
             Ok(ReceivedCapability::Hosted(hosted))
         );
         assert_eq!(owner.stats().export_references, 1);
+    }
+
+    #[test]
+    fn third_party_descriptor_keeps_the_vine_as_an_exact_fallback_import() {
+        let mut receiver = CapabilityTables::new(8, 8);
+        let descriptor = CapDescriptor::ThirdPartyHosted(ThirdPartyCapDescriptor {
+            id: ThirdPartyToContact::null(),
+            vine_id: 6,
+        });
+        assert_eq!(
+            receiver.receive(&descriptor),
+            Ok(ReceivedCapability::Imported(6))
+        );
+        assert_eq!(receiver.stats().import_references, 1);
+        assert_eq!(
+            receiver.release_import(6, 1),
+            Ok(ReleaseMessage {
+                id: 6,
+                reference_count: 1,
+            })
+        );
+        assert_eq!(receiver.stats(), CapabilityStats::default());
     }
 
     #[test]

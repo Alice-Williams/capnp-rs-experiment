@@ -16,9 +16,10 @@ use capnp_schema::{
 };
 
 use crate::level0::{
-    BootstrapMessage, CallMessage, DisembargoMessage, FinishMessage, ReleaseMessage,
-    ResolveMessage, ReturnMessage, bind_attached_resources, read_bootstrap, read_call,
-    read_disembargo, read_finish, read_release, read_resolve, read_return,
+    AcceptMessage, BootstrapMessage, CallMessage, DisembargoMessage, FinishMessage, ProvideMessage,
+    ReleaseMessage, ResolveMessage, ReturnMessage, ThirdPartyAnswerMessage,
+    bind_attached_resources, read_accept, read_bootstrap, read_call, read_disembargo, read_finish,
+    read_provide, read_release, read_resolve, read_return, read_third_party_answer,
 };
 use crate::{OwnedResource, ResourceBindingStats, ReturnPayload};
 
@@ -44,6 +45,7 @@ pub struct ProtocolLimits {
     pub max_trace_bytes: usize,
     pub max_cap_table_entries: usize,
     pub max_pipeline_ops: usize,
+    pub max_embargo_id_bytes: usize,
 }
 
 impl Default for ProtocolLimits {
@@ -54,6 +56,7 @@ impl Default for ProtocolLimits {
             max_trace_bytes: 1024 * 1024,
             max_cap_table_entries: 4096,
             max_pipeline_ops: 64,
+            max_embargo_id_bytes: 1024,
         }
     }
 }
@@ -124,6 +127,9 @@ pub enum ProtocolMessage {
     Resolve(ResolveMessage),
     Release(ReleaseMessage),
     Disembargo(DisembargoMessage),
+    Provide(ProvideMessage),
+    Accept(AcceptMessage),
+    ThirdPartyAnswer(ThirdPartyAnswerMessage),
     /// Includes both later-level messages and discriminants added by a newer
     /// schema revision. The M40 Level-1 boundary assigns neither semantics.
     Unsupported {
@@ -173,6 +179,7 @@ pub enum ProtocolError {
     FieldType(&'static str),
     UnsupportedFeature(&'static str),
     InvalidAttachedResourceIndex,
+    InvalidThirdPartyAnswerId(u32),
     InvalidReferenceCount,
     InvalidPipelineTransform,
     Limit {
@@ -200,6 +207,10 @@ impl fmt::Display for ProtocolError {
             Self::InvalidAttachedResourceIndex => {
                 formatter.write_str("RPC attached resource index 255 is reserved for no resource")
             }
+            Self::InvalidThirdPartyAnswerId(id) => write!(
+                formatter,
+                "RPC third-party answer ID {id} is outside the callee range [2^30, 2^31)"
+            ),
             Self::InvalidReferenceCount => {
                 formatter.write_str("RPC release reference count must be non-zero")
             }
@@ -229,6 +240,7 @@ impl std::error::Error for ProtocolError {
             | Self::FieldType(_)
             | Self::UnsupportedFeature(_)
             | Self::InvalidAttachedResourceIndex
+            | Self::InvalidThirdPartyAnswerId(_)
             | Self::InvalidReferenceCount
             | Self::InvalidPipelineTransform
             | Self::Limit { .. }
@@ -374,6 +386,11 @@ fn read_protocol_struct_with_limits(
         5 => Ok(ProtocolMessage::Resolve(read_resolve(&root, limits)?)),
         6 => Ok(ProtocolMessage::Release(read_release(&root)?)),
         13 => Ok(ProtocolMessage::Disembargo(read_disembargo(&root, limits)?)),
+        10 => Ok(ProtocolMessage::Provide(read_provide(&root, limits)?)),
+        11 => Ok(ProtocolMessage::Accept(read_accept(&root, limits)?)),
+        14 => Ok(ProtocolMessage::ThirdPartyAnswer(read_third_party_answer(
+            &root, limits,
+        )?)),
         discriminant => Ok(ProtocolMessage::Unsupported { discriminant }),
     }
 }

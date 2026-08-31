@@ -36,6 +36,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         max_trace_bytes: 4096,
         max_cap_table_entries: 64,
         max_pipeline_ops: 16,
+        max_embargo_id_bytes: 256,
     };
     let seeds = seed_messages(limits)?;
     let mut random = Random::new(seed);

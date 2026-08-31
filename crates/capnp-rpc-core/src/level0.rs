@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use capnp_message::{ExclusiveArena, OwnedMessage};
-use capnp_schema::{DynamicAnyPointer, DynamicInput, DynamicStruct, DynamicValue};
+use capnp_schema::{DynamicAnyPointer, DynamicInput, DynamicStruct, DynamicValue, OpaquePointer};
 
 use crate::protocol::{
     MESSAGE_TYPE_ID, ProtocolError, ProtocolLimits, RpcException, opaque_root, owned,
@@ -27,6 +27,41 @@ pub enum CallTarget {
     BootstrapAnswer(u32),
     ImportedCap(u32),
     PromisedAnswer(PromisedAnswer),
+}
+
+macro_rules! third_party_token {
+    ($name:ident) => {
+        #[derive(Clone, Debug, Eq, PartialEq)]
+        pub struct $name(OpaquePointer);
+
+        impl $name {
+            pub fn from_opaque(value: OpaquePointer) -> Self {
+                Self(value)
+            }
+
+            pub fn null() -> Self {
+                Self(OpaquePointer::null())
+            }
+
+            pub fn as_opaque(&self) -> &OpaquePointer {
+                &self.0
+            }
+
+            pub fn into_opaque(self) -> OpaquePointer {
+                self.0
+            }
+        }
+    };
+}
+
+third_party_token!(ThirdPartyToContact);
+third_party_token!(ThirdPartyToAwait);
+third_party_token!(ThirdPartyCompletion);
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ThirdPartyCapDescriptor {
+    pub id: ThirdPartyToContact,
+    pub vine_id: u32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -48,6 +83,7 @@ pub enum CapDescriptor {
     SenderPromise(u32),
     ReceiverHosted(u32),
     ReceiverAnswer(PromisedAnswer),
+    ThirdPartyHosted(ThirdPartyCapDescriptor),
     /// A normal descriptor plus the orthogonal pinned `attachedFd` field.
     Attached {
         descriptor: Box<CapDescriptor>,
@@ -146,10 +182,11 @@ pub struct ResolveMessage {
     pub resolution: PromiseResolution,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DisembargoContext {
     SenderLoopback(u32),
     ReceiverLoopback(u32),
+    Accept(Vec<u8>),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -158,10 +195,11 @@ pub struct DisembargoMessage {
     pub context: DisembargoContext,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SendResultsTo {
     Caller,
     Yourself,
+    ThirdParty(ThirdPartyToContact),
 }
 
 #[derive(Clone, Debug)]
@@ -191,6 +229,27 @@ pub enum ReturnPayload {
     Canceled,
     ResultsSentElsewhere,
     TakeFromOtherQuestion(u32),
+    AwaitFromThirdParty(ThirdPartyToAwait),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProvideMessage {
+    pub question_id: u32,
+    pub target: CallTarget,
+    pub recipient: ThirdPartyToAwait,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AcceptMessage {
+    pub question_id: u32,
+    pub provision: ThirdPartyCompletion,
+    pub embargo: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ThirdPartyAnswerMessage {
+    pub completion: ThirdPartyCompletion,
+    pub answer_id: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -361,6 +420,9 @@ fn encode_call_with_opaque_options(
             match send_results_to {
                 SendResultsTo::Caller => output.activate("caller")?,
                 SendResultsTo::Yourself => output.activate("yourself")?,
+                SendResultsTo::ThirdParty(contact) => {
+                    output.set("thirdParty", DynamicInput::Pointer(contact.as_opaque()))?;
+                }
             }
         }
         {
@@ -518,6 +580,9 @@ pub fn encode_disembargo(
     context: DisembargoContext,
     limits: ProtocolLimits,
 ) -> Result<Arc<OwnedMessage>, ProtocolError> {
+    if let DisembargoContext::Accept(id) = &context {
+        check_embargo_id(id, limits)?;
+    }
     let schema = protocol_schema()?;
     let mut arena = arena(limits)?;
     {
@@ -534,7 +599,99 @@ pub fn encode_disembargo(
             DisembargoContext::ReceiverLoopback(id) => {
                 output.set("receiverLoopback", DynamicInput::UInt32(id))?;
             }
+            DisembargoContext::Accept(id) => {
+                output.set("accept", DynamicInput::Data(&id))?;
+            }
         }
+    }
+    owned(arena, limits)
+}
+
+pub fn encode_provide(
+    message: &ProvideMessage,
+    limits: ProtocolLimits,
+) -> Result<Arc<OwnedMessage>, ProtocolError> {
+    let schema = protocol_schema()?;
+    let mut arena = arena(limits)?;
+    {
+        let mut root =
+            capnp_schema::DynamicStructBuilder::root(&schema, &mut arena, MESSAGE_TYPE_ID)?;
+        let mut provide = root.init_struct("provide")?;
+        provide.set("questionId", DynamicInput::UInt32(message.question_id))?;
+        {
+            let mut target = provide.init_struct("target")?;
+            write_message_target(&mut target, &message.target, limits)?;
+        }
+        provide.set(
+            "recipient",
+            DynamicInput::Pointer(message.recipient.as_opaque()),
+        )?;
+    }
+    owned(arena, limits)
+}
+
+pub fn encode_accept(
+    message: &AcceptMessage,
+    limits: ProtocolLimits,
+) -> Result<Arc<OwnedMessage>, ProtocolError> {
+    check_embargo_id(&message.embargo, limits)?;
+    let schema = protocol_schema()?;
+    let mut arena = arena(limits)?;
+    {
+        let mut root =
+            capnp_schema::DynamicStructBuilder::root(&schema, &mut arena, MESSAGE_TYPE_ID)?;
+        let mut accept = root.init_struct("accept")?;
+        accept.set("questionId", DynamicInput::UInt32(message.question_id))?;
+        accept.set(
+            "provision",
+            DynamicInput::Pointer(message.provision.as_opaque()),
+        )?;
+        if !message.embargo.is_empty() {
+            accept.set("embargo", DynamicInput::Data(&message.embargo))?;
+        }
+    }
+    owned(arena, limits)
+}
+
+pub fn encode_third_party_answer(
+    message: &ThirdPartyAnswerMessage,
+    limits: ProtocolLimits,
+) -> Result<Arc<OwnedMessage>, ProtocolError> {
+    if !(1_u32 << 30..1_u32 << 31).contains(&message.answer_id) {
+        return Err(ProtocolError::InvalidThirdPartyAnswerId(message.answer_id));
+    }
+    let schema = protocol_schema()?;
+    let mut arena = arena(limits)?;
+    {
+        let mut root =
+            capnp_schema::DynamicStructBuilder::root(&schema, &mut arena, MESSAGE_TYPE_ID)?;
+        let mut answer = root.init_struct("thirdPartyAnswer")?;
+        answer.set(
+            "completion",
+            DynamicInput::Pointer(message.completion.as_opaque()),
+        )?;
+        answer.set("answerId", DynamicInput::UInt32(message.answer_id))?;
+    }
+    owned(arena, limits)
+}
+
+pub fn encode_return_await_from_third_party(
+    answer_id: u32,
+    party: &ThirdPartyToAwait,
+    limits: ProtocolLimits,
+) -> Result<Arc<OwnedMessage>, ProtocolError> {
+    let schema = protocol_schema()?;
+    let mut arena = arena(limits)?;
+    {
+        let mut root =
+            capnp_schema::DynamicStructBuilder::root(&schema, &mut arena, MESSAGE_TYPE_ID)?;
+        let mut returned = root.init_struct("return")?;
+        returned.set("answerId", DynamicInput::UInt32(answer_id))?;
+        returned.set("releaseParamCaps", DynamicInput::Bool(true))?;
+        returned.set(
+            "awaitFromThirdParty",
+            DynamicInput::Pointer(party.as_opaque()),
+        )?;
     }
     owned(arena, limits)
 }
@@ -606,6 +763,11 @@ pub(crate) fn read_call(
     let send_results_to = match send_results_to.union_discriminant()?.unwrap_or(u16::MAX) {
         0 => SendResultsTo::Caller,
         1 => SendResultsTo::Yourself,
+        2 => SendResultsTo::ThirdParty(ThirdPartyToContact::from_opaque(opaque_pointer(
+            send_results_to.get("thirdParty")?,
+            "sendResultsTo.thirdParty",
+            limits,
+        )?)),
         _ => return Err(ProtocolError::UnsupportedFeature("sendResultsTo")),
     };
     let params = structure(call.get("params")?, "params")?;
@@ -639,6 +801,11 @@ pub(crate) fn read_return(
             returned.get("takeFromOtherQuestion")?,
             "takeFromOtherQuestion",
         )?),
+        5 => ReturnPayload::AwaitFromThirdParty(ThirdPartyToAwait::from_opaque(opaque_pointer(
+            returned.get("awaitFromThirdParty")?,
+            "awaitFromThirdParty",
+            limits,
+        )?)),
         _ => return Err(ProtocolError::UnsupportedFeature("return payload")),
     };
     Ok(ReturnMessage {
@@ -699,11 +866,70 @@ pub(crate) fn read_disembargo(
             context.get("receiverLoopback")?,
             "receiverLoopback",
         )?),
+        2 => {
+            let id = data(context.get("accept")?, "disembargo.context.accept")?;
+            check_embargo_id(&id, limits)?;
+            DisembargoContext::Accept(id)
+        }
         _ => return Err(ProtocolError::UnsupportedFeature("disembargo context")),
     };
     Ok(DisembargoMessage {
         target: read_message_target(&target, limits)?,
         context,
+    })
+}
+
+pub(crate) fn read_provide(
+    root: &DynamicStruct,
+    limits: ProtocolLimits,
+) -> Result<ProvideMessage, ProtocolError> {
+    let provide = structure(root.get("provide")?, "provide")?;
+    let target = structure(provide.get("target")?, "provide.target")?;
+    Ok(ProvideMessage {
+        question_id: uint32(provide.get("questionId")?, "provide.questionId")?,
+        target: read_message_target(&target, limits)?,
+        recipient: ThirdPartyToAwait::from_opaque(opaque_pointer(
+            provide.get("recipient")?,
+            "provide.recipient",
+            limits,
+        )?),
+    })
+}
+
+pub(crate) fn read_accept(
+    root: &DynamicStruct,
+    limits: ProtocolLimits,
+) -> Result<AcceptMessage, ProtocolError> {
+    let accept = structure(root.get("accept")?, "accept")?;
+    let embargo = data(accept.get("embargo")?, "accept.embargo")?;
+    check_embargo_id(&embargo, limits)?;
+    Ok(AcceptMessage {
+        question_id: uint32(accept.get("questionId")?, "accept.questionId")?,
+        provision: ThirdPartyCompletion::from_opaque(opaque_pointer(
+            accept.get("provision")?,
+            "accept.provision",
+            limits,
+        )?),
+        embargo,
+    })
+}
+
+pub(crate) fn read_third_party_answer(
+    root: &DynamicStruct,
+    limits: ProtocolLimits,
+) -> Result<ThirdPartyAnswerMessage, ProtocolError> {
+    let answer = structure(root.get("thirdPartyAnswer")?, "thirdPartyAnswer")?;
+    let answer_id = uint32(answer.get("answerId")?, "thirdPartyAnswer.answerId")?;
+    if !(1_u32 << 30..1_u32 << 31).contains(&answer_id) {
+        return Err(ProtocolError::InvalidThirdPartyAnswerId(answer_id));
+    }
+    Ok(ThirdPartyAnswerMessage {
+        completion: ThirdPartyCompletion::from_opaque(opaque_pointer(
+            answer.get("completion")?,
+            "thirdPartyAnswer.completion",
+            limits,
+        )?),
+        answer_id,
     })
 }
 
@@ -809,6 +1035,11 @@ fn write_cap_descriptor(
             let mut promised = output.init_struct("receiverAnswer")?;
             write_promised_answer(&mut promised, promised_answer, limits)?;
         }
+        CapDescriptor::ThirdPartyHosted(third_party) => {
+            let mut hosted = output.init_struct("thirdPartyHosted")?;
+            hosted.set("id", DynamicInput::Pointer(third_party.id.as_opaque()))?;
+            hosted.set("vineId", DynamicInput::UInt32(third_party.vine_id))?;
+        }
         CapDescriptor::Attached { .. } => {
             return Err(ProtocolError::UnsupportedFeature(
                 "nested attached capability descriptor",
@@ -892,7 +1123,17 @@ fn read_cap_descriptor(
                 &promised, limits,
             )?))
         }
-        5 => Err(ProtocolError::UnsupportedFeature("thirdPartyHosted")),
+        5 => {
+            let hosted = structure(value.get("thirdPartyHosted")?, "thirdPartyHosted")?;
+            Ok(CapDescriptor::ThirdPartyHosted(ThirdPartyCapDescriptor {
+                id: ThirdPartyToContact::from_opaque(opaque_pointer(
+                    hosted.get("id")?,
+                    "thirdPartyHosted.id",
+                    limits,
+                )?),
+                vine_id: uint32(hosted.get("vineId")?, "thirdPartyHosted.vineId")?,
+            }))
+        }
         _ => Err(ProtocolError::UnsupportedFeature("capability descriptor")),
     }?;
     let attached = uint8(value.get("attachedFd")?, "attachedFd")?;
@@ -1035,6 +1276,34 @@ fn any_pointer(
     }
 }
 
+fn opaque_pointer(
+    value: DynamicValue,
+    field: &'static str,
+    limits: ProtocolLimits,
+) -> Result<OpaquePointer, ProtocolError> {
+    any_pointer(value, field)?
+        .to_opaque(crate::protocol::reader_limits(limits))
+        .map_err(Into::into)
+}
+
+fn data(value: DynamicValue, field: &'static str) -> Result<Vec<u8>, ProtocolError> {
+    match value {
+        DynamicValue::Data(value) => Ok(value),
+        _ => Err(ProtocolError::FieldType(field)),
+    }
+}
+
+fn check_embargo_id(id: &[u8], limits: ProtocolLimits) -> Result<(), ProtocolError> {
+    if id.len() > limits.max_embargo_id_bytes {
+        return Err(ProtocolError::Limit {
+            field: "embargoId",
+            requested: id.len(),
+            limit: limits.max_embargo_id_bytes,
+        });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 #[allow(clippy::panic)]
 mod tests {
@@ -1051,6 +1320,22 @@ mod tests {
             .set_u64(0, value, 0)
             .expect("value");
         OwnedMessage::new(arena.into_segments(), ReaderLimits::default()).expect("owned")
+    }
+
+    fn opaque_token(value: u64) -> OpaquePointer {
+        opaque_root(&data_message(value), ProtocolLimits::default()).expect("opaque token")
+    }
+
+    fn token_value(pointer: &OpaquePointer) -> u64 {
+        let capnp_message::OwnedPointerRef::Struct(value) =
+            pointer.open(ReaderLimits::default()).expect("token opens")
+        else {
+            panic!("token struct")
+        };
+        value
+            .with_reader(|reader| reader.data_section().expect("token data").read_u64(0, 0))
+            .expect("token reader")
+            .expect("token value")
     }
 
     #[test]
@@ -1210,7 +1495,7 @@ mod tests {
         ] {
             let target = CallTarget::ImportedCap(9);
             let ProtocolMessage::Disembargo(actual) = read_protocol_message(
-                encode_disembargo(&target, context, limits).expect("disembargo"),
+                encode_disembargo(&target, context.clone(), limits).expect("disembargo"),
             )
             .expect("disembargo reads") else {
                 panic!("Disembargo")
@@ -1218,6 +1503,163 @@ mod tests {
             assert_eq!(actual.target, target);
             assert_eq!(actual.context, context);
         }
+    }
+
+    #[test]
+    fn level_three_messages_and_descriptors_round_trip_losslessly() {
+        let limits = ProtocolLimits::default();
+        let contact = ThirdPartyToContact::from_opaque(opaque_token(41));
+        let await_token = ThirdPartyToAwait::from_opaque(opaque_token(42));
+        let completion = ThirdPartyCompletion::from_opaque(opaque_token(43));
+
+        let ProtocolMessage::Call(call) = read_protocol_message(
+            encode_call_with_options(
+                7,
+                CallTarget::ImportedCap(3),
+                0xfeed,
+                9,
+                &data_message(44),
+                &[CapDescriptor::ThirdPartyHosted(ThirdPartyCapDescriptor {
+                    id: contact.clone(),
+                    vine_id: 23,
+                })],
+                SendResultsTo::ThirdParty(contact.clone()),
+                limits,
+            )
+            .expect("third-party call"),
+        )
+        .expect("third-party call reads") else {
+            panic!("Call")
+        };
+        let SendResultsTo::ThirdParty(actual_contact) = call.send_results_to else {
+            panic!("sendResultsTo.thirdParty")
+        };
+        assert_eq!(token_value(actual_contact.as_opaque()), 41);
+        let [CapDescriptor::ThirdPartyHosted(actual_descriptor)] = call.params.cap_table.as_slice()
+        else {
+            panic!("thirdPartyHosted")
+        };
+        assert_eq!(actual_descriptor.vine_id, 23);
+        assert_eq!(token_value(actual_descriptor.id.as_opaque()), 41);
+
+        let provide = ProvideMessage {
+            question_id: 11,
+            target: CallTarget::ImportedCap(5),
+            recipient: await_token.clone(),
+        };
+        let ProtocolMessage::Provide(actual) =
+            read_protocol_message(encode_provide(&provide, limits).expect("provide"))
+                .expect("provide reads")
+        else {
+            panic!("Provide")
+        };
+        assert_eq!(actual.question_id, provide.question_id);
+        assert_eq!(actual.target, provide.target);
+        assert_eq!(token_value(actual.recipient.as_opaque()), 42);
+
+        let accept = AcceptMessage {
+            question_id: 12,
+            provision: completion.clone(),
+            embargo: vec![1, 3, 3, 7],
+        };
+        let ProtocolMessage::Accept(actual) =
+            read_protocol_message(encode_accept(&accept, limits).expect("accept"))
+                .expect("accept reads")
+        else {
+            panic!("Accept")
+        };
+        assert_eq!(actual.question_id, accept.question_id);
+        assert_eq!(actual.embargo, accept.embargo);
+        assert_eq!(token_value(actual.provision.as_opaque()), 43);
+
+        for answer_id in [1_u32 << 30, (1_u32 << 31) - 1] {
+            let answer = ThirdPartyAnswerMessage {
+                completion: completion.clone(),
+                answer_id,
+            };
+            let ProtocolMessage::ThirdPartyAnswer(actual) = read_protocol_message(
+                encode_third_party_answer(&answer, limits).expect("third-party answer"),
+            )
+            .expect("third-party answer reads") else {
+                panic!("ThirdPartyAnswer")
+            };
+            assert_eq!(actual.answer_id, answer.answer_id);
+            assert_eq!(token_value(actual.completion.as_opaque()), 43);
+        }
+
+        let ProtocolMessage::Return(returned) = read_protocol_message(
+            encode_return_await_from_third_party(13, &await_token, limits)
+                .expect("awaitFromThirdParty"),
+        )
+        .expect("awaitFromThirdParty reads") else {
+            panic!("Return")
+        };
+        assert_eq!(returned.answer_id, 13);
+        assert!(returned.release_param_caps);
+        assert!(matches!(
+            returned.payload,
+            ReturnPayload::AwaitFromThirdParty(actual)
+                if token_value(actual.as_opaque()) == 42
+        ));
+
+        let target = CallTarget::ImportedCap(5);
+        let context = DisembargoContext::Accept(vec![8, 5, 3]);
+        let ProtocolMessage::Disembargo(actual) = read_protocol_message(
+            encode_disembargo(&target, context.clone(), limits).expect("accept disembargo"),
+        )
+        .expect("accept disembargo reads") else {
+            panic!("Disembargo")
+        };
+        assert_eq!(actual, DisembargoMessage { target, context });
+    }
+
+    #[test]
+    fn level_three_bounds_reject_reserved_answers_and_large_embargoes() {
+        let completion = ThirdPartyCompletion::null();
+        for answer_id in [(1_u32 << 30) - 1, 1_u32 << 31, u32::MAX] {
+            assert!(matches!(
+                encode_third_party_answer(
+                    &ThirdPartyAnswerMessage {
+                        completion: completion.clone(),
+                        answer_id,
+                    },
+                    ProtocolLimits::default(),
+                ),
+                Err(ProtocolError::InvalidThirdPartyAnswerId(actual)) if actual == answer_id
+            ));
+        }
+
+        let limits = ProtocolLimits {
+            max_embargo_id_bytes: 3,
+            ..ProtocolLimits::default()
+        };
+        assert!(matches!(
+            encode_accept(
+                &AcceptMessage {
+                    question_id: 1,
+                    provision: completion,
+                    embargo: vec![0; 4],
+                },
+                limits,
+            ),
+            Err(ProtocolError::Limit {
+                field: "embargoId",
+                requested: 4,
+                limit: 3,
+            })
+        ));
+        assert!(matches!(
+            encode_disembargo(
+                &CallTarget::ImportedCap(0),
+                DisembargoContext::Accept(vec![0; 4]),
+                limits,
+            ),
+            Err(ProtocolError::Limit {
+                field: "embargoId",
+                requested: 4,
+                limit: 3,
+            })
+        ));
     }
 
     #[test]

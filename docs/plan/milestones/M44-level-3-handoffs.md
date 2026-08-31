@@ -1,6 +1,6 @@
 # M44 — Level-3 introductions and handoffs
 
-- Status: planned
+- Status: in progress on `dev/m44-level3-handoffs`
 - Phase: 7
 - Depends on: M40
 
@@ -23,4 +23,3 @@ Three/four-vat, self, forwarding/reflection, redirect, and embargo simulations p
 ## Scope boundary
 
 Later milestone behavior may be anticipated in types only where required to avoid a known compatibility dead end. It must not be implemented or claimed here.
-

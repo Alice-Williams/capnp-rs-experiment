@@ -1563,7 +1563,15 @@ impl ConnectionActor {
                 }
             }
             ProtocolMessage::Resolve(message) => self.incoming_resolve(message),
+            ProtocolMessage::Disembargo(message)
+                if matches!(message.context, DisembargoContext::Accept(_)) =>
+            {
+                self.reply_unimplemented(&raw);
+            }
             ProtocolMessage::Disembargo(message) => self.incoming_disembargo(message),
+            ProtocolMessage::Provide(_)
+            | ProtocolMessage::Accept(_)
+            | ProtocolMessage::ThirdPartyAnswer(_) => self.reply_unimplemented(&raw),
             ProtocolMessage::Abort(exception) => {
                 self.transition_terminal(ConnectionError::RemoteAbort(exception), false);
             }
@@ -1571,14 +1579,14 @@ impl ConnectionActor {
                 self.handle_unimplemented(nested);
             }
             ProtocolMessage::Unimplemented(None) => {}
-            ProtocolMessage::Unsupported { .. } => {
-                match encode_unimplemented(&raw, self.protocol_limits) {
-                    Ok(message) => self.effects.push_back(ActorEffect::Send(message)),
-                    Err(error) => {
-                        self.protocol_failure(ConnectionError::Wire(error.to_string()));
-                    }
-                }
-            }
+            ProtocolMessage::Unsupported { .. } => self.reply_unimplemented(&raw),
+        }
+    }
+
+    fn reply_unimplemented(&mut self, raw: &Arc<OwnedMessage>) {
+        match encode_unimplemented(raw, self.protocol_limits) {
+            Ok(message) => self.effects.push_back(ActorEffect::Send(message)),
+            Err(error) => self.protocol_failure(ConnectionError::Wire(error.to_string())),
         }
     }
 
@@ -1702,6 +1710,18 @@ impl ConnectionActor {
                     }
                     ImportPromiseState::PromisedAnswer(target.clone())
                 }
+                CapDescriptor::ThirdPartyHosted(third_party) => {
+                    match self.capabilities.receive(&descriptor) {
+                        Ok(ReceivedCapability::Imported(_)) => {
+                            ImportPromiseState::Remote(third_party.vine_id)
+                        }
+                        Ok(_) => unreachable!("thirdPartyHosted uses its vine import"),
+                        Err(error) => {
+                            self.protocol_failure(ConnectionError::Capability(error.to_string()));
+                            return;
+                        }
+                    }
+                }
                 CapDescriptor::Attached { .. } => unreachable!("descriptor() removes attachment"),
             },
         };
@@ -1814,6 +1834,11 @@ impl ConnectionActor {
                         );
                     }
                 }
+            }
+            DisembargoContext::Accept(_) => {
+                self.protocol_failure(ConnectionError::Protocol(
+                    "accept disembargo bypassed Level-3 dispatch".to_owned(),
+                ));
             }
         }
     }
@@ -2125,6 +2150,11 @@ impl ConnectionActor {
                             )));
                         }
                         Ok(OutgoingCapability::ReceiverAnswer(target.clone()))
+                    }
+                    CapDescriptor::ThirdPartyHosted(third_party) => {
+                        // Until direct pickup succeeds, forwarding through the
+                        // sender's vine is the protocol-defined safe fallback.
+                        Ok(OutgoingCapability::ReceiverHosted(third_party.vine_id))
                     }
                     CapDescriptor::Attached { .. } => {
                         unreachable!("descriptor() removes attachment")
@@ -2575,6 +2605,7 @@ fn sender_hosted_ids(descriptors: &[CapDescriptor]) -> Vec<u32> {
             CapDescriptor::None
             | CapDescriptor::ReceiverHosted(_)
             | CapDescriptor::ReceiverAnswer(_) => None,
+            CapDescriptor::ThirdPartyHosted(third_party) => Some(third_party.vine_id),
             CapDescriptor::Attached { .. } => unreachable!("descriptor() removes attachment"),
         })
         .collect()
