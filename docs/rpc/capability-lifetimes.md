@@ -46,7 +46,9 @@ release, ID reuse, exact quotas, and disconnect cleanup.
 
 ## Explicit non-goals
 
-M34 does not implement `senderPromise`, `receiverAnswer`, non-empty promised
-answer transforms, `Resolve`, embargo, tail routing, attached descriptors,
-third-party handoff, cancellation, reconnect, or higher-level generated client
-ergonomics. These remain M35 and later.
+M34 itself does not implement promise descriptors or routing. M35 adds
+`receiverAnswer`, non-empty promised-answer transforms, and two-party tail
+routing as documented in [promise-pipelining.md](promise-pipelining.md).
+`senderPromise`, `Resolve`, embargo, attached descriptors, third-party handoff,
+cooperative cancellation, reconnect, and higher-level generated client
+ergonomics remain later work.

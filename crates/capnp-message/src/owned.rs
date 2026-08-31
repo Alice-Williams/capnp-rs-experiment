@@ -208,6 +208,20 @@ impl OwnedMessage {
         })
     }
 
+    /// Retains the schema-independent root pointer after validating its wire
+    /// kind. RPC promise transforms use this to follow pointer-section paths
+    /// without interpreting application schemas.
+    pub fn root_pointer(self: &Arc<Self>) -> Result<OwnedPointerRef, OwnedReadError> {
+        retained_pointer(
+            self,
+            WireLocation {
+                segment_id: 0,
+                word_offset: 0,
+            },
+            self.nesting,
+        )
+    }
+
     /// Retains any validated pointer at an already-derived wire coordinate.
     pub fn pointer_at(
         self: &Arc<Self>,

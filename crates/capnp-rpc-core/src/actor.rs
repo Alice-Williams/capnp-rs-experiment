@@ -1,9 +1,11 @@
-//! Single-owner two-party Level-0 connection actor.
+//! Single-owner two-party Level-1 connection actor.
 //!
 //! The actor alone mutates protocol tables. Thread-safe handles only append to
 //! a bounded mailbox. Application work leaves the actor as a `Dispatch` effect
 //! and returns through a generation-bearing completion token, so handlers may
 //! run concurrently and finish out of order without sharing table state.
+//! M35 adds bounded promised-answer transforms, actor-owned queued delivery,
+//! and two-party tail routing. Promise resolution and E-order remain M36.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
@@ -17,14 +19,16 @@ use crate::capability::{
     CapabilityStats, CapabilityTables, HostedCapability, OutgoingCapability, ReceivedCapability,
 };
 use crate::level0::{
-    CallTarget, CapDescriptor, HandlerResult, Payload, ReturnPayload, encode_bootstrap,
-    encode_finish_with_release, encode_release, encode_return,
+    CallTarget, CapDescriptor, HandlerResult, Payload, PipelineOp, PromisedAnswer, ReturnPayload,
+    SendResultsTo, encode_bootstrap, encode_call_with_options, encode_finish_with_release,
+    encode_release, encode_return,
 };
 use crate::protocol::{
     ExceptionType, ProtocolLimits, ProtocolMessage, RpcException, encode_abort,
     encode_unimplemented, read_protocol_message_with_limits, read_protocol_struct,
 };
-use capnp_message::OwnedMessage;
+use capnp_message::{OwnedMessage, OwnedPointerRef};
+use capnp_schema::DynamicAnyPointer;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct QuestionKey {
@@ -200,6 +204,7 @@ impl ConnectionHandle {
 #[derive(Clone)]
 pub struct QuestionTarget {
     cell: Arc<QuestionCell>,
+    transform: Vec<PipelineOp>,
 }
 
 impl fmt::Debug for QuestionTarget {
@@ -207,6 +212,7 @@ impl fmt::Debug for QuestionTarget {
         formatter
             .debug_struct("QuestionTarget")
             .field("key", &self.key())
+            .field("transform", &self.transform)
             .finish()
     }
 }
@@ -214,6 +220,35 @@ impl fmt::Debug for QuestionTarget {
 impl QuestionTarget {
     pub fn key(&self) -> Option<QuestionKey> {
         self.cell.active_key().ok().flatten()
+    }
+
+    pub fn pointer_field(&self, index: u16) -> Self {
+        let mut transform = self.transform.clone();
+        transform.push(PipelineOp::GetPointerField(index));
+        Self {
+            cell: Arc::clone(&self.cell),
+            transform,
+        }
+    }
+
+    pub fn noop(&self) -> Self {
+        let mut transform = self.transform.clone();
+        transform.push(PipelineOp::Noop);
+        Self {
+            cell: Arc::clone(&self.cell),
+            transform,
+        }
+    }
+
+    pub fn as_outgoing_capability(&self) -> Result<OutgoingCapability, ConnectionError> {
+        let key = self
+            .cell
+            .active_key()?
+            .ok_or(ConnectionError::Disconnected)?;
+        Ok(OutgoingCapability::ReceiverAnswer(PromisedAnswer {
+            question_id: key.id,
+            transform: self.transform.clone(),
+        }))
     }
 }
 
@@ -233,6 +268,7 @@ impl QuestionFuture {
     pub fn target(&self) -> QuestionTarget {
         QuestionTarget {
             cell: Arc::clone(&self.cell),
+            transform: Vec::new(),
         }
     }
 }
@@ -297,6 +333,26 @@ impl CompletionToken {
         self.handle.submit(ActorCommand::HandlerComplete {
             answer: self.answer,
             result: HandlerResult::Results(content),
+            capabilities,
+        })
+    }
+
+    /// Performs a Level-1 tail call back to a capability imported from this
+    /// peer. The actor emits the redirected call before the routing `Return`.
+    pub fn tail_call_imported(
+        self,
+        import_id: u32,
+        interface_id: u64,
+        method_id: u16,
+        params: Arc<OwnedMessage>,
+        capabilities: Vec<OutgoingCapability>,
+    ) -> Result<(), ConnectionError> {
+        self.handle.submit(ActorCommand::StartTailCall {
+            answer: self.answer,
+            import_id,
+            interface_id,
+            method_id,
+            params,
             capabilities,
         })
     }
@@ -430,6 +486,21 @@ impl ConnectionActor {
                 cell,
             } => self.start_call(target, interface_id, method_id, params, capabilities, cell),
             ActorCommand::Incoming(message) => self.incoming(message),
+            ActorCommand::StartTailCall {
+                answer,
+                import_id,
+                interface_id,
+                method_id,
+                params,
+                capabilities,
+            } => self.start_tail_call(
+                answer,
+                import_id,
+                interface_id,
+                method_id,
+                params,
+                capabilities,
+            ),
             ActorCommand::HandlerComplete {
                 answer,
                 result,
@@ -445,6 +516,7 @@ impl ConnectionActor {
         let key = match self.questions.allocate(QuestionState {
             cell: Arc::clone(&cell),
             param_exports: Vec::new(),
+            is_tail_call: false,
         }) {
             Ok(key) => key,
             Err(error) => {
@@ -486,7 +558,14 @@ impl ConnectionActor {
         let wire_target = match target {
             OutgoingCallTarget::Bootstrap(target) => match target.cell.active_key() {
                 Ok(Some(key)) if self.questions.contains(key) => {
-                    CallTarget::BootstrapAnswer(key.id)
+                    if target.transform.is_empty() {
+                        CallTarget::BootstrapAnswer(key.id)
+                    } else {
+                        CallTarget::PromisedAnswer(PromisedAnswer {
+                            question_id: key.id,
+                            transform: target.transform,
+                        })
+                    }
                 }
                 Ok(Some(key)) => {
                     cell.complete(Err(ConnectionError::StaleTarget(key)));
@@ -511,7 +590,7 @@ impl ConnectionActor {
                 return;
             }
         };
-        let descriptors = match self.capabilities.describe_all(&capabilities) {
+        let descriptors = match self.describe_outgoing_capabilities(&capabilities) {
             Ok(descriptors) => descriptors,
             Err(error) => {
                 cell.complete(Err(ConnectionError::Capability(error.to_string())));
@@ -522,6 +601,7 @@ impl ConnectionActor {
         let key = match self.questions.allocate(QuestionState {
             cell: Arc::clone(&cell),
             param_exports: param_exports.clone(),
+            is_tail_call: false,
         }) {
             Ok(key) => key,
             Err(error) => {
@@ -563,6 +643,106 @@ impl ConnectionActor {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn start_tail_call(
+        &mut self,
+        answer: AnswerKey,
+        import_id: u32,
+        interface_id: u64,
+        method_id: u16,
+        params: Arc<OwnedMessage>,
+        capabilities: Vec<OutgoingCapability>,
+    ) {
+        if !self.answers.is_in_progress(answer) {
+            self.stats.stale_handler_completions =
+                self.stats.stale_handler_completions.saturating_add(1);
+            return;
+        }
+        if !self.capabilities.contains_import(import_id) {
+            self.fail_pipeline_call(answer, format!("unknown tail-call import {import_id}"));
+            return;
+        }
+        let descriptors = match self.describe_outgoing_capabilities(&capabilities) {
+            Ok(descriptors) => descriptors,
+            Err(error) => {
+                self.fail_pipeline_call(answer, error.to_string());
+                return;
+            }
+        };
+        let param_exports = sender_hosted_ids(&descriptors);
+        let cell = Arc::new(QuestionCell::new());
+        let key = match self.questions.allocate(QuestionState {
+            cell: Arc::clone(&cell),
+            param_exports: param_exports.clone(),
+            is_tail_call: true,
+        }) {
+            Ok(key) => key,
+            Err(error) => {
+                let _ = self.capabilities.apply_implicit_releases(&param_exports);
+                self.fail_pipeline_call(answer, error.to_string());
+                return;
+            }
+        };
+        self.record_question_allocation(key);
+        if let Err(error) = cell.assign(key) {
+            let _ = self.questions.remove(key);
+            let _ = self.capabilities.apply_implicit_releases(&param_exports);
+            self.protocol_failure(error);
+            return;
+        }
+        let call = encode_call_with_options(
+            key.id,
+            CallTarget::ImportedCap(import_id),
+            interface_id,
+            method_id,
+            &params,
+            &descriptors,
+            SendResultsTo::Yourself,
+            self.protocol_limits,
+        );
+        let returned = encode_return(
+            answer.id,
+            &HandlerResult::TakeFromOtherQuestion(key.id),
+            self.protocol_limits,
+        );
+        let (call, returned) = match (call, returned) {
+            (Ok(call), Ok(returned)) => (call, returned),
+            (call, returned) => {
+                let _ = self.questions.remove(key);
+                let _ = self.capabilities.apply_implicit_releases(&param_exports);
+                let reason = call.err().or_else(|| returned.err()).map_or_else(
+                    || "tail call encoding failed".to_owned(),
+                    |error| error.to_string(),
+                );
+                self.protocol_failure(ConnectionError::Wire(reason));
+                return;
+            }
+        };
+        if !self.answers.mark_returned(answer) {
+            let _ = self.questions.remove(key);
+            let _ = self.capabilities.apply_implicit_releases(&param_exports);
+            self.stats.stale_handler_completions =
+                self.stats.stale_handler_completions.saturating_add(1);
+            return;
+        }
+        if !self.answers.record_tail_question(answer, key) {
+            let _ = self.questions.remove(key);
+            let _ = self.capabilities.apply_implicit_releases(&param_exports);
+            self.protocol_failure(ConnectionError::StaleAnswer(answer));
+            return;
+        }
+        let original_param_imports = self.answers.param_imports(answer).unwrap_or_default();
+        if let Err(error) = self
+            .capabilities
+            .apply_implicit_import_releases(&original_param_imports)
+        {
+            self.protocol_failure(ConnectionError::Capability(error.to_string()));
+            return;
+        }
+        self.effects.push_back(ActorEffect::Send(call));
+        self.effects.push_back(ActorEffect::Send(returned));
+    }
+
     fn incoming(&mut self, raw: Arc<OwnedMessage>) {
         let message =
             match read_protocol_message_with_limits(Arc::clone(&raw), self.protocol_limits) {
@@ -578,6 +758,7 @@ impl ConnectionActor {
                     message.question_id,
                     AnswerKind::Bootstrap,
                     Vec::new(),
+                    false,
                 ) {
                     Ok(answer) => answer,
                     Err(error) => {
@@ -588,7 +769,7 @@ impl ConnectionActor {
                 self.dispatch(IncomingRequest::Bootstrap, answer);
             }
             ProtocolMessage::Call(message) => {
-                let target = match message.target {
+                let (target, promised_answer) = match message.target {
                     CallTarget::BootstrapAnswer(target_id) => {
                         let Some(target) = self.answers.key_for_id(target_id) else {
                             self.protocol_failure(ConnectionError::Protocol(format!(
@@ -596,13 +777,17 @@ impl ConnectionActor {
                             )));
                             return;
                         };
-                        if !self.answers.is_bootstrap(target) {
-                            self.protocol_failure(ConnectionError::Protocol(format!(
-                                "call target {target_id} is not a bootstrap answer"
-                            )));
-                            return;
+                        if self.answers.is_bootstrap(target) {
+                            (Some(IncomingCallTarget::BootstrapAnswer(target)), None)
+                        } else {
+                            (
+                                None,
+                                Some(PromisedAnswer {
+                                    question_id: target_id,
+                                    transform: Vec::new(),
+                                }),
+                            )
                         }
-                        IncomingCallTarget::BootstrapAnswer(target)
                     }
                     CallTarget::ImportedCap(export_id) => {
                         match self
@@ -610,7 +795,7 @@ impl ConnectionActor {
                             .receive(&CapDescriptor::ReceiverHosted(export_id))
                         {
                             Ok(ReceivedCapability::Hosted(capability)) => {
-                                IncomingCallTarget::Hosted(capability)
+                                (Some(IncomingCallTarget::Hosted(capability)), None)
                             }
                             Ok(_) => {
                                 self.protocol_failure(ConnectionError::Protocol(
@@ -626,6 +811,7 @@ impl ConnectionActor {
                             }
                         }
                     }
+                    CallTarget::PromisedAnswer(promised_answer) => (None, Some(promised_answer)),
                 };
                 let param_imports = match self.receive_cap_table(&message.params.cap_table) {
                     Ok(imports) => imports,
@@ -634,26 +820,45 @@ impl ConnectionActor {
                         return;
                     }
                 };
-                let answer =
-                    match self
-                        .answers
-                        .insert(message.question_id, AnswerKind::Call, param_imports)
-                    {
-                        Ok(answer) => answer,
-                        Err(error) => {
-                            self.protocol_failure(error);
-                            return;
-                        }
-                    };
-                self.dispatch(
-                    IncomingRequest::Call {
-                        target,
+                let answer = match self.answers.insert(
+                    message.question_id,
+                    AnswerKind::Call,
+                    param_imports,
+                    message.send_results_to == SendResultsTo::Yourself,
+                ) {
+                    Ok(answer) => answer,
+                    Err(error) => {
+                        self.protocol_failure(error);
+                        return;
+                    }
+                };
+                if let Some(target) = target {
+                    self.dispatch(
+                        IncomingRequest::Call {
+                            target,
+                            interface_id: message.interface_id,
+                            method_id: message.method_id,
+                            params: message.params,
+                        },
+                        answer,
+                    );
+                } else if let Some(promised_answer) = promised_answer {
+                    let pending = PendingPipelineCall {
+                        answer,
+                        transform: promised_answer.transform,
                         interface_id: message.interface_id,
                         method_id: message.method_id,
                         params: message.params,
-                    },
-                    answer,
-                );
+                    };
+                    match self
+                        .answers
+                        .queue_pipeline_call(promised_answer.question_id, pending.clone())
+                    {
+                        Ok(Some(pipeline)) => self.route_pipeline_call(pending, &pipeline),
+                        Ok(None) => {}
+                        Err(error) => self.fail_pipeline_call(answer, error.to_string()),
+                    }
+                }
             }
             ProtocolMessage::Return(message) => {
                 let has_result_caps = if let ReturnPayload::Results(payload) = &message.payload {
@@ -665,7 +870,17 @@ impl ConnectionActor {
                 } else {
                     false
                 };
-                let Some((key, question)) = self.questions.remove_id(message.answer_id) else {
+                let tail_routing =
+                    matches!(message.payload, ReturnPayload::TakeFromOtherQuestion(_));
+                let tail_results_elsewhere =
+                    matches!(message.payload, ReturnPayload::ResultsSentElsewhere)
+                        && self.questions.is_tail_call_id(message.answer_id);
+                let removed = if tail_routing || tail_results_elsewhere {
+                    self.questions.reserve_id(message.answer_id)
+                } else {
+                    self.questions.remove_id(message.answer_id)
+                };
+                let Some((key, question)) = removed else {
                     self.protocol_failure(ConnectionError::UnknownQuestion(message.answer_id));
                     return;
                 };
@@ -678,22 +893,75 @@ impl ConnectionActor {
                         return;
                     }
                 }
-                question.cell.complete(Ok(message.payload));
+                if let ReturnPayload::TakeFromOtherQuestion(answer_id) = &message.payload {
+                    let answer_id = *answer_id;
+                    if question.is_tail_call {
+                        question.cell.complete(Err(ConnectionError::Protocol(
+                            "tail call returned takeFromOtherQuestion".to_owned(),
+                        )));
+                    } else if let Some(response) = self.answers.take_redirected_response(answer_id)
+                    {
+                        self.complete_redirect_waiter(key, question, response);
+                    } else if self.answers.can_wait_for_redirect(answer_id) {
+                        if let Err((error, (key, question))) =
+                            self.answers.wait_for_redirect(answer_id, (key, question))
+                        {
+                            let _ = self.questions.release_reserved(key);
+                            question.cell.complete(Err(error.clone()));
+                            self.protocol_failure(error);
+                        }
+                    } else {
+                        let error = ConnectionError::Protocol(format!(
+                            "takeFromOtherQuestion references unavailable answer {answer_id}"
+                        ));
+                        let _ = self.questions.release_reserved(key);
+                        question.cell.complete(Err(error.clone()));
+                        self.protocol_failure(error);
+                    }
+                    return;
+                }
+                if tail_results_elsewhere {
+                    question
+                        .cell
+                        .complete(Ok(ReturnPayload::ResultsSentElsewhere));
+                    match self.answers.record_tail_results_elsewhere(key) {
+                        Ok(Some(answer)) => self.finish_answer(answer),
+                        Ok(None) => {}
+                        Err(error) => {
+                            let _ = self.questions.release_reserved(key);
+                            self.protocol_failure(error);
+                        }
+                    }
+                    return;
+                }
+                let outcome = match message.payload {
+                    ReturnPayload::ResultsSentElsewhere => Err(ConnectionError::Protocol(
+                        "resultsSentElsewhere returned for a non-tail call".to_owned(),
+                    )),
+                    ReturnPayload::TakeFromOtherQuestion(_) => Err(ConnectionError::Protocol(
+                        "unreachable duplicate tail-routing branch".to_owned(),
+                    )),
+                    ReturnPayload::Results(_) | ReturnPayload::Exception(_)
+                        if question.is_tail_call =>
+                    {
+                        Err(ConnectionError::Protocol(
+                            "tail call returned results to the wrong endpoint".to_owned(),
+                        ))
+                    }
+                    payload => Ok(payload),
+                };
+                question.cell.complete(outcome);
                 match encode_finish_with_release(key.id, !has_result_caps, self.protocol_limits) {
                     Ok(finish) => self.effects.push_back(ActorEffect::Send(finish)),
                     Err(error) => self.protocol_failure(ConnectionError::Wire(error.to_string())),
                 }
             }
             ProtocolMessage::Finish(message) => {
-                if let Some(answer) = self.answers.remove_id(message.question_id) {
-                    if message.release_result_caps {
-                        if let Err(error) = self
-                            .capabilities
-                            .apply_implicit_releases(&answer.result_exports)
-                        {
-                            self.protocol_failure(ConnectionError::Capability(error.to_string()));
-                        }
-                    }
+                if let Some(answer) = self
+                    .answers
+                    .finish(message.question_id, message.release_result_caps)
+                {
+                    self.finish_answer(answer);
                 }
             }
             ProtocolMessage::Release(release) => {
@@ -764,6 +1032,182 @@ impl ConnectionActor {
         Ok(imports)
     }
 
+    fn describe_outgoing_capabilities(
+        &mut self,
+        capabilities: &[OutgoingCapability],
+    ) -> Result<Vec<CapDescriptor>, ConnectionError> {
+        for capability in capabilities {
+            if let OutgoingCapability::ReceiverAnswer(promised_answer) = capability {
+                if !self.questions.contains_id(promised_answer.question_id) {
+                    return Err(ConnectionError::Protocol(format!(
+                        "receiverAnswer references inactive question {}",
+                        promised_answer.question_id
+                    )));
+                }
+                if promised_answer.transform.len() > self.protocol_limits.max_pipeline_ops {
+                    return Err(ConnectionError::Protocol(
+                        "receiverAnswer transform exceeds protocol limit".to_owned(),
+                    ));
+                }
+            }
+        }
+        self.capabilities
+            .describe_all(capabilities)
+            .map_err(|error| ConnectionError::Capability(error.to_string()))
+    }
+
+    fn route_pipeline_call(&mut self, pending: PendingPipelineCall, pipeline: &PipelineSnapshot) {
+        match resolve_pipeline_target(pipeline, &pending.transform) {
+            Ok(target) => self.dispatch(
+                IncomingRequest::Call {
+                    target,
+                    interface_id: pending.interface_id,
+                    method_id: pending.method_id,
+                    params: pending.params,
+                },
+                pending.answer,
+            ),
+            Err(error) => self.fail_pipeline_call(pending.answer, error.to_string()),
+        }
+    }
+
+    fn fail_pipeline_call(&mut self, answer: AnswerKey, reason: String) {
+        if !self.answers.mark_returned(answer) {
+            self.stats.stale_handler_completions =
+                self.stats.stale_handler_completions.saturating_add(1);
+            return;
+        }
+        let param_imports = self.answers.param_imports(answer).unwrap_or_default();
+        let result = HandlerResult::Exception(RpcException::new(reason, ExceptionType::Failed));
+        match encode_return(answer.id, &result, self.protocol_limits) {
+            Ok(message) => {
+                if let Err(error) = self
+                    .capabilities
+                    .apply_implicit_import_releases(&param_imports)
+                {
+                    self.protocol_failure(ConnectionError::Capability(error.to_string()));
+                    return;
+                }
+                self.effects.push_back(ActorEffect::Send(message));
+            }
+            Err(error) => self.protocol_failure(ConnectionError::Wire(error.to_string())),
+        }
+    }
+
+    fn handler_complete_redirected(
+        &mut self,
+        answer: AnswerKey,
+        result: HandlerResult,
+        capabilities: Vec<OutgoingCapability>,
+        pipeline: Option<PipelineSnapshot>,
+    ) {
+        let redirect_waiter = match self.answers.store_redirected_response(
+            answer,
+            RedirectedResponse {
+                result,
+                capabilities,
+            },
+        ) {
+            Ok(waiter) => waiter,
+            Err(error) => {
+                self.protocol_failure(error);
+                return;
+            }
+        };
+        let param_imports = self.answers.param_imports(answer).unwrap_or_default();
+        let returned = match encode_return(
+            answer.id,
+            &HandlerResult::ResultsSentElsewhere,
+            self.protocol_limits,
+        ) {
+            Ok(returned) => returned,
+            Err(error) => {
+                self.protocol_failure(ConnectionError::Wire(error.to_string()));
+                return;
+            }
+        };
+        if let Err(error) = self
+            .capabilities
+            .apply_implicit_import_releases(&param_imports)
+        {
+            self.protocol_failure(ConnectionError::Capability(error.to_string()));
+            return;
+        }
+        let queued = if let Some(pipeline) = pipeline {
+            self.answers
+                .resolve_pipeline(answer, pipeline.clone())
+                .map(|queued| (queued, Some(pipeline)))
+        } else {
+            self.answers
+                .fail_pipeline(answer)
+                .map(|queued| (queued, None))
+        };
+        if let Some((queued, pipeline)) = queued {
+            for pending in queued {
+                if let Some(pipeline) = &pipeline {
+                    self.route_pipeline_call(pending, pipeline);
+                } else {
+                    self.fail_pipeline_call(
+                        pending.answer,
+                        "redirected pipeline source returned no capability results".to_owned(),
+                    );
+                }
+            }
+        }
+        self.stats.completed_handlers = self.stats.completed_handlers.saturating_add(1);
+        self.effects.push_back(ActorEffect::Send(returned));
+        if let Some((question_key, question)) = redirect_waiter {
+            let Some(response) = self.answers.take_redirected_response(answer.id) else {
+                self.protocol_failure(ConnectionError::Protocol(
+                    "redirected response disappeared before waiter completion".to_owned(),
+                ));
+                return;
+            };
+            self.complete_redirect_waiter(question_key, question, response);
+        }
+    }
+
+    fn finish_answer(&mut self, answer: AnswerState) {
+        if answer.finish_release_result_caps {
+            if let Err(error) = self
+                .capabilities
+                .apply_implicit_releases(&answer.result_exports)
+            {
+                self.protocol_failure(ConnectionError::Capability(error.to_string()));
+                return;
+            }
+        }
+        if let Some(tail_question) = answer.tail_question {
+            if !self.questions.release_reserved(tail_question) {
+                self.protocol_failure(ConnectionError::StaleTarget(tail_question));
+                return;
+            }
+            match encode_finish_with_release(tail_question.id, true, self.protocol_limits) {
+                Ok(finish) => self.effects.push_back(ActorEffect::Send(finish)),
+                Err(error) => self.protocol_failure(ConnectionError::Wire(error.to_string())),
+            }
+        }
+    }
+
+    fn complete_redirect_waiter(
+        &mut self,
+        key: QuestionKey,
+        question: QuestionState,
+        response: RedirectedResponse,
+    ) {
+        if !self.questions.release_reserved(key) {
+            self.protocol_failure(ConnectionError::StaleTarget(key));
+            return;
+        }
+        question
+            .cell
+            .complete(redirected_response_payload(response));
+        match encode_finish_with_release(key.id, true, self.protocol_limits) {
+            Ok(finish) => self.effects.push_back(ActorEffect::Send(finish)),
+            Err(error) => self.protocol_failure(ConnectionError::Wire(error.to_string())),
+        }
+    }
+
     fn handler_complete(
         &mut self,
         answer: AnswerKey,
@@ -776,12 +1220,23 @@ impl ConnectionActor {
             ));
             return;
         }
+        let pipeline = match &result {
+            HandlerResult::Results(content) => Some(PipelineSnapshot {
+                content: Arc::clone(content),
+                capabilities: capabilities.clone(),
+            }),
+            _ => None,
+        };
         if !self.answers.mark_returned(answer) {
             self.stats.stale_handler_completions =
                 self.stats.stale_handler_completions.saturating_add(1);
             return;
         }
-        let descriptors = match self.capabilities.describe_all(&capabilities) {
+        if self.answers.redirect_results(answer) {
+            self.handler_complete_redirected(answer, result, capabilities, pipeline);
+            return;
+        }
+        let descriptors = match self.describe_outgoing_capabilities(&capabilities) {
             Ok(descriptors) => descriptors,
             Err(error) => {
                 self.protocol_failure(ConnectionError::Capability(error.to_string()));
@@ -812,6 +1267,7 @@ impl ConnectionActor {
             }
         };
         let param_imports = self.answers.param_imports(answer).unwrap_or_default();
+        let finish = self.answers.finish_state(answer);
         match encode_return(answer.id, &result, self.protocol_limits) {
             Ok(message) => {
                 if let Err(error) = self
@@ -821,8 +1277,41 @@ impl ConnectionActor {
                     self.protocol_failure(ConnectionError::Capability(error.to_string()));
                     return;
                 }
+                let queued = if let Some(pipeline) = pipeline {
+                    self.answers
+                        .resolve_pipeline(answer, pipeline.clone())
+                        .map(|queued| (queued, Some(pipeline)))
+                } else {
+                    self.answers
+                        .fail_pipeline(answer)
+                        .map(|queued| (queued, None))
+                };
+                if let Some((queued, pipeline)) = queued {
+                    for pending in queued {
+                        if let Some(pipeline) = &pipeline {
+                            self.route_pipeline_call(pending, pipeline);
+                        } else {
+                            self.fail_pipeline_call(
+                                pending.answer,
+                                "pipeline source returned no capability results".to_owned(),
+                            );
+                        }
+                    }
+                }
                 self.stats.completed_handlers = self.stats.completed_handlers.saturating_add(1);
-                self.effects.push_back(ActorEffect::Send(message));
+                if let Some(release_result_caps) = finish {
+                    if release_result_caps {
+                        if let Err(error) =
+                            self.capabilities.apply_implicit_releases(&result_exports)
+                        {
+                            self.protocol_failure(ConnectionError::Capability(error.to_string()));
+                            return;
+                        }
+                    }
+                    let _ = self.answers.remove_id(answer.id);
+                } else {
+                    self.effects.push_back(ActorEffect::Send(message));
+                }
             }
             Err(error) => {
                 let _ = self.capabilities.apply_implicit_releases(&result_exports);
@@ -867,6 +1356,9 @@ impl ConnectionActor {
         for question in self.questions.drain() {
             question.cell.complete(Err(error.clone()));
         }
+        for question in self.answers.drain_redirect_waiters() {
+            question.cell.complete(Err(error.clone()));
+        }
         self.answers.clear();
         self.capabilities.clear();
         if let Ok(commands) = self.mailbox.drain() {
@@ -897,6 +1389,14 @@ enum ActorCommand {
         cell: Arc<QuestionCell>,
     },
     Incoming(Arc<OwnedMessage>),
+    StartTailCall {
+        answer: AnswerKey,
+        import_id: u32,
+        interface_id: u64,
+        method_id: u16,
+        params: Arc<OwnedMessage>,
+        capabilities: Vec<OutgoingCapability>,
+    },
     HandlerComplete {
         answer: AnswerKey,
         result: HandlerResult,
@@ -915,9 +1415,84 @@ fn sender_hosted_ids(descriptors: &[CapDescriptor]) -> Vec<u32> {
         .iter()
         .filter_map(|descriptor| match descriptor {
             CapDescriptor::SenderHosted(id) => Some(*id),
-            CapDescriptor::None | CapDescriptor::ReceiverHosted(_) => None,
+            CapDescriptor::None
+            | CapDescriptor::ReceiverHosted(_)
+            | CapDescriptor::ReceiverAnswer(_) => None,
         })
         .collect()
+}
+
+fn resolve_pipeline_target(
+    pipeline: &PipelineSnapshot,
+    transform: &[PipelineOp],
+) -> Result<IncomingCallTarget, ConnectionError> {
+    let mut pointer = pipeline
+        .content
+        .root_pointer()
+        .map_err(|error| ConnectionError::Protocol(error.to_string()))?;
+    for operation in transform {
+        match operation {
+            PipelineOp::Noop => {}
+            PipelineOp::GetPointerField(index) => {
+                let OwnedPointerRef::Struct(structure) = pointer else {
+                    return Err(ConnectionError::Protocol(
+                        "pipeline getPointerField requires a struct".to_owned(),
+                    ));
+                };
+                pointer = structure
+                    .child_pointer(*index)
+                    .map_err(|error| ConnectionError::Protocol(error.to_string()))?;
+            }
+        }
+    }
+    let OwnedPointerRef::Capability(index) = pointer else {
+        return Err(ConnectionError::Protocol(
+            "pipeline transform did not resolve to a capability".to_owned(),
+        ));
+    };
+    let index = usize::try_from(index)
+        .map_err(|_| ConnectionError::Protocol("capability index overflow".to_owned()))?;
+    match pipeline.capabilities.get(index) {
+        Some(OutgoingCapability::Hosted(capability)) => {
+            Ok(IncomingCallTarget::Hosted(capability.clone()))
+        }
+        Some(OutgoingCapability::None) | None => Err(ConnectionError::Protocol(format!(
+            "pipeline capability index {index} is absent"
+        ))),
+        Some(OutgoingCapability::ReceiverHosted(_))
+        | Some(OutgoingCapability::ReceiverAnswer(_)) => Err(ConnectionError::Protocol(
+            "pipeline target requires Level-1 tail routing".to_owned(),
+        )),
+    }
+}
+
+fn redirected_response_payload(
+    response: RedirectedResponse,
+) -> Result<ReturnPayload, ConnectionError> {
+    match response.result {
+        HandlerResult::Results(content) => {
+            let content = match content
+                .root_pointer()
+                .map_err(|error| ConnectionError::Protocol(error.to_string()))?
+            {
+                OwnedPointerRef::Null => DynamicAnyPointer::Null,
+                OwnedPointerRef::Struct(value) => DynamicAnyPointer::Struct(value),
+                OwnedPointerRef::List(value) => DynamicAnyPointer::List(value),
+                OwnedPointerRef::Capability(value) => DynamicAnyPointer::Capability(value),
+            };
+            Ok(ReturnPayload::LocalResults {
+                content,
+                capabilities: response.capabilities,
+            })
+        }
+        HandlerResult::Exception(exception) => Ok(ReturnPayload::Exception(exception)),
+        HandlerResult::Canceled => Ok(ReturnPayload::Canceled),
+        HandlerResult::ResultsWithCapabilities { .. }
+        | HandlerResult::ResultsSentElsewhere
+        | HandlerResult::TakeFromOtherQuestion(_) => Err(ConnectionError::Protocol(
+            "invalid redirected response variant".to_owned(),
+        )),
+    }
 }
 
 fn complete_rejected(command: ActorCommand, error: ConnectionError) {
@@ -926,6 +1501,7 @@ fn complete_rejected(command: ActorCommand, error: ConnectionError) {
             cell.complete(Err(error));
         }
         ActorCommand::Incoming(_)
+        | ActorCommand::StartTailCall { .. }
         | ActorCommand::HandlerComplete { .. }
         | ActorCommand::Shutdown => {}
     }
@@ -1064,11 +1640,13 @@ impl QuestionCell {
 struct QuestionState {
     cell: Arc<QuestionCell>,
     param_exports: Vec<u32>,
+    is_tail_call: bool,
 }
 
 struct QuestionSlot {
     generation: u64,
     value: Option<QuestionState>,
+    reserved: bool,
 }
 
 struct QuestionTable {
@@ -1093,7 +1671,7 @@ impl QuestionTable {
     fn allocate(&mut self, value: QuestionState) -> Result<QuestionKey, ConnectionError> {
         let mut exhausted_slot = false;
         for (index, slot) in self.slots.iter_mut().enumerate() {
-            if slot.value.is_none() {
+            if slot.value.is_none() && !slot.reserved {
                 if slot.generation == u64::MAX {
                     exhausted_slot = true;
                     continue;
@@ -1119,6 +1697,7 @@ impl QuestionTable {
         self.slots.push(QuestionSlot {
             generation: 0,
             value: Some(value),
+            reserved: false,
         });
         self.len += 1;
         Ok(QuestionKey { id, generation: 0 })
@@ -1129,6 +1708,20 @@ impl QuestionTable {
             .ok()
             .and_then(|index| self.slots.get(index))
             .is_some_and(|slot| slot.generation == key.generation && slot.value.is_some())
+    }
+
+    fn contains_id(&self, id: u32) -> bool {
+        usize::try_from(id)
+            .ok()
+            .and_then(|index| self.slots.get(index))
+            .is_some_and(|slot| slot.value.is_some() || slot.reserved)
+    }
+
+    fn is_tail_call_id(&self, id: u32) -> bool {
+        self.slots
+            .get(usize::try_from(id).unwrap_or(usize::MAX))
+            .and_then(|slot| slot.value.as_ref())
+            .is_some_and(|question| question.is_tail_call)
     }
 
     fn remove(&mut self, key: QuestionKey) -> Option<QuestionState> {
@@ -1160,11 +1753,50 @@ impl QuestionTable {
         Some((key, value))
     }
 
+    fn reserve_id(&mut self, id: u32) -> Option<(QuestionKey, QuestionState)> {
+        let slot = usize::try_from(id)
+            .ok()
+            .and_then(|index| self.slots.get_mut(index))?;
+        if slot.reserved {
+            return None;
+        }
+        let key = QuestionKey {
+            id,
+            generation: slot.generation,
+        };
+        let value = slot.value.take()?;
+        slot.reserved = true;
+        Some((key, value))
+    }
+
+    fn release_reserved(&mut self, key: QuestionKey) -> bool {
+        let Some(slot) = usize::try_from(key.id)
+            .ok()
+            .and_then(|index| self.slots.get_mut(index))
+        else {
+            return false;
+        };
+        if slot.generation != key.generation || !slot.reserved || slot.value.is_some() {
+            return false;
+        }
+        let Some(next_generation) = slot.generation.checked_add(1) else {
+            return false;
+        };
+        slot.generation = next_generation;
+        slot.reserved = false;
+        self.len -= 1;
+        true
+    }
+
     fn drain(&mut self) -> Vec<QuestionState> {
         let mut output = Vec::with_capacity(self.len);
         for slot in &mut self.slots {
             if let Some(value) = slot.value.take() {
                 output.push(value);
+                slot.generation = slot.generation.saturating_add(1);
+            }
+            if slot.reserved {
+                slot.reserved = false;
                 slot.generation = slot.generation.saturating_add(1);
             }
         }
@@ -1185,11 +1817,41 @@ enum AnswerPhase {
     Returned,
 }
 
+#[derive(Clone)]
+struct PipelineSnapshot {
+    content: Arc<OwnedMessage>,
+    capabilities: Vec<OutgoingCapability>,
+}
+
+#[derive(Clone)]
+struct RedirectedResponse {
+    result: HandlerResult,
+    capabilities: Vec<OutgoingCapability>,
+}
+
+#[derive(Clone)]
+struct PendingPipelineCall {
+    answer: AnswerKey,
+    transform: Vec<PipelineOp>,
+    interface_id: u64,
+    method_id: u16,
+    params: Payload,
+}
+
 struct AnswerState {
     kind: AnswerKind,
     phase: AnswerPhase,
     result_exports: Vec<u32>,
     param_imports: Vec<u32>,
+    pipeline: Option<PipelineSnapshot>,
+    queued_pipeline_calls: VecDeque<PendingPipelineCall>,
+    finish_received: bool,
+    finish_release_result_caps: bool,
+    redirect_results: bool,
+    redirected_response: Option<RedirectedResponse>,
+    redirect_waiter: Option<(QuestionKey, QuestionState)>,
+    tail_question: Option<QuestionKey>,
+    tail_results_elsewhere: bool,
 }
 
 struct AnswerTable {
@@ -1216,6 +1878,7 @@ impl AnswerTable {
         id: u32,
         kind: AnswerKind,
         param_imports: Vec<u32>,
+        redirect_results: bool,
     ) -> Result<AnswerKey, ConnectionError> {
         if self.values.contains_key(&id) {
             return Err(ConnectionError::DuplicateAnswer(id));
@@ -1237,6 +1900,15 @@ impl AnswerTable {
                     phase: AnswerPhase::InProgress,
                     result_exports: Vec::new(),
                     param_imports,
+                    pipeline: None,
+                    queued_pipeline_calls: VecDeque::new(),
+                    finish_received: false,
+                    finish_release_result_caps: true,
+                    redirect_results,
+                    redirected_response: None,
+                    redirect_waiter: None,
+                    tail_question: None,
+                    tail_results_elsewhere: false,
                 },
             ),
         );
@@ -1267,6 +1939,119 @@ impl AnswerTable {
         true
     }
 
+    fn is_in_progress(&self, key: AnswerKey) -> bool {
+        self.values.get(&key.id).is_some_and(|(generation, value)| {
+            *generation == key.generation && value.phase == AnswerPhase::InProgress
+        })
+    }
+
+    fn redirect_results(&self, key: AnswerKey) -> bool {
+        self.values.get(&key.id).is_some_and(|(generation, value)| {
+            *generation == key.generation && value.redirect_results
+        })
+    }
+
+    fn record_tail_question(&mut self, key: AnswerKey, tail_question: QuestionKey) -> bool {
+        let Some((generation, answer)) = self.values.get_mut(&key.id) else {
+            return false;
+        };
+        if *generation != key.generation
+            || answer.phase != AnswerPhase::Returned
+            || answer.tail_question.is_some()
+        {
+            return false;
+        }
+        answer.tail_question = Some(tail_question);
+        true
+    }
+
+    fn record_tail_results_elsewhere(
+        &mut self,
+        tail_question: QuestionKey,
+    ) -> Result<Option<AnswerState>, ConnectionError> {
+        let original_id = self
+            .values
+            .iter()
+            .find_map(|(id, (_, answer))| {
+                (answer.tail_question == Some(tail_question)).then_some(*id)
+            })
+            .ok_or_else(|| {
+                ConnectionError::Protocol(format!(
+                    "resultsSentElsewhere references untracked tail question {}",
+                    tail_question.id
+                ))
+            })?;
+        let (_, answer) = self
+            .values
+            .get_mut(&original_id)
+            .ok_or(ConnectionError::UnknownQuestion(original_id))?;
+        answer.tail_results_elsewhere = true;
+        if answer.finish_received {
+            Ok(self.remove_id(original_id))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn store_redirected_response(
+        &mut self,
+        key: AnswerKey,
+        response: RedirectedResponse,
+    ) -> Result<Option<(QuestionKey, QuestionState)>, ConnectionError> {
+        let Some((generation, value)) = self.values.get_mut(&key.id) else {
+            return Err(ConnectionError::StaleAnswer(key));
+        };
+        if *generation != key.generation || !value.redirect_results {
+            return Err(ConnectionError::StaleAnswer(key));
+        }
+        value.redirected_response = Some(response);
+        Ok(value.redirect_waiter.take())
+    }
+
+    fn take_redirected_response(&mut self, id: u32) -> Option<RedirectedResponse> {
+        self.values
+            .get_mut(&id)
+            .and_then(|(_, value)| value.redirected_response.take())
+    }
+
+    fn wait_for_redirect(
+        &mut self,
+        id: u32,
+        waiter: (QuestionKey, QuestionState),
+    ) -> Result<(), (ConnectionError, (QuestionKey, QuestionState))> {
+        let Some((_, answer)) = self.values.get_mut(&id) else {
+            return Err((
+                ConnectionError::Protocol(format!(
+                    "takeFromOtherQuestion references unknown answer {id}"
+                )),
+                waiter,
+            ));
+        };
+        if !answer.redirect_results || answer.redirect_waiter.is_some() {
+            return Err((
+                ConnectionError::Protocol(format!(
+                    "takeFromOtherQuestion references unavailable answer {id}"
+                )),
+                waiter,
+            ));
+        }
+        answer.redirect_waiter = Some(waiter);
+        Ok(())
+    }
+
+    fn can_wait_for_redirect(&self, id: u32) -> bool {
+        self.values
+            .get(&id)
+            .is_some_and(|(_, answer)| answer.redirect_results && answer.redirect_waiter.is_none())
+    }
+
+    fn drain_redirect_waiters(&mut self) -> Vec<QuestionState> {
+        self.values
+            .values_mut()
+            .filter_map(|(_, answer)| answer.redirect_waiter.take().map(|(_, state)| state))
+            .collect()
+    }
+
     fn record_result_exports(&mut self, key: AnswerKey, exports: Vec<u32>) -> bool {
         let Some((generation, value)) = self.values.get_mut(&key.id) else {
             return false;
@@ -1284,8 +2069,76 @@ impl AnswerTable {
         })
     }
 
+    fn finish_state(&self, key: AnswerKey) -> Option<bool> {
+        self.values.get(&key.id).and_then(|(generation, value)| {
+            (*generation == key.generation && value.finish_received)
+                .then_some(value.finish_release_result_caps)
+        })
+    }
+
+    fn queue_pipeline_call(
+        &mut self,
+        source_id: u32,
+        call: PendingPipelineCall,
+    ) -> Result<Option<PipelineSnapshot>, ConnectionError> {
+        let (_, source) = self.values.get_mut(&source_id).ok_or_else(|| {
+            ConnectionError::Protocol(format!(
+                "promised answer references unknown answer {source_id}"
+            ))
+        })?;
+        if let Some(pipeline) = &source.pipeline {
+            Ok(Some(pipeline.clone()))
+        } else if source.phase == AnswerPhase::Returned {
+            Err(ConnectionError::Protocol(format!(
+                "answer {source_id} returned without a capability pipeline"
+            )))
+        } else {
+            source.queued_pipeline_calls.push_back(call);
+            Ok(None)
+        }
+    }
+
+    fn resolve_pipeline(
+        &mut self,
+        key: AnswerKey,
+        pipeline: PipelineSnapshot,
+    ) -> Option<VecDeque<PendingPipelineCall>> {
+        let (generation, answer) = self.values.get_mut(&key.id)?;
+        if *generation != key.generation {
+            return None;
+        }
+        answer.pipeline = Some(pipeline);
+        Some(core::mem::take(&mut answer.queued_pipeline_calls))
+    }
+
+    fn fail_pipeline(&mut self, key: AnswerKey) -> Option<VecDeque<PendingPipelineCall>> {
+        let (generation, answer) = self.values.get_mut(&key.id)?;
+        if *generation != key.generation {
+            return None;
+        }
+        Some(core::mem::take(&mut answer.queued_pipeline_calls))
+    }
+
     fn remove_id(&mut self, id: u32) -> Option<AnswerState> {
         self.values.remove(&id).map(|(_, value)| value)
+    }
+
+    fn finish(&mut self, id: u32, release_result_caps: bool) -> Option<AnswerState> {
+        for (_, value) in self.values.values_mut() {
+            value
+                .queued_pipeline_calls
+                .retain(|pending| pending.answer.id != id);
+        }
+        let (_, value) = self.values.get_mut(&id)?;
+        value.finish_received = true;
+        value.finish_release_result_caps = release_result_caps;
+        let keep_for_pipeline = !value.queued_pipeline_calls.is_empty();
+        let keep_for_tail = value.tail_question.is_some() && !value.tail_results_elsewhere;
+        if keep_for_pipeline || keep_for_tail {
+            None
+        } else {
+            self.remove_id(id)
+        }
     }
 
     fn clear(&mut self) {
@@ -1322,6 +2175,16 @@ mod tests {
             .expect("root")
             .set_u64(0, value, 0)
             .expect("value");
+        OwnedMessage::new(arena.into_segments(), ReaderLimits::default()).expect("owned")
+    }
+
+    fn capability_result(index: u32) -> Arc<OwnedMessage> {
+        let mut arena = ExclusiveArena::new(2, 16).expect("arena");
+        arena
+            .init_root_struct(0, 1)
+            .expect("root")
+            .set_capability(0, index)
+            .expect("capability");
         OwnedMessage::new(arena.into_segments(), ReaderLimits::default()).expect("owned")
     }
 
@@ -1569,6 +2432,392 @@ mod tests {
         owner.transition_terminal(ConnectionError::Disconnected, false);
         assert_eq!(peer.stats().active_imports, 0);
         assert_eq!(owner.stats().active_exports, 0);
+    }
+
+    #[test]
+    fn promise_pipeline_chains_and_diamonds_dispatch_before_source_return() {
+        let (client_handle, mut client) =
+            ConnectionActor::new(ActorLimits::default(), ProtocolLimits::default());
+        let (server_handle, mut server) =
+            ConnectionActor::new(ActorLimits::default(), ProtocolLimits::default());
+
+        let bootstrap = client_handle.bootstrap().expect("bootstrap");
+        let root_pipeline = bootstrap.target().pointer_field(0);
+        let Poll::Ready(Some(bootstrap_wire)) = next(&mut client) else {
+            panic!("bootstrap wire")
+        };
+        send_to(bootstrap_wire, &server_handle);
+        let Poll::Ready(Some(ActorEffect::Dispatch {
+            request: IncomingRequest::Bootstrap,
+            completion: root_completion,
+        })) = next(&mut server)
+        else {
+            panic!("bootstrap dispatch")
+        };
+
+        let first = client_handle
+            .call(&root_pipeline, 1, 1, message(1))
+            .expect("first pipeline call");
+        let first_pipeline = first.target().pointer_field(0);
+        let Poll::Ready(Some(first_wire)) = next(&mut client) else {
+            panic!("first pipeline wire")
+        };
+        let _second = client_handle
+            .call(&root_pipeline, 1, 2, message(2))
+            .expect("diamond pipeline call");
+        let Poll::Ready(Some(second_wire)) = next(&mut client) else {
+            panic!("second pipeline wire")
+        };
+        let _chain = client_handle
+            .call(&first_pipeline, 1, 3, message(3))
+            .expect("chain pipeline call");
+        let Poll::Ready(Some(chain_wire)) = next(&mut client) else {
+            panic!("chain pipeline wire")
+        };
+
+        send_to(first_wire, &server_handle);
+        assert!(matches!(next(&mut server), Poll::Pending));
+        send_to(second_wire, &server_handle);
+        assert!(matches!(next(&mut server), Poll::Pending));
+        send_to(chain_wire, &server_handle);
+        assert!(matches!(next(&mut server), Poll::Pending));
+
+        let first_target = HostedCapability::new().expect("first target");
+        root_completion
+            .complete_with_capabilities(
+                capability_result(0),
+                vec![OutgoingCapability::Hosted(first_target.clone())],
+            )
+            .expect("root completes");
+
+        let Poll::Ready(Some(ActorEffect::Dispatch {
+            request:
+                IncomingRequest::Call {
+                    target: IncomingCallTarget::Hosted(first_actual),
+                    method_id: 1,
+                    ..
+                },
+            completion: first_completion,
+        })) = next(&mut server)
+        else {
+            panic!("first queued call dispatches")
+        };
+        assert_eq!(first_actual, first_target);
+        let Poll::Ready(Some(ActorEffect::Dispatch {
+            request:
+                IncomingRequest::Call {
+                    target: IncomingCallTarget::Hosted(second_actual),
+                    method_id: 2,
+                    ..
+                },
+            completion: second_completion,
+        })) = next(&mut server)
+        else {
+            panic!("diamond queued call dispatches")
+        };
+        assert_eq!(second_actual, first_target);
+
+        let Poll::Ready(Some(ActorEffect::Send(_root_return))) = next(&mut server) else {
+            panic!("root return follows local pipeline dispatch")
+        };
+        let chain_target = HostedCapability::new().expect("chain target");
+        first_completion
+            .complete_with_capabilities(
+                capability_result(0),
+                vec![OutgoingCapability::Hosted(chain_target.clone())],
+            )
+            .expect("first completes");
+        let Poll::Ready(Some(ActorEffect::Dispatch {
+            request:
+                IncomingRequest::Call {
+                    target: IncomingCallTarget::Hosted(chain_actual),
+                    method_id: 3,
+                    ..
+                },
+            completion: chain_completion,
+        })) = next(&mut server)
+        else {
+            panic!("chained call dispatches")
+        };
+        assert_eq!(chain_actual, chain_target);
+
+        second_completion
+            .complete(HandlerResult::Results(message(22)))
+            .expect("second completes");
+        chain_completion
+            .complete(HandlerResult::Results(message(33)))
+            .expect("chain completes");
+    }
+
+    #[test]
+    fn level_one_tail_call_routes_results_without_a_proxy_return_payload() {
+        let (alice_handle, mut alice) =
+            ConnectionActor::new(ActorLimits::default(), ProtocolLimits::default());
+        let (bob_handle, mut bob) =
+            ConnectionActor::new(ActorLimits::default(), ProtocolLimits::default());
+
+        let carol = HostedCapability::new().expect("Carol");
+        let carol_descriptor = alice
+            .capabilities
+            .describe_all(&[OutgoingCapability::Hosted(carol.clone())])
+            .expect("Alice exports Carol");
+        bob.receive_cap_table(&carol_descriptor)
+            .expect("Bob imports Carol");
+
+        let mut original = alice_handle.bootstrap().expect("original call");
+        let Poll::Ready(Some(original_wire)) = next(&mut alice) else {
+            panic!("original wire")
+        };
+        send_to(original_wire, &bob_handle);
+        let Poll::Ready(Some(ActorEffect::Dispatch {
+            request: IncomingRequest::Bootstrap,
+            completion: original_completion,
+        })) = next(&mut bob)
+        else {
+            panic!("original dispatch")
+        };
+        original_completion
+            .tail_call_imported(0, 7, 8, message(41), Vec::new())
+            .expect("tail call queued");
+
+        let Poll::Ready(Some(tail_call_wire)) = next(&mut bob) else {
+            panic!("tail call precedes routing return")
+        };
+        let ProtocolMessage::Call(tail_call) =
+            read_protocol_message(effect_message(&tail_call_wire)).expect("tail call reads")
+        else {
+            panic!("tail Call")
+        };
+        assert_eq!(tail_call.send_results_to, SendResultsTo::Yourself);
+        let Poll::Ready(Some(routing_return_wire)) = next(&mut bob) else {
+            panic!("routing return")
+        };
+
+        send_to(tail_call_wire, &alice_handle);
+        let Poll::Ready(Some(ActorEffect::Dispatch {
+            request:
+                IncomingRequest::Call {
+                    target: IncomingCallTarget::Hosted(actual),
+                    ..
+                },
+            completion: tail_completion,
+        })) = next(&mut alice)
+        else {
+            panic!("tail target dispatch")
+        };
+        assert_eq!(actual, carol);
+        send_to(routing_return_wire, &alice_handle);
+        assert!(matches!(next(&mut alice), Poll::Pending));
+        assert!(matches!(poll_future(&mut original), Poll::Pending));
+        assert_eq!(alice.stats().active_questions, 1);
+        let local_result_capability = HostedCapability::new().expect("local result capability");
+        tail_completion
+            .complete_with_capabilities(
+                message(99),
+                vec![OutgoingCapability::Hosted(local_result_capability.clone())],
+            )
+            .expect("tail target completes");
+        let Poll::Ready(Some(results_elsewhere_wire)) = next(&mut alice) else {
+            panic!("resultsSentElsewhere")
+        };
+        let Poll::Ready(Some(original_finish)) = next(&mut alice) else {
+            panic!("original finish")
+        };
+        let Poll::Ready(Ok(ReturnPayload::LocalResults { capabilities, .. })) =
+            poll_future(&mut original)
+        else {
+            panic!("local tail result")
+        };
+        assert_eq!(
+            capabilities,
+            vec![OutgoingCapability::Hosted(local_result_capability)]
+        );
+
+        send_to(results_elsewhere_wire, &bob_handle);
+        assert!(matches!(next(&mut bob), Poll::Pending));
+        send_to(original_finish, &bob_handle);
+        let Poll::Ready(Some(tail_finish)) = next(&mut bob) else {
+            panic!("tail finish follows original finish")
+        };
+        send_to(tail_finish, &alice_handle);
+        assert!(matches!(next(&mut bob), Poll::Pending));
+        assert!(matches!(next(&mut alice), Poll::Pending));
+    }
+
+    #[test]
+    fn finish_keeps_only_the_pipeline_work_that_still_depends_on_an_answer() {
+        let (client_handle, mut client) =
+            ConnectionActor::new(ActorLimits::default(), ProtocolLimits::default());
+        let (server_handle, mut server) =
+            ConnectionActor::new(ActorLimits::default(), ProtocolLimits::default());
+        let bootstrap = client_handle.bootstrap().expect("bootstrap");
+        let pipeline = bootstrap.target().pointer_field(0);
+        let Poll::Ready(Some(bootstrap_wire)) = next(&mut client) else {
+            panic!("bootstrap wire")
+        };
+        send_to(bootstrap_wire, &server_handle);
+        let Poll::Ready(Some(ActorEffect::Dispatch {
+            completion: root_completion,
+            ..
+        })) = next(&mut server)
+        else {
+            panic!("root dispatch")
+        };
+        let _call = client_handle
+            .call(&pipeline, 1, 9, message(9))
+            .expect("pipeline call");
+        let Poll::Ready(Some(call_wire)) = next(&mut client) else {
+            panic!("pipeline wire")
+        };
+        send_to(call_wire, &server_handle);
+        assert!(matches!(next(&mut server), Poll::Pending));
+
+        server_handle
+            .receive(crate::encode_finish(0, ProtocolLimits::default()).expect("finish"))
+            .expect("finish queued");
+        assert!(matches!(next(&mut server), Poll::Pending));
+        assert_eq!(server.stats().active_answers, 2);
+
+        let target = HostedCapability::new().expect("pipeline target");
+        root_completion
+            .complete_with_capabilities(
+                capability_result(0),
+                vec![OutgoingCapability::Hosted(target.clone())],
+            )
+            .expect("root completion");
+        let Poll::Ready(Some(ActorEffect::Dispatch {
+            request:
+                IncomingRequest::Call {
+                    target: IncomingCallTarget::Hosted(actual),
+                    ..
+                },
+            completion,
+        })) = next(&mut server)
+        else {
+            panic!("dependent call survives finish")
+        };
+        assert_eq!(actual, target);
+        assert_eq!(server.stats().active_answers, 1);
+        assert_eq!(server.stats().active_exports, 0);
+        completion
+            .complete(HandlerResult::Results(message(10)))
+            .expect("dependent completion");
+        let Poll::Ready(Some(ActorEffect::Send(returned))) = next(&mut server) else {
+            panic!("dependent return")
+        };
+        let ProtocolMessage::Return(returned) = read_protocol_message(returned).expect("return")
+        else {
+            panic!("Return")
+        };
+        assert_eq!(returned.answer_id, 1);
+    }
+
+    #[test]
+    fn finished_queued_pipeline_call_is_not_dispatched_when_source_resolves() {
+        let (client_handle, mut client) =
+            ConnectionActor::new(ActorLimits::default(), ProtocolLimits::default());
+        let (server_handle, mut server) =
+            ConnectionActor::new(ActorLimits::default(), ProtocolLimits::default());
+        let bootstrap = client_handle.bootstrap().expect("bootstrap");
+        let pipeline = bootstrap.target().pointer_field(0);
+        let Poll::Ready(Some(bootstrap_wire)) = next(&mut client) else {
+            panic!("bootstrap wire")
+        };
+        send_to(bootstrap_wire, &server_handle);
+        let Poll::Ready(Some(ActorEffect::Dispatch {
+            completion: root_completion,
+            ..
+        })) = next(&mut server)
+        else {
+            panic!("root dispatch")
+        };
+
+        let _canceled = client_handle
+            .call(&pipeline, 1, 9, message(9))
+            .expect("pipeline call");
+        let Poll::Ready(Some(call_wire)) = next(&mut client) else {
+            panic!("pipeline wire")
+        };
+        send_to(call_wire, &server_handle);
+        assert!(matches!(next(&mut server), Poll::Pending));
+        server_handle
+            .receive(crate::encode_finish(1, ProtocolLimits::default()).expect("finish"))
+            .expect("finish queued");
+        assert!(matches!(next(&mut server), Poll::Pending));
+        assert_eq!(server.stats().active_answers, 1);
+
+        let target = HostedCapability::new().expect("pipeline target");
+        root_completion
+            .complete_with_capabilities(
+                capability_result(0),
+                vec![OutgoingCapability::Hosted(target)],
+            )
+            .expect("root completion");
+        let Poll::Ready(Some(ActorEffect::Send(returned))) = next(&mut server) else {
+            panic!("root return")
+        };
+        let ProtocolMessage::Return(returned) = read_protocol_message(returned).expect("return")
+        else {
+            panic!("Return")
+        };
+        assert_eq!(returned.answer_id, 0);
+        assert!(matches!(next(&mut server), Poll::Pending));
+    }
+
+    #[test]
+    fn invalid_pipeline_transform_fails_only_the_dependent_call() {
+        let (client_handle, mut client) =
+            ConnectionActor::new(ActorLimits::default(), ProtocolLimits::default());
+        let (server_handle, mut server) =
+            ConnectionActor::new(ActorLimits::default(), ProtocolLimits::default());
+        let bootstrap = client_handle.bootstrap().expect("bootstrap");
+        let invalid_pipeline = bootstrap.target().pointer_field(0);
+        let Poll::Ready(Some(bootstrap_wire)) = next(&mut client) else {
+            panic!("bootstrap wire")
+        };
+        send_to(bootstrap_wire, &server_handle);
+        let Poll::Ready(Some(ActorEffect::Dispatch {
+            completion: root_completion,
+            ..
+        })) = next(&mut server)
+        else {
+            panic!("root dispatch")
+        };
+        let _dependent = client_handle
+            .call(&invalid_pipeline, 1, 9, message(9))
+            .expect("pipeline call");
+        let Poll::Ready(Some(call_wire)) = next(&mut client) else {
+            panic!("pipeline wire")
+        };
+        send_to(call_wire, &server_handle);
+        assert!(matches!(next(&mut server), Poll::Pending));
+
+        root_completion
+            .complete(HandlerResult::Results(message(10)))
+            .expect("root completion");
+        let Poll::Ready(Some(ActorEffect::Send(failed))) = next(&mut server) else {
+            panic!("dependent exception")
+        };
+        let ProtocolMessage::Return(failed) = read_protocol_message(failed).expect("return") else {
+            panic!("Return")
+        };
+        assert_eq!(failed.answer_id, 1);
+        assert!(matches!(failed.payload, ReturnPayload::Exception(_)));
+        let Poll::Ready(Some(ActorEffect::Send(root))) = next(&mut server) else {
+            panic!("root return")
+        };
+        let ProtocolMessage::Return(root) = read_protocol_message(root).expect("return") else {
+            panic!("Return")
+        };
+        assert_eq!(root.answer_id, 0);
+        assert!(matches!(next(&mut server), Poll::Pending));
+    }
+
+    fn effect_message(effect: &ActorEffect) -> Arc<OwnedMessage> {
+        let ActorEffect::Send(message) = effect else {
+            panic!("send effect")
+        };
+        Arc::clone(message)
     }
 
     #[test]

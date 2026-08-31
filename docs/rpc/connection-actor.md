@@ -29,13 +29,18 @@ construction are bounded before growth.
 
 ## Lifecycle
 
-At Level 0, a `Call` can target an active bootstrap answer and its
-`PromisedAnswer.transform` must be empty. M34 also permits settled imported-cap
-targets and hosted/receiver-hosted payload descriptors. Their exact lifetime
-rules are documented in [capability-lifetimes.md](capability-lifetimes.md).
+At Level 0, a `Call` can target an active bootstrap answer. M34 also permits
+settled imported-cap targets and hosted/receiver-hosted payload descriptors.
+M35 adds bounded non-empty promised-answer transforms, queued pipeline
+delivery, `receiverAnswer`, and two-party Level-1 tail routing. Their exact
+rules are documented in [capability-lifetimes.md](capability-lifetimes.md) and
+[promise-pipelining.md](promise-pipelining.md).
 
-An early `Finish` removes its answer entry. A later handler completion becomes
-a harmless stale-generation event. Shutdown closes the mailbox, rejects new
+An early `Finish` removes an answer unless unresolved pipeline calls still
+depend on it. In that case the actor retains only the dependency state, routes
+those calls when the handler completes, and suppresses the finished source's
+wire return. A later completion for a fully removed answer becomes a harmless
+stale-generation event. Shutdown closes the mailbox, rejects new
 commands, completes every question exactly once with `Disconnected`, releases
 all answers, discards queued work with terminal results where applicable, and
 asks the driver to close the transport. A peer `abort` preserves its structured
@@ -50,8 +55,7 @@ to M43.
 
 ## Explicit non-goals
 
-M33/M34 do not implement promise descriptors, general promised-answer
-transforms, promise resolution, embargo, streaming
-flow control, cooperative handler cancellation, reconnect, scheduling policy,
-attached-resource meaning, or three-party protocol features. Those remain
-M34–M45.
+M33–M35 do not implement `senderPromise`, `Resolve`, embargo, streaming flow
+control, cooperative cancellation of already-dispatched handlers, reconnect,
+scheduling policy, attached-resource meaning, or three-party protocol
+features. Those remain M36–M45.

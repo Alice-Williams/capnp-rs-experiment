@@ -9,15 +9,16 @@
 //! or excessive `Release` is a protocol error. Disconnect clears all four
 //! tables without emitting traffic.
 //!
-//! Promise descriptors, promised answers, resolution, embargo, third-party
-//! handoff, and attached resources are intentionally not implemented here.
+//! M35 adds `receiverAnswer` as a non-refcounted routing descriptor. Promise
+//! resolution, embargo, third-party handoff, and attached resources are
+//! intentionally not implemented here.
 
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::{CapDescriptor, ReleaseMessage};
+use crate::{CapDescriptor, PromisedAnswer, ReleaseMessage};
 
 static NEXT_HOSTED_IDENTITY: AtomicU64 = AtomicU64::new(1);
 
@@ -69,6 +70,7 @@ impl Eq for HostedCapability {}
 pub enum OutgoingCapability {
     None,
     Hosted(HostedCapability),
+    ReceiverAnswer(PromisedAnswer),
     /// A capability imported from this peer and now sent back to it.
     ReceiverHosted(u32),
 }
@@ -80,6 +82,7 @@ pub enum ReceivedCapability {
     Imported(u32),
     /// A capability previously exported by this connection endpoint.
     Hosted(HostedCapability),
+    ReceiverAnswer(PromisedAnswer),
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -196,6 +199,9 @@ impl CapabilityTables {
                 }
                 Ok(CapDescriptor::ReceiverHosted(*id))
             }
+            OutgoingCapability::ReceiverAnswer(promised_answer) => {
+                Ok(CapDescriptor::ReceiverAnswer(promised_answer.clone()))
+            }
         }
     }
 
@@ -246,6 +252,9 @@ impl CapabilityTables {
                 .get(id)
                 .map(|entry| ReceivedCapability::Hosted(entry.capability.clone()))
                 .ok_or(CapabilityError::UnknownExport(*id)),
+            CapDescriptor::ReceiverAnswer(promised_answer) => {
+                Ok(ReceivedCapability::ReceiverAnswer(promised_answer.clone()))
+            }
         }
     }
 

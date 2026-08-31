@@ -62,7 +62,7 @@ generated_api = "M21 typed data and thread-safe local interface APIs with exact 
 native_compiler = "M26 native multi-file compile and id CLI, plugin-compatible request streaming, deterministic built-in Rust output, and self-hosted generation without a system capnp compiler"
 text_tools = "M27 bounded native text encode/decode/eval with standard, packed, and flat modes and pinned C++ short-format parity"
 json = "M28 bounded reflection codec and native binary/packed/flat JSON conversion with pinned C++ policy and annotations"
-rpc_level = "M34 settled Level-1 capability payloads with actor-owned import/export tables, exact refcounts, hosted callbacks, explicit/implicit release, and deterministic disconnect cleanup; promises and pipelining remain M35+"
+rpc_level = "M35 bounded promised-answer transforms, receiverAnswer payloads, actor-owned queued delivery, early-Finish cleanup, and two-party Level-1 tail routing, layered over M34 exact capability lifetime accounting; Resolve and E-order remain M36"
 parallel_read = "M29 zero-copy Arc-owned list partitions and deterministic retained-subtree work plans for scoped or external executors"
 parallel_build = "M30 disjoint primitive partitions plus sealed single-segment worker fragments with deterministic far-link finalization"
 batch_pipeline = "M31 bounded reservation-window scheduling for ordered concurrent process/build/pack work with no-pool single-item paths"
@@ -108,6 +108,19 @@ M31 = "complete"
 M32 = "complete"
 M33 = "complete"
 M34 = "complete"
+M35 = "complete"
+
+[evidence.M35]
+crates = ["crates/capnp-message", "crates/capnp-rpc-core"]
+wire = ["MessageTarget.promisedAnswer", "PromisedAnswer.transform noop/getPointerField", "CapDescriptor.receiverAnswer", "Call.sendResultsTo.yourself", "Return.resultsSentElsewhere", "Return.takeFromOtherQuestion"]
+pipeline = ["QuestionFuture targets append schema-independent pointer transforms", "unresolved calls queue under actor-owned answer state", "chains and diamonds dispatch before the source Return", "only struct pointer fields may be traversed", "invalid endpoints fail only the dependent call", "transform count is bounded on encode and decode"]
+lifecycle = ["Finish removes matching queued work", "finished sources retain only state required by dependent calls", "source Return is suppressed after early Finish", "releaseResultCaps governs retained result exports", "tail question IDs remain reserved through redirected completion", "forwarded-call Finish waits for the original caller Finish"]
+tail_routing = "CompletionToken::tail_call_imported emits sendResultsTo.yourself before takeFromOtherQuestion; either redirected-result/routing-return arrival order completes the original future once with local results, exceptions, cancellation, and local capabilities"
+oracle_fixture = "conformance/fixtures/cpp/e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/rpc-calculator-pipeline.bin SHA-256 c9523a32a16e79283eab9b4483b4c52573346cd814f3a848003c34b59e3d4d18"
+oracle_check = "tools/verify-m35-calculator-pipeline.sh: pinned C++ emits Bootstrap/getOperator/evaluate pipeline before returns, native routes and answers it, pinned C++ validates all three Returns"
+documentation = "docs/rpc/promise-pipelining.md"
+limitations = ["settled local/hosted pipeline targets only", "senderPromise, Resolve, and E-order remain M36", "already-dispatched cooperative cancellation remains M38", "attached resources remain M43", "three-party routing remains M44+"]
+validation = "27 capnp-rpc-core tests plus capnp-rpc integration tests; pinned C++ -> native -> pinned C++ calculator pipeline; Rust 1.98 and 1.85 workspace tests; Clippy -D warnings; doctests; complete 28-test Bazel suite"
 
 [evidence.M34]
 crates = ["crates/capnp-rpc-core", "crates/capnp-rpc"]

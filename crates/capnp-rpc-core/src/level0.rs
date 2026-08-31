@@ -1,8 +1,9 @@
-//! Pinned Level-0/hosted-capability RPC message bindings.
+//! Pinned two-party Level-1 RPC message bindings through promise pipelining.
 //!
-//! M34 adds the settled Level-1 descriptor forms (`senderHosted` and
-//! `receiverHosted`) and `Release`. Promise, pipeline, third-party, and file
-//! descriptor behavior remains owned by later milestones.
+//! M34 adds settled hosted descriptors and `Release`; M35 adds promised-answer
+//! transforms, `receiverAnswer`, redirected results, and Level-1 tail routing.
+//! `Resolve`, embargo, third-party, and attached-resource behavior remains
+//! owned by later milestones.
 
 use std::sync::Arc;
 
@@ -19,10 +20,23 @@ pub struct BootstrapMessage {
     pub question_id: u32,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CallTarget {
     BootstrapAnswer(u32),
     ImportedCap(u32),
+    PromisedAnswer(PromisedAnswer),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PipelineOp {
+    Noop,
+    GetPointerField(u16),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PromisedAnswer {
+    pub question_id: u32,
+    pub transform: Vec<PipelineOp>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -30,6 +44,13 @@ pub enum CapDescriptor {
     None,
     SenderHosted(u32),
     ReceiverHosted(u32),
+    ReceiverAnswer(PromisedAnswer),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SendResultsTo {
+    Caller,
+    Yourself,
 }
 
 #[derive(Clone, Debug)]
@@ -45,13 +66,20 @@ pub struct CallMessage {
     pub interface_id: u64,
     pub method_id: u16,
     pub params: Payload,
+    pub send_results_to: SendResultsTo,
 }
 
 #[derive(Clone, Debug)]
 pub enum ReturnPayload {
     Results(Payload),
+    LocalResults {
+        content: DynamicAnyPointer,
+        capabilities: Vec<crate::OutgoingCapability>,
+    },
     Exception(RpcException),
     Canceled,
+    ResultsSentElsewhere,
+    TakeFromOtherQuestion(u32),
 }
 
 #[derive(Clone, Debug)]
@@ -85,6 +113,8 @@ pub enum HandlerResult {
     },
     Exception(RpcException),
     Canceled,
+    ResultsSentElsewhere,
+    TakeFromOtherQuestion(u32),
 }
 
 pub fn encode_bootstrap(
@@ -131,6 +161,29 @@ pub fn encode_call_with_capabilities(
     cap_table: &[CapDescriptor],
     limits: ProtocolLimits,
 ) -> Result<Arc<OwnedMessage>, ProtocolError> {
+    encode_call_with_options(
+        question_id,
+        target,
+        interface_id,
+        method_id,
+        params,
+        cap_table,
+        SendResultsTo::Caller,
+        limits,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn encode_call_with_options(
+    question_id: u32,
+    target: CallTarget,
+    interface_id: u64,
+    method_id: u16,
+    params: &Arc<OwnedMessage>,
+    cap_table: &[CapDescriptor],
+    send_results_to: SendResultsTo,
+    limits: ProtocolLimits,
+) -> Result<Arc<OwnedMessage>, ProtocolError> {
     check_cap_table_len(cap_table.len(), limits)?;
     let content = opaque_root(params, limits)?;
     let schema = protocol_schema()?;
@@ -143,8 +196,11 @@ pub fn encode_call_with_capabilities(
         call.set("interfaceId", DynamicInput::UInt64(interface_id))?;
         call.set("methodId", DynamicInput::UInt16(method_id))?;
         {
-            let mut send_results_to = call.group("sendResultsTo")?;
-            send_results_to.activate("caller")?;
+            let mut output = call.group("sendResultsTo")?;
+            match send_results_to {
+                SendResultsTo::Caller => output.activate("caller")?,
+                SendResultsTo::Yourself => output.activate("yourself")?,
+            }
         }
         {
             let mut target_builder = call.init_struct("target")?;
@@ -157,12 +213,16 @@ pub fn encode_call_with_capabilities(
                 CallTarget::ImportedCap(import_id) => {
                     target_builder.set("importedCap", DynamicInput::UInt32(import_id))?;
                 }
+                CallTarget::PromisedAnswer(promised_answer) => {
+                    let mut promised = target_builder.init_struct("promisedAnswer")?;
+                    write_promised_answer(&mut promised, &promised_answer, limits)?;
+                }
             }
         }
         {
             let mut payload = call.init_struct("params")?;
             payload.set("content", DynamicInput::Pointer(&content))?;
-            write_cap_table(&mut payload, cap_table)?;
+            write_cap_table(&mut payload, cap_table, limits)?;
         }
     }
     owned(arena, limits)
@@ -183,6 +243,7 @@ pub fn encode_return(
             None
         }
         HandlerResult::Canceled => None,
+        HandlerResult::ResultsSentElsewhere | HandlerResult::TakeFromOtherQuestion(_) => None,
     };
     let schema = protocol_schema()?;
     let mut arena = arena(limits)?;
@@ -202,13 +263,19 @@ pub fn encode_return(
                 check_cap_table_len(cap_table.len(), limits)?;
                 let mut payload = returned.init_struct("results")?;
                 payload.set("content", DynamicInput::Pointer(pointer))?;
-                write_cap_table(&mut payload, cap_table)?;
+                write_cap_table(&mut payload, cap_table, limits)?;
             }
             (HandlerResult::Exception(exception), None) => {
                 let mut output = returned.init_struct("exception")?;
                 write_exception(&mut output, exception)?;
             }
             (HandlerResult::Canceled, None) => returned.activate("canceled")?,
+            (HandlerResult::ResultsSentElsewhere, None) => {
+                returned.activate("resultsSentElsewhere")?
+            }
+            (HandlerResult::TakeFromOtherQuestion(question_id), None) => {
+                returned.set("takeFromOtherQuestion", DynamicInput::UInt32(*question_id))?;
+            }
             _ => return Err(ProtocolError::FieldType("return")),
         }
     }
@@ -280,25 +347,21 @@ pub(crate) fn read_call(
         0 => CallTarget::ImportedCap(uint32(target.get("importedCap")?, "importedCap")?),
         1 => {
             let promised = structure(target.get("promisedAnswer")?, "promisedAnswer")?;
-            let transform = list(promised.get("transform")?, "transform")?;
-            if let Some(transform) = transform {
-                if transform.len()? != 0 {
-                    return Err(ProtocolError::UnsupportedLevel0(
-                        "non-empty promised-answer transform",
-                    ));
-                }
+            let promised = read_promised_answer(&promised, limits)?;
+            if promised.transform.is_empty() {
+                CallTarget::BootstrapAnswer(promised.question_id)
+            } else {
+                CallTarget::PromisedAnswer(promised)
             }
-            CallTarget::BootstrapAnswer(uint32(
-                promised.get("questionId")?,
-                "promisedAnswer.questionId",
-            )?)
         }
-        _ => return Err(ProtocolError::UnsupportedLevel0("call target")),
+        _ => return Err(ProtocolError::UnsupportedFeature("call target")),
     };
     let send_results_to = structure(call.get("sendResultsTo")?, "sendResultsTo")?;
-    if send_results_to.union_discriminant()? != Some(0) {
-        return Err(ProtocolError::UnsupportedLevel0("sendResultsTo"));
-    }
+    let send_results_to = match send_results_to.union_discriminant()?.unwrap_or(u16::MAX) {
+        0 => SendResultsTo::Caller,
+        1 => SendResultsTo::Yourself,
+        _ => return Err(ProtocolError::UnsupportedFeature("sendResultsTo")),
+    };
     let params = structure(call.get("params")?, "params")?;
     Ok(CallMessage {
         question_id: uint32(call.get("questionId")?, "questionId")?,
@@ -306,6 +369,7 @@ pub(crate) fn read_call(
         interface_id: uint64(call.get("interfaceId")?, "interfaceId")?,
         method_id: uint16(call.get("methodId")?, "methodId")?,
         params: read_payload(&params, "params.content", limits)?,
+        send_results_to,
     })
 }
 
@@ -324,7 +388,12 @@ pub(crate) fn read_return(
             ReturnPayload::Exception(read_exception(&exception)?)
         }
         2 => ReturnPayload::Canceled,
-        _ => return Err(ProtocolError::UnsupportedLevel0("return payload")),
+        3 => ReturnPayload::ResultsSentElsewhere,
+        4 => ReturnPayload::TakeFromOtherQuestion(uint32(
+            returned.get("takeFromOtherQuestion")?,
+            "takeFromOtherQuestion",
+        )?),
+        _ => return Err(ProtocolError::UnsupportedFeature("return payload")),
     };
     Ok(ReturnMessage {
         answer_id: uint32(returned.get("answerId")?, "answerId")?,
@@ -416,6 +485,7 @@ fn check_cap_table_len(len: usize, limits: ProtocolLimits) -> Result<(), Protoco
 fn write_cap_table(
     payload: &mut capnp_schema::DynamicStructBuilder<'_, '_>,
     cap_table: &[CapDescriptor],
+    limits: ProtocolLimits,
 ) -> Result<(), ProtocolError> {
     let count = u32::try_from(cap_table.len()).map_err(|_| ProtocolError::MessageSizeOverflow)?;
     let mut output = payload.init_list("capTable", count)?;
@@ -430,7 +500,73 @@ fn write_cap_table(
             CapDescriptor::ReceiverHosted(id) => {
                 value.set("receiverHosted", DynamicInput::UInt32(*id))?;
             }
+            CapDescriptor::ReceiverAnswer(promised_answer) => {
+                let mut promised = value.init_struct("receiverAnswer")?;
+                write_promised_answer(&mut promised, promised_answer, limits)?;
+            }
         }
+    }
+    Ok(())
+}
+
+fn write_promised_answer(
+    promised: &mut capnp_schema::DynamicStructBuilder<'_, '_>,
+    value: &PromisedAnswer,
+    limits: ProtocolLimits,
+) -> Result<(), ProtocolError> {
+    check_transform_len(value.transform.len(), limits)?;
+    promised.set("questionId", DynamicInput::UInt32(value.question_id))?;
+    let count =
+        u32::try_from(value.transform.len()).map_err(|_| ProtocolError::MessageSizeOverflow)?;
+    let mut transform = promised.init_list("transform", count)?;
+    for (index, operation) in value.transform.iter().enumerate() {
+        let index = u32::try_from(index).map_err(|_| ProtocolError::MessageSizeOverflow)?;
+        let mut output = transform.struct_element(index)?;
+        match operation {
+            PipelineOp::Noop => output.activate("noop")?,
+            PipelineOp::GetPointerField(field) => {
+                output.set("getPointerField", DynamicInput::UInt16(*field))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn read_promised_answer(
+    promised: &DynamicStruct,
+    limits: ProtocolLimits,
+) -> Result<PromisedAnswer, ProtocolError> {
+    let mut output = Vec::new();
+    if let Some(transform) = list(promised.get("transform")?, "transform")? {
+        let len =
+            usize::try_from(transform.len()?).map_err(|_| ProtocolError::MessageSizeOverflow)?;
+        check_transform_len(len, limits)?;
+        output.reserve(len);
+        for index in 0..transform.len()? {
+            let operation = structure(transform.get(index)?, "transform operation")?;
+            output.push(match operation.union_discriminant()?.unwrap_or(u16::MAX) {
+                0 => PipelineOp::Noop,
+                1 => PipelineOp::GetPointerField(uint16(
+                    operation.get("getPointerField")?,
+                    "getPointerField",
+                )?),
+                _ => return Err(ProtocolError::InvalidPipelineTransform),
+            });
+        }
+    }
+    Ok(PromisedAnswer {
+        question_id: uint32(promised.get("questionId")?, "promisedAnswer.questionId")?,
+        transform: output,
+    })
+}
+
+fn check_transform_len(len: usize, limits: ProtocolLimits) -> Result<(), ProtocolError> {
+    if len > limits.max_pipeline_ops {
+        return Err(ProtocolError::Limit {
+            field: "promisedAnswer.transform",
+            requested: len,
+            limit: limits.max_pipeline_ops,
+        });
     }
     Ok(())
 }
@@ -459,10 +595,13 @@ fn read_payload(
                         value.get("receiverHosted")?,
                         "receiverHosted",
                     )?),
-                    2 => return Err(ProtocolError::UnsupportedLevel0("senderPromise")),
-                    4 => return Err(ProtocolError::UnsupportedLevel0("receiverAnswer")),
-                    5 => return Err(ProtocolError::UnsupportedLevel0("thirdPartyHosted")),
-                    _ => return Err(ProtocolError::UnsupportedLevel0("capability descriptor")),
+                    2 => return Err(ProtocolError::UnsupportedFeature("senderPromise")),
+                    4 => {
+                        let promised = structure(value.get("receiverAnswer")?, "receiverAnswer")?;
+                        CapDescriptor::ReceiverAnswer(read_promised_answer(&promised, limits)?)
+                    }
+                    5 => return Err(ProtocolError::UnsupportedFeature("thirdPartyHosted")),
+                    _ => return Err(ProtocolError::UnsupportedFeature("capability descriptor")),
                 };
                 output.push(descriptor);
             }
@@ -531,7 +670,7 @@ mod tests {
     }
 
     #[test]
-    fn every_level_zero_message_round_trips() {
+    fn rpc_messages_through_m35_round_trip() {
         let limits = ProtocolLimits::default();
         assert!(matches!(
             read_protocol_message(encode_bootstrap(7, limits).expect("bootstrap")),
@@ -584,6 +723,33 @@ mod tests {
         assert_eq!(call.target, CallTarget::ImportedCap(12));
         assert_eq!(call.params.cap_table, descriptors);
 
+        let promised = PromisedAnswer {
+            question_id: 10,
+            transform: vec![PipelineOp::Noop, PipelineOp::GetPointerField(3)],
+        };
+        let ProtocolMessage::Call(call) = read_protocol_message(
+            encode_call_with_options(
+                11,
+                CallTarget::PromisedAnswer(promised.clone()),
+                0xcafe,
+                6,
+                &data_message(44),
+                &[CapDescriptor::ReceiverAnswer(promised.clone())],
+                SendResultsTo::Yourself,
+                limits,
+            )
+            .expect("pipeline call"),
+        )
+        .expect("pipeline call reads") else {
+            panic!("pipeline call")
+        };
+        assert_eq!(call.target, CallTarget::PromisedAnswer(promised.clone()));
+        assert_eq!(call.send_results_to, SendResultsTo::Yourself);
+        assert_eq!(
+            call.params.cap_table,
+            vec![CapDescriptor::ReceiverAnswer(promised)]
+        );
+
         for result in [
             HandlerResult::Results(data_message(88)),
             HandlerResult::Exception(RpcException::new(
@@ -591,6 +757,8 @@ mod tests {
                 crate::ExceptionType::Overloaded,
             )),
             HandlerResult::Canceled,
+            HandlerResult::ResultsSentElsewhere,
+            HandlerResult::TakeFromOtherQuestion(71),
         ] {
             let ProtocolMessage::Return(returned) =
                 read_protocol_message(encode_return(9, &result, limits).expect("return"))
@@ -604,6 +772,11 @@ mod tests {
                 (HandlerResult::Results(_), ReturnPayload::Results(_))
                 | (HandlerResult::Exception(_), ReturnPayload::Exception(_))
                 | (HandlerResult::Canceled, ReturnPayload::Canceled) => {}
+                (HandlerResult::ResultsSentElsewhere, ReturnPayload::ResultsSentElsewhere)
+                | (
+                    HandlerResult::TakeFromOtherQuestion(71),
+                    ReturnPayload::TakeFromOtherQuestion(71),
+                ) => {}
                 _ => panic!("return variant mismatch"),
             }
         }
@@ -652,5 +825,45 @@ mod tests {
                 limit: 1
             })
         ));
+    }
+
+    #[test]
+    fn promise_transform_limit_applies_to_targets_and_capability_descriptors() {
+        let limits = ProtocolLimits {
+            max_pipeline_ops: 1,
+            ..ProtocolLimits::default()
+        };
+        let promised = PromisedAnswer {
+            question_id: 3,
+            transform: vec![PipelineOp::Noop, PipelineOp::GetPointerField(0)],
+        };
+        for result in [
+            encode_call(
+                4,
+                CallTarget::PromisedAnswer(promised.clone()),
+                0,
+                0,
+                &data_message(1),
+                limits,
+            ),
+            encode_call_with_capabilities(
+                4,
+                CallTarget::ImportedCap(0),
+                0,
+                0,
+                &data_message(1),
+                &[CapDescriptor::ReceiverAnswer(promised.clone())],
+                limits,
+            ),
+        ] {
+            assert!(matches!(
+                result,
+                Err(ProtocolError::Limit {
+                    field: "promisedAnswer.transform",
+                    requested: 2,
+                    limit: 1,
+                })
+            ));
+        }
     }
 }

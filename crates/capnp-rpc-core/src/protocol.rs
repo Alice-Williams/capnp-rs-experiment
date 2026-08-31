@@ -39,6 +39,7 @@ pub struct ProtocolLimits {
     pub max_reason_bytes: usize,
     pub max_trace_bytes: usize,
     pub max_cap_table_entries: usize,
+    pub max_pipeline_ops: usize,
 }
 
 impl Default for ProtocolLimits {
@@ -48,6 +49,7 @@ impl Default for ProtocolLimits {
             max_reason_bytes: 64 * 1024,
             max_trace_bytes: 1024 * 1024,
             max_cap_table_entries: 4096,
+            max_pipeline_ops: 64,
         }
     }
 }
@@ -130,8 +132,9 @@ pub enum ProtocolError {
     Message(OwnedReadError),
     Validation(ValidationError),
     FieldType(&'static str),
-    UnsupportedLevel0(&'static str),
+    UnsupportedFeature(&'static str),
     InvalidReferenceCount,
+    InvalidPipelineTransform,
     Limit {
         field: &'static str,
         requested: usize,
@@ -148,11 +151,17 @@ impl fmt::Display for ProtocolError {
             Self::Message(error) => error.fmt(formatter),
             Self::Validation(error) => error.fmt(formatter),
             Self::FieldType(field) => write!(formatter, "RPC field `{field}` has the wrong type"),
-            Self::UnsupportedLevel0(feature) => {
-                write!(formatter, "RPC feature `{feature}` is outside Level 0")
+            Self::UnsupportedFeature(feature) => {
+                write!(
+                    formatter,
+                    "RPC feature `{feature}` is outside the implemented subset"
+                )
             }
             Self::InvalidReferenceCount => {
                 formatter.write_str("RPC release reference count must be non-zero")
+            }
+            Self::InvalidPipelineTransform => {
+                formatter.write_str("RPC promised-answer transform contains an unknown operation")
             }
             Self::Limit {
                 field,
@@ -175,8 +184,9 @@ impl std::error::Error for ProtocolError {
             Self::Validation(error) => Some(error),
             Self::Schema(_)
             | Self::FieldType(_)
-            | Self::UnsupportedLevel0(_)
+            | Self::UnsupportedFeature(_)
             | Self::InvalidReferenceCount
+            | Self::InvalidPipelineTransform
             | Self::Limit { .. }
             | Self::MessageSizeOverflow => None,
         }

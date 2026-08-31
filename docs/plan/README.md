@@ -90,7 +90,7 @@ wire safety or protocol ordering.
 - [M32 — RPC schema binding and transport envelope](milestones/M32-rpc-schema-binding-and-transport-envelope.md) — complete
 - [M33 — Connection actor and Level-0 tables](milestones/M33-connection-actor-and-level-0-tables.md) — complete
 - [M34 — Capability import/export and lifetime](milestones/M34-capability-import-export-and-lifetime.md) — complete
-- [M35 — Promise pipelining and promised answers](milestones/M35-promise-pipelining-and-promised-answers.md)
+- [M35 — Promise pipelining and promised answers](milestones/M35-promise-pipelining-and-promised-answers.md) — complete
 - [M36 — Promise resolution and E-order](milestones/M36-promise-resolution-and-e-order.md)
 - [M37 — Streaming and adaptive flow control](milestones/M37-streaming-and-flow-control.md)
 - [M38 — Cancellation, disconnect, and reconnect](milestones/M38-cancellation-disconnect-and-reconnect.md)
