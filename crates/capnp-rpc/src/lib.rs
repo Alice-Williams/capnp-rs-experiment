@@ -31,6 +31,7 @@ mod join;
 mod level3;
 mod local;
 mod membrane;
+mod persistence;
 mod reconnect;
 mod scheduler;
 #[cfg(unix)]
@@ -72,6 +73,12 @@ pub use local::{
     tail_call,
 };
 pub use membrane::{Membrane, MembraneDecision, MembraneLimits, MembranePolicy, RevocableServer};
+pub use persistence::{
+    AuthenticatedOwner, GrantRecord, IssuedGrant, PersistenceError, PersistenceLimits,
+    PersistenceManager, PersistenceRealm, PersistenceResult, PersistentResolver, PersistentStore,
+    RealmIssuedGrant, RealmValidatedSturdyRef, SaveOptions, StoredGrant, SturdyRef,
+    ValidatedSturdyRef,
+};
 pub use reconnect::{
     CapabilityReconnector, ReconnectLease, RetryDisposition, classify_connection_error,
     classify_exception,

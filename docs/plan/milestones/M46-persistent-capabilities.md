@@ -1,6 +1,6 @@
 # M46 — Persistent capabilities and SturdyRefs
 
-- Status: planned
+- Status: in progress on `dev/m46-persistent-capabilities`
 - Phase: 7
 - Depends on: M38, M40
 
@@ -23,4 +23,3 @@ Restart restoration works; invalid/expired/unauthorized/revoked/wrong-owner toke
 ## Scope boundary
 
 Later milestone behavior may be anticipated in types only where required to avoid a known compatibility dead end. It must not be implemented or claimed here.
-
