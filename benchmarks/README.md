@@ -94,6 +94,11 @@ within 5%; a qualifying multi-message batch must reach 3.0x:
 bash benchmarks/run-m31-batch-pipeline.sh benchmarks/results/<run-name>
 ```
 
+The default uses 31 odd samples per mode because the one-message no-pool
+control intentionally enforces a tight 5% bound between two identical serial
+branches; seven samples proved too sensitive to host scheduling noise during
+the M48 release audit.
+
 ## RPC server-scheduling benchmark
 
 `server_scheduling` submits one burst through a single service/executor adapter

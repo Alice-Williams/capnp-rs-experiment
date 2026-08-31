@@ -6,7 +6,7 @@ output=${1:-}
 words=${M31_BENCH_WORDS:-1024}
 rounds=${M31_BENCH_ROUNDS:-128}
 workers=${M31_BENCH_WORKERS:-4}
-samples=${M31_BENCH_SAMPLES:-7}
+samples=${M31_BENCH_SAMPLES:-31}
 threshold=${M31_BENCH_THRESHOLD:-2}
 counts=${M31_BENCH_COUNTS:-"1 2 4 8 16 32 64"}
 
@@ -23,8 +23,8 @@ if [[ -e "$output" ]]; then
 fi
 if ! [[ "$words" =~ ^[1-9][0-9]*$ && "$rounds" =~ ^[1-9][0-9]*$ && \
         "$workers" =~ ^[1-9][0-9]*$ && "$samples" =~ ^[1-9][0-9]*$ && \
-        "$threshold" =~ ^[1-9][0-9]*$ ]]; then
-    printf 'words, rounds, workers, samples, and threshold must be positive integers\n' >&2
+        "$threshold" =~ ^[1-9][0-9]*$ ]] || (( samples % 2 == 0 )); then
+    printf 'words, rounds, workers, and threshold must be positive; samples must be positive and odd\n' >&2
     exit 1
 fi
 for count in $counts; do
