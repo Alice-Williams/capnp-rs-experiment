@@ -87,3 +87,14 @@ jobs:
 
       - name: Check disjoint partition storage under Miri
         run: cargo +nightly-2026-08-31 miri test -p capnp-message miri_disjoint_primitive_partitions_do_not_alias
+
+  pinned-compatibility-oracles:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CAPNP_ORACLE_ROOT: ${{ runner.temp }}/capnp-oracles
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify every pinned C++ compatibility surface
+        run: bash tools/verify-m48-oracles.sh

@@ -102,3 +102,12 @@ The performance blocker is resolved by
 passes all four qualification gates. Rejected noisy/pre-fix attempts are kept
 beside the accepted results and explained in that result root's README rather
 than being discarded or mistaken for release evidence.
+
+The executable fast release boundary is
+`tools/verify-m48-security-gates.sh`: every pinned oracle, unsafe-code and shell
+check, Cargo tests/docs/lints, MSRV, Bazel, bounded fuzz, Loom, Miri, and the
+fresh performance artifacts. `tools/verify-m48-release-gates.sh` adds the
+recorded M40 and M48 soak results and requires every M00–M48 manifest state to
+be `complete`; it is intentionally impossible to pass while an activation or
+long-run result is missing. GitHub CI runs the complete pinned-oracle suite as
+its own job in addition to the existing Cargo/Bazel and Miri jobs.
