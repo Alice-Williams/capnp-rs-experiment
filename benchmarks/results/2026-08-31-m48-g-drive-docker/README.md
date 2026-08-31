@@ -11,3 +11,10 @@ control, exceeding the 5% noise/regression bound. An immediate independent
 rerun in `m29` passed both below-threshold controls and produced qualifying
 four-worker measurements. Keeping the rejected attempt makes the rerun and
 the gate decision auditable.
+
+`m30-attempt1` and `m30-attempt2` are also retained as rejected evidence. The
+1,024-item control missed the 5% bound twice while the parallel sizes exceeded
+3.3x. Inspection found that the benchmark used the globally indexed checked
+setter inside an already range-bounded partition. Commit `8f1542c` changed the
+workload to the intended partition-local hot path; `m30` was generated from
+that commit and passes without relaxing the gate.

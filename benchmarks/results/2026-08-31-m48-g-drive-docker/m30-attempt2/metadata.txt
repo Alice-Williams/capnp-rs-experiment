@@ -1,0 +1,16 @@
+format_version=1
+generated_utc=2026-08-31T17:38:20Z
+environment=Debian Trixie dev container under Docker Desktop
+kernel=Linux 6.18.33.2-microsoft-standard-WSL2 #1 SMP PREEMPT_DYNAMIC Thu Jun 18 21:54:43 UTC 2026 x86_64 GNU/Linux
+cpu_model=Intel(R) Core(TM) i7-6700K CPU @ 4.00GHz
+logical_cpus=8
+memory_bytes=25157021696
+rustc=rustc 1.98.0 (88d9e12ae 2026-08-18)
+base_git_commit=ee3fc77656a5f6b3f2840b1b661740f76a3f5ad1
+parallel_builder_sha256=2987e18be49c75589f0071584132c3369001051b29cdf31341de44934d7abd95
+benchmark_example_sha256=ef87f082da82e686c4e9ad84e554b22202a2e75f250b2dc93a09be8ba262f2a0
+rounds_per_item=128
+workers=4
+samples_per_mode=7
+parallel_item_threshold=16384
+timer=Rust Instant; median includes arena creation, writing, and finalization
