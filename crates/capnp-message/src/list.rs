@@ -199,6 +199,20 @@ impl<'data> MessageSegments<'data> {
 }
 
 impl<'context, 'data, B: TraversalBudget> ListReader<'context, 'data, B> {
+    pub(crate) const fn from_precharged(
+        segments: &'context MessageSegments<'data>,
+        budget: &'context B,
+        reference: Option<ListRef>,
+        nesting: NestingLimit,
+    ) -> Self {
+        Self {
+            segments,
+            budget,
+            reference,
+            nesting,
+        }
+    }
+
     fn empty(
         segments: &'context MessageSegments<'data>,
         budget: &'context B,

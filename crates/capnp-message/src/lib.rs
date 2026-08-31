@@ -2,7 +2,7 @@
 #![doc = "Safe Cap'n Proto messages, readers, builders, and traversal budgets."]
 
 extern crate alloc;
-#[cfg(test)]
+#[cfg(any(test, feature = "std"))]
 extern crate std;
 
 mod blob;
@@ -12,6 +12,8 @@ mod canonical;
 mod list;
 #[cfg(target_has_atomic = "64")]
 mod owned;
+#[cfg(all(feature = "std", target_has_atomic = "64"))]
+mod parallel;
 mod primitive;
 mod structure;
 mod validation;
@@ -44,6 +46,11 @@ pub use list::{
 pub use owned::{
     BorrowedMessage, ListObject, ObjectKind, ObjectRef, OwnedMessage, OwnedPointerRef,
     OwnedReadError, ReaderLimits, StructElementRef, StructObject, TypedMessage,
+};
+#[cfg(all(feature = "std", target_has_atomic = "64"))]
+pub use parallel::{
+    ListPartition, ListPartitionPlan, MapReduceError, ParallelReadOptions, PlanError, SubtreeBatch,
+    SubtreePlan, SubtreeWork,
 };
 pub use primitive::{DataSection, EnumValue, PrimitiveError, PrimitiveType, PrimitiveValue};
 pub use structure::{

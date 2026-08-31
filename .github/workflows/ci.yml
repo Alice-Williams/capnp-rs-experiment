@@ -23,7 +23,9 @@ jobs:
         run: cargo test --workspace --all-targets
 
       - name: Model exact shared traversal accounting
-        run: cargo test -p capnp-message --features loom-tests loom_proves_competing_charges_preserve_the_hard_limit
+        run: |
+          cargo test -p capnp-message --features loom-tests loom_proves_competing_charges_preserve_the_hard_limit
+          cargo test -p capnp-message --features loom-tests loom_parallel_plan_preserves_precharge_and_nested_budget
 
       - name: Check public API examples and compile failures
         run: cargo test --workspace --doc

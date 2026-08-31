@@ -63,7 +63,7 @@ native_compiler = "M26 native multi-file compile and id CLI, plugin-compatible r
 text_tools = "M27 bounded native text encode/decode/eval with standard, packed, and flat modes and pinned C++ short-format parity"
 json = "M28 bounded reflection codec and native binary/packed/flat JSON conversion with pinned C++ policy and annotations"
 rpc_level = "M21 in-memory local dispatch, inheritance, streaming completion, and capability pipelines; network protocol deferred to M32+"
-parallel_read = "not-started"
+parallel_read = "M29 zero-copy Arc-owned list partitions and deterministic retained-subtree work plans for scoped or external executors"
 parallel_build = "not-started"
 std = "M16 sync partial-I/O and executor-neutral async framing adapters"
 no_std_alloc = "M16 capnp-message and capnp-io alloc feature matrix"
@@ -101,6 +101,19 @@ M25 = "complete"
 M26 = "complete"
 M27 = "complete"
 M28 = "complete"
+M29 = "complete"
+
+[evidence.M29]
+crate = "crates/capnp-message"
+api = ["ListPartitionPlan with balanced contiguous ranges", "ListPartition callback readers over one precharged body", "scoped deterministic map/reduce", "SubtreePlan with deterministic longest-first balancing", "executor-neutral partitions and batches"]
+safety = ["Arc-owned immutable segment backing", "coordinate-only Send + Sync references", "callback reader cannot escape", "no unsafe Send or Sync implementation", "no mutation API"]
+accounting = ["list target validates and charges exactly once per plan", "partition reopen does not duplicate or refund the body charge", "nested pointers retain the exact shared atomic budget", "invalid scheduler options fail before charging"]
+concurrency = ["M29 Loom model covers one root precharge followed by competing nested charges", "repeated eight-partition stress preserves the exact exhausted balance", "worker panic becomes a partition-identified error"]
+threshold = "default 16,384 items and 4,096 items per partition; recorded 1,024/8,192-item cases remain one partition and within 0.4% of one worker"
+benchmark = "2026-08-31 Docker/WSL2 i7-6700K, four workers, 7-sample medians: 3.243x at 16,384 items and 3.618x-3.706x at 65,536-1,048,576 items"
+benchmark_evidence = "benchmarks/results/2026-08-31-m29-g-drive-docker"
+documentation = "docs/tooling/parallel-read.md"
+validation = "Rust 1.98 focused tests, doctests, compile-fail lifetime check, Clippy -D warnings, M29 Loom model, checked-in benchmark gate, plus full Rust 1.98/1.85 and Bazel gates"
 
 [evidence.M28]
 crates = ["crates/capnp-json", "crates/capnp-cli", "crates/capnp-compiler"]

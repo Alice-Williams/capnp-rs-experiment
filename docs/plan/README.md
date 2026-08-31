@@ -81,7 +81,7 @@ wire safety or protocol ordering.
 
 ### Phase 5 — Parallel data processing
 
-- [M29 — Parallel read API and subtree planner](milestones/M29-parallel-read-api.md)
+- [M29 — Parallel read API and subtree planner](milestones/M29-parallel-read-api.md) — complete
 - [M30 — Partitioned parallel builder](milestones/M30-partitioned-parallel-builder.md)
 - [M31 — Batch codec and pipeline scheduling](milestones/M31-batch-codec-and-pipeline-scheduling.md)
 

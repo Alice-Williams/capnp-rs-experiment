@@ -47,3 +47,21 @@ cargo run --release -p capnp-message --example traversal_budget -- 10000000
 
 This is a guardrail for the accounting design, not a parallel scaling claim.
 Later parallel-read milestones own representative workload and scaling gates.
+
+## Parallel immutable-read benchmark
+
+M29 adds a deterministic CPU-bound `List(UInt64)` map/reduce workload. It
+records serial and four-worker medians, partition counts, checksums, and host
+context, verifies that below-threshold inputs stay on one partition without a
+greater-than-5% regression, and requires a qualifying four-worker size to
+reach 3.0x:
+
+```console
+bash benchmarks/run-m29-parallel-read.sh benchmarks/results/<run-name>
+```
+
+The checked-in qualification run is
+`results/2026-08-31-m29-g-drive-docker`. Work-per-item, workers, samples,
+threshold, and sizes can be changed with the `M29_BENCH_*` environment
+variables; altered runs are evidence for that configuration, not the default
+gate.

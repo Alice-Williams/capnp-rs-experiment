@@ -23,7 +23,8 @@ milestones under [`docs/plan`](docs/plan/README.md). The Phase 0 foundation,
 oracle corpus, benchmark harnesses, and safety/concurrency ADRs are complete.
 Implementation has completed the conformance-first wire, construction,
 reflection, code-generation, native compiler, text-tooling, and JSON-tooling
-phases. Parallel processing is the next planned phase.
+phases. The first parallel-processing milestone adds zero-copy immutable list
+partitioning and retained-subtree work planning.
 
 The repository is a fifteen-crate workspace matching the intended architecture.
 `capnp-wire` implements M03's no_std words, little-endian scalar access, checked
@@ -70,6 +71,10 @@ standard, packed, and flat messages plus imported and nested constants.
 Native [reflection-driven JSON conversion](docs/tooling/json-codec.md) covers
 the C++ value policy, standard/packed/flat input and output, schema annotations,
 bounded parsing, strict-mode decoding, and type/field extension handlers.
+
+Native [parallel immutable reads](docs/tooling/parallel-read.md) share owned
+messages without copying, preserve exact traversal accounting across workers,
+and expose executor-neutral list partitions and deterministic subtree batches.
 
 This is experimental software and is not yet suitable for production use.
 

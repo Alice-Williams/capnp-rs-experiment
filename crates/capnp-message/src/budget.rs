@@ -184,6 +184,7 @@ impl core::error::Error for NestingLimitExceeded {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(feature = "loom-tests"))]
     use alloc::vec::Vec;
 
     #[test]

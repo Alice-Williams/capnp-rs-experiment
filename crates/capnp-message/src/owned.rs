@@ -15,7 +15,7 @@ use core::fmt;
 use core::marker::PhantomData;
 
 use crate::{
-    GraphError, ListReadError, ListReader, MessageSegments, NestingLimit, ResolvedPointer,
+    GraphError, ListReadError, ListReader, ListRef, MessageSegments, NestingLimit, ResolvedPointer,
     SharedTraversalBudget, StructBuilder, StructReadError, StructReader, TraversalBudget,
     ValidationError, WireLocation,
 };
@@ -459,6 +459,38 @@ impl ObjectRef<StructObject> {
 }
 
 impl ObjectRef<ListObject> {
+    pub(crate) fn precharge_for_partitions(
+        &self,
+    ) -> Result<(Option<ListRef>, NestingLimit, u64), OwnedReadError> {
+        let segments = self.message.borrowed_segments()?;
+        let bounded = segments
+            .validate_pointer_with_limits(self.location, &self.message.budget, self.nesting)
+            .map_err(ListReadError::from)?;
+        match bounded.pointer {
+            ResolvedPointer::Null => Ok((None, bounded.child_nesting, bounded.charged_words)),
+            ResolvedPointer::List(reference) => Ok((
+                Some(reference),
+                bounded.child_nesting,
+                bounded.charged_words,
+            )),
+            ResolvedPointer::Struct(_) | ResolvedPointer::Capability(_) => {
+                Err(OwnedReadError::ExpectedList)
+            }
+        }
+    }
+
+    pub(crate) fn with_precharged_reader<R>(
+        &self,
+        reference: Option<ListRef>,
+        nesting: NestingLimit,
+        use_reader: impl for<'reader> FnOnce(ListReader<'reader, 'reader, SharedTraversalBudget>) -> R,
+    ) -> Result<R, OwnedReadError> {
+        let segments = self.message.borrowed_segments()?;
+        let reader =
+            ListReader::from_precharged(&segments, &self.message.budget, reference, nesting);
+        Ok(use_reader(reader))
+    }
+
     /// Opens a reader only for the duration of `use_reader`.
     pub fn with_reader<R>(
         &self,
