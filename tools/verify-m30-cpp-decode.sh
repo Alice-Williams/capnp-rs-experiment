@@ -4,6 +4,13 @@ set -euo pipefail
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 oracle_base=${CAPNP_ORACLE_ROOT:-/opt/capnp-oracles}
 oracle_root="$oracle_base/capnproto-e7c9cd96f1505b5ae486db7821006c2f5dce5b5b"
+if [[ -n "${CXX:-}" ]]; then
+    cxx=$CXX
+elif command -v clang++ >/dev/null; then
+    cxx=$(command -v clang++)
+else
+    cxx=$(command -v c++)
+fi
 work=$(mktemp -d)
 trap 'rm -rf -- "$work"' EXIT
 
@@ -26,7 +33,7 @@ int main() {
 }
 EOF
 
-c++ -std=c++20 -O2 \
+"$cxx" -std=c++23 -O2 \
     -I"$oracle_root/install/include" \
     "$work/verify.c++" \
     -L"$oracle_root/install/lib" \
