@@ -68,8 +68,15 @@ The final security gate is resolved for source commit
 unsafe-code and shell checks, Rust 1.85 MSRV, workspace Cargo tests and docs,
 rustdoc, strict Clippy, all 30 Bazel tests, every pinned oracle, and the fresh
 performance results. GitHub CI run 110 independently passed its
-conformance/Bazel, Miri, and full pinned-oracle jobs. Later documentation-only
-commits do not alter either soak wrapper's recorded source-input set.
+conformance/Bazel, Miri, and full pinned-oracle jobs.
+
+Commit `b26a494d41d9528f07d9db96996e7501bc2389b3` changed the inventory gate to
+accept only its three legal dependency phases. The complete security-gate
+composition was therefore rerun at that exact commit and passed again,
+including the phase-aware inventory, every pinned oracle, Cargo/MSRV/Bazel,
+the bounded fuzz target, Loom, Miri, and the release performance checks. The
+changes after `c92e060` remain outside both soak wrappers' recorded source-input
+sets, so this verifier hardening and its evidence do not alter either live run.
 
 The former nested-interface declaration compiler blocker is resolved. Named
 declarations now take precedence over contextual methods, a compiled-schema
