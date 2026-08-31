@@ -90,6 +90,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "capnp-examples"
+version = "1.0.0-rc.1"
+dependencies = [
+ "capnp-codegen",
+ "capnp-compat",
+ "capnp-compiler",
+ "capnp-io",
+ "capnp-message",
+ "capnp-rpc",
+ "capnp-rpc-core",
+ "capnp-schema",
+]
+
+[[package]]
 name = "capnp-generated-fixture"
 version = "1.0.0-rc.1"
 dependencies = [
