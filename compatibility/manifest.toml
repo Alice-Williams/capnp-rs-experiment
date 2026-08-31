@@ -69,6 +69,7 @@ rpc_scheduling = "M39 concurrent, FIFO serial, and keyed scheduling; bounded CPU
 local_capabilities = "M41 implementation candidate: promise/broken/disabled clients, shared and provisional pipelines, dynamic clients/servers, raw tail transfer, bounded capability lists, and exact-set local unwrap; activation awaits M40"
 revocation_membranes = "M42 implementation candidate: revocable servers and recursive bidirectional capability membranes with stable identity, promise resolution, policy interception, and bounded wrapper/call resources; activation awaits M40 and M41"
 attached_resources = "M43 implementation candidate: generic one-owner attachments, pinned attachedFd binding, and bounded Unix SCM_RIGHTS transfer with capability fallback; activation awaits M40"
+level3_handoffs = "M44 implementation candidate: pinned Level-3 wire surface plus authenticated executor-neutral provision, accept, forwarding, return-routing, and embargo coordination; activation awaits M40"
 parallel_read = "M29 zero-copy Arc-owned list partitions and deterministic retained-subtree work plans for scoped or external executors"
 parallel_build = "M30 disjoint primitive partitions plus sealed single-segment worker fragments with deterministic far-link finalization"
 batch_pipeline = "M31 bounded reservation-window scheduling for ordered concurrent process/build/pack work with no-pool single-item paths"
@@ -122,6 +123,20 @@ M39 = "complete"
 M41 = "implementation candidate; activation awaits M40 completion"
 M42 = "implementation candidate; activation awaits M40 and M41 activation"
 M43 = "implementation candidate; activation awaits M40 completion"
+M44 = "implementation candidate; activation awaits M40 completion"
+
+[evidence.M44]
+crates = ["crates/capnp-rpc-core", "crates/capnp-rpc"]
+sources = ["pinned rpc.capnp Level-3 schema and Disembargo.accept", "pinned rpc.h VatNetwork Level-3 hooks", "pinned rpc.c++ Provide/Accept implementation", "pinned rpc-test.c++ lines 2267-2625"]
+wire = ["distinct lossless opaque contact/await/completion tokens", "Provide, Accept, ThirdPartyAnswer", "sendResultsTo.thirdParty and awaitFromThirdParty", "thirdPartyHosted descriptor with ordinary vineId", "callee answer IDs restricted to [2^30, 2^31)", "bounded third-party embargo IDs"]
+authentication = ["peer identity comes only from the network hook", "tokens are interpreted in their authenticated connection context", "forwarding requires network translation for the exact destination", "forged and wrong-connection tokens fail closed", "router never synthesizes or combines capability authority"]
+rendezvous = ["Accept may precede Provide without early authority", "multiple accepts can clone one provision", "vine Finish withdraws the provision", "unfinished accepts fail when the vine closes", "introduction and forwarding failures retain the sender-hosted proxy"]
+ordering = ["provision-scoped embargo IDs", "Accept and pipeline delivery wait for Disembargo.accept", "imported-cap disembargo explicitly continues along the vine", "ThirdPartyAnswer and awaitFromThirdParty match in either arrival order", "callee answer-ID collisions reject"]
+limits = ["bounded provisions", "bounded pending accepts", "bounded embargoes per provision", "bounded pending and adopted return routes", "limit failures are complete-or-unchanged"]
+oracle_check = "tools/verify-m44-level3-handoffs.sh: all six pinned C++ basic/self/forwarding/denied/reflected/embargo cases pass, followed by native wire and authenticated-router simulations"
+documentation = "docs/rpc/level-3-handoffs.md"
+limitations = ["activation awaits the M40 release gate", "network implementations supply their own authenticated dialer and token encoding", "no FD-bearing introduction", "Level-4 Join and persistence remain M45-M46"]
+validation = "focused wire, fallback, three/four-vat, self, forwarding/reflection, embargo, forged-token, return-route, quota, and pinned C++ tests; workspace Cargo, rustdoc, Clippy, shell syntax, MSRV, and Bazel gates"
 
 [evidence.M43]
 crates = ["crates/capnp-rpc-core", "crates/capnp-rpc"]

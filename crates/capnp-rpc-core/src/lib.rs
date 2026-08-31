@@ -12,9 +12,10 @@
 //! M40 freezes this as the two-party Level-1 release-candidate boundary. The
 //! pinned C++ implementation is the primary product oracle, the pinned schemas
 //! and normative protocol are authoritative for wire evolution, and
-//! `capnproto-rust` is a secondary regression oracle. Three-party handoff,
-//! join/equality, persistence, membranes, and attached resources are not
-//! implemented by this crate.
+//! `capnproto-rust` is a secondary regression oracle. M43 adds attached
+//! resources and M44 adds the Level-3 wire surface plus safe vine fallback;
+//! authenticated cross-connection coordination lives in `capnp-rpc`.
+//! Join/equality and persistence remain later milestones.
 
 mod actor;
 mod capability;

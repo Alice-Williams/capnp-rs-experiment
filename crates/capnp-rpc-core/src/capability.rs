@@ -14,7 +14,8 @@
 //! prevent reuse until a late resolver is observed. Route resolution and
 //! embargo ordering remain owned exclusively by the connection actor;
 //! M43 layers attached-resource ownership onto ordinary descriptors while
-//! third-party handoff remains a later milestone.
+//! M44 retains a third-party descriptor's vine as the ordinary safe fallback;
+//! authenticated direct handoff is coordinated above this table.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;

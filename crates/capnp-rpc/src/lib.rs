@@ -12,8 +12,9 @@
 //! M39 adds explicit concurrent, serial, keyed, and dedicated-local scheduling
 //! policies. M40 freezes these executor-neutral APIs as the two-party Level-1
 //! release candidate. M41 and M42 add mature local capabilities and membranes;
-//! M43 adds generic attachments and Unix `SCM_RIGHTS`. Higher-level routing,
-//! join/equality, and persistence remain explicit non-goals.
+//! M43 adds generic attachments and Unix `SCM_RIGHTS`. M44 adds authenticated,
+//! executor-neutral Level-3 handoff coordination. Join/equality and
+//! persistence remain explicit non-goals.
 
 use std::fmt;
 use std::future::Future;

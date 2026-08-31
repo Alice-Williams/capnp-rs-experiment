@@ -4,7 +4,8 @@
 //! transforms, `receiverAnswer`, redirected results, and Level-1 tail routing.
 //! M36 adds `senderPromise`, `Resolve`, and loopback `Disembargo`. M43 adds the
 //! orthogonal `attachedFd` field and binds each received resource to at most
-//! one descriptor. Third-party behavior remains owned by later milestones.
+//! one descriptor. M44 adds the pinned Level-3 wire surface while leaving
+//! authenticated cross-connection coordination to `capnp-rpc`.
 
 use std::sync::Arc;
 
