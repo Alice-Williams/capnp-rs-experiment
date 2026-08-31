@@ -72,6 +72,8 @@ attached_resources = "M43 implementation candidate: generic one-owner attachment
 level3_handoffs = "M44 implementation candidate: pinned Level-3 wire surface plus authenticated executor-neutral provision, accept, forwarding, return-routing, and embargo coordination; activation awaits M40"
 level4_join = "M45 implementation candidate: pinned Join wire surface plus authenticated network-parameterized distributed equality, transparent forwarding, result relay, and direct common-root connection; activation awaits M40 and M44"
 persistent_capabilities = "M46 implementation candidate: realm-branded SturdyRefs, typed save/restore, durable owner sealing, expiry, revocation, and fresh-connection restart recovery; activation awaits M40"
+compatibility_adapters = "M47 implementation candidate: bounded ByteStream, JSON-RPC, HTTP/CONNECT, and WebSocket lifecycle adapters with exact pinned C++ corpus parity; activation awaits M40-M46"
+native_examples = "M47 native-compiler address-book and capability-calculator examples plus streaming, cancellation, concurrency, authenticated handoff, distributed equality, and restart persistence integration"
 parallel_read = "M29 zero-copy Arc-owned list partitions and deterministic retained-subtree work plans for scoped or external executors"
 parallel_build = "M30 disjoint primitive partitions plus sealed single-segment worker fragments with deterministic far-link finalization"
 batch_pipeline = "M31 bounded reservation-window scheduling for ordered concurrent process/build/pack work with no-pool single-item paths"
@@ -128,6 +130,17 @@ M43 = "implementation candidate; activation awaits M40 completion"
 M44 = "implementation candidate; activation awaits M40 completion"
 M45 = "implementation candidate; activation awaits M40 and M44 activation"
 M46 = "implementation candidate; activation awaits M40 completion"
+M47 = "implementation candidate; activation awaits M40-M46 activation"
+
+[evidence.M47]
+crates = ["crates/capnp-compat", "crates/capnp-examples"]
+sources = ["pinned byte-stream.capnp implementation and 12-case C++ corpus", "pinned json-rpc.capnp implementation and 3-case C++ corpus", "pinned http-over-capnp.capnp and websocket-rpc 14-case C++ corpus", "pinned addressbook and calculator sample schemas/programs"]
+adapters = ["explicit-end ByteStream with bounded path shortening and cancellation", "bounded JSON-RPC syntax, arbitrary incoming ID correlation, notifications, errors, and Content-Length framing", "all 28 HTTP methods, header/body policies, response callbacks, CONNECT/TLS, WebSocket ordering, byte accounting, cancellation, and lifetime retention"]
+examples = ["native compiler and code generator build checked-in schemas without a system capnp compiler", "address-book nested lists, text, enum, union, standard and packed persistence, and pinned C++ decode", "calculator server-created functions, client callback, recursive expressions, promised Value pipeline, and concurrent dispatch", "ordered streaming, explicit cancellation, authenticated direct-handoff planning, distributed equality, and sealed SturdyRef restart restoration"]
+oracle_checks = ["tools/verify-m47-byte-stream.sh: 12 pinned C++ plus 6 native cases", "tools/verify-m47-json-rpc.sh: 3 pinned C++ plus 7 native cases", "tools/verify-m47-http-websocket.sh: 12 HTTP and 2 WebSocket pinned C++ plus 12 native cases", "tools/verify-m47-examples.sh: native scenarios, pinned C++ address-book decode, and pinned calculator pipeline trace"]
+documentation = ["docs/compatibility/m47-oracle-inventory.md", "docs/compatibility/byte-stream.md", "docs/compatibility/json-rpc.md", "docs/compatibility/http-websocket.md", "docs/compatibility/examples.md"]
+limitations = ["activation awaits the M40 release gate and M41-M46 activation", "adapters are executor-neutral protocol boundaries, not a general web server, URL/TLS stack, production JSON parser, database, or network identity system", "native compiler currently requires pinned nested sample declarations to be flattened to file scope while preserving explicit wire IDs"]
+validation = "all focused pinned C++ and native verifiers; workspace Cargo all-target tests and doctests; rustdoc and Clippy with warnings denied; shell syntax; complete 30-test Bazel suite"
 
 [evidence.M46]
 crates = ["crates/capnp-rpc"]

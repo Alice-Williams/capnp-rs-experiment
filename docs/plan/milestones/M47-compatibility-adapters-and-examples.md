@@ -1,6 +1,6 @@
 # M47 — C++ compatibility adapters and examples
 
-- Status: in progress on `dev/m47-compatibility-adapters`
+- Status: implementation candidate; activation awaits M40-M46
 - Phase: 7
 - Depends on: M28, M41, M42, M43, M44, M45, M46
 
@@ -10,15 +10,25 @@ Add byte streams, JSON-RPC, HTTP/WebSocket adapters, and substantial address-boo
 
 ## Implementation checklist
 
-- [ ] Restate the compatibility sources, invariants, and explicit non-goals in module or design documentation.
-- [ ] Implement only this milestone's deliverable behind the narrowest crate boundary that owns the invariant.
-- [ ] Add the independent fixtures and positive, negative, property, compile, concurrency, fuzz, or benchmark coverage appropriate to this boundary.
-- [ ] Run Cargo and Bazel validation in the Linux development container.
-- [ ] Record evidence and update compatibility/manifest.toml.
+- [x] Restate the compatibility sources, invariants, and explicit non-goals in module or design documentation.
+- [x] Implement only this milestone's deliverable behind the narrowest crate boundary that owns the invariant.
+- [x] Add the independent fixtures and positive, negative, property, compile, concurrency, fuzz, or benchmark coverage appropriate to this boundary.
+- [x] Run Cargo and Bazel validation in the Linux development container.
+- [x] Record evidence and update compatibility/manifest.toml.
 
 ## Required exit evidence
 
 Pinned adapter behaviors and interop pass; examples cover pipelines, callbacks, streaming, cancellation, concurrency, handoff, and persistence.
+
+## Implementation evidence
+
+All four `tools/verify-m47-*.sh` gates pass against pinned C++ commit
+`e7c9cd96f1505b5ae486db7821006c2f5dce5b5b`. The native examples additionally
+cover distributed equality and decode a native address-book frame with the
+pinned C++ tool. Workspace all-target tests, doctests, strict Clippy, rustdoc,
+shell syntax, and all 30 Bazel tests pass. The candidate remains inactive until
+the outstanding M40 24-hour release soak and dependent candidate activations
+complete.
 
 ## Scope boundary
 

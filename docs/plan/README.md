@@ -105,5 +105,5 @@ wire safety or protocol ordering.
 - [M44 — Level-3 introductions and handoffs](milestones/M44-level-3-handoffs.md)
 - [M45 — Level-4 Join and distributed equality](milestones/M45-level-4-join.md)
 - [M46 — Persistent capabilities and SturdyRefs](milestones/M46-persistent-capabilities.md)
-- [M47 — C++ compatibility adapters and examples](milestones/M47-compatibility-adapters-and-examples.md)
+- [M47 — C++ compatibility adapters and examples](milestones/M47-compatibility-adapters-and-examples.md) — implementation candidate; activation awaits M40-M46
 - [M48 — Maximum-parity release gate](milestones/M48-maximum-parity-release-gate.md)
