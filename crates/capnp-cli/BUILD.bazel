@@ -1,19 +1,28 @@
-load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+rust_library(
+    name = "capnp_cli_lib",
+    srcs = ["src/lib.rs"],
+    crate_name = "capnp_cli",
+    edition = "2024",
+    deps = [
+        "//crates/capnp-codegen:capnp_codegen",
+        "//crates/capnp-compiler:capnp_compiler",
+        "//crates/capnp-schema:capnp_schema",
+    ],
+)
 
 rust_binary(
     name = "capnp_cli",
     srcs = ["src/main.rs"],
     crate_name = "capnp_cli",
     edition = "2024",
-    deps = [
-        "//crates/capnp-compiler:capnp_compiler",
-        "//crates/capnp-io:capnp_io",
-    ],
+    deps = [":capnp_cli_lib"],
     visibility = ["//visibility:public"],
 )
 
 rust_test(
     name = "capnp_cli_test",
-    crate = ":capnp_cli",
+    crate = ":capnp_cli_lib",
+    compile_data = ["//conformance:compiler_requests"],
 )
-

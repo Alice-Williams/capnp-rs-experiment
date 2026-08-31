@@ -57,6 +57,11 @@ The project intentionally supports both build systems: Cargo is the native
 Rust package/MSRV interface, while Bazel is the pinned Linux orchestration and
 conformance environment.
 
+Native schema compilation no longer requires the C++ `capnp` executable. See
+the [compile and ID replacement guide](docs/tooling/compile-and-id.md) for
+multi-file imports, Rust generation, external plugins, crate mappings, raw
+requests, and secure schema IDs.
+
 This is experimental software and is not yet suitable for production use.
 
 ## License

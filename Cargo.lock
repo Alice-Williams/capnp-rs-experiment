@@ -24,8 +24,9 @@ dependencies = [
 name = "capnp-cli"
 version = "0.1.0"
 dependencies = [
+ "capnp-codegen",
  "capnp-compiler",
- "capnp-io",
+ "capnp-schema",
 ]
 
 [[package]]

@@ -54,7 +54,7 @@ rules_shell = "0.8.0"
 [support]
 wire = "M10 borrowed and Arc-owned typed readers with stable coordinate references"
 generated_api = "M21 typed data and thread-safe local interface APIs with exact pipelines"
-native_compiler = "M25 native CodeGeneratorRequest construction, deterministic standard serialization, and self-hosted Rust generation without a system capnp compiler"
+native_compiler = "M26 native multi-file compile and id CLI, plugin-compatible request streaming, deterministic built-in Rust output, and self-hosted generation without a system capnp compiler"
 rpc_level = "M21 in-memory local dispatch, inheritance, streaming completion, and capability pipelines; network protocol deferred to M32+"
 parallel_read = "not-started"
 parallel_build = "not-started"
@@ -91,6 +91,18 @@ M22 = "complete"
 M23 = "complete"
 M24 = "complete"
 M25 = "complete"
+M26 = "complete"
+
+[evidence.M26]
+crate = "crates/capnp-cli"
+commands = ["capnp-cli id", "capnp-cli compile --src-prefix DIR [-I DIR]... -o TARGET FILE..."]
+workflows = ["recursive relative and rooted import discovery", "multiple requested files merged into one standard CodeGeneratorRequest", "raw unpacked request output", "built-in deterministic Rust generation", "external generator plugins receiving the request on stdin in their output directory"]
+paths = ["stable source-prefix-relative virtual paths", "ordered import roots", "bundled pinned /capnp/c++.capnp and /capnp/stream.capnp fallback", "source-prefix escape rejection", "generated-output collision rejection"]
+mappings = "repeatable --import-map ID=RUST_PATH values feed the native Rust generator and reject duplicate IDs"
+id = "reads eight bytes from Linux /dev/urandom, sets the Cap'n Proto high bit, prints @0x...;, and surfaces open or short-read entropy failures"
+negative = ["missing entries and imports", "paths outside the source prefix", "duplicate import mappings", "conflicting duplicate request nodes", "unsafe or unavailable plugin names", "plugin spawn, stdin, exit, and output errors"]
+replacement = "docs/tooling/compile-and-id.md documents Cargo/Bazel use, raw/plugin targets, import behavior, migration from capnp compile/capnpc, and the Linux Dev Container boundary"
+validation = "Rust 1.98 and 1.85 workspace tests; public API docs and doc tests; Clippy -D warnings; real id and two-entry Rust generation smoke test; Bazel 18/18"
 
 [evidence.M25]
 crates = ["crates/capnp-compiler", "crates/capnp-schema", "crates/capnp-message", "crates/capnp-codegen"]

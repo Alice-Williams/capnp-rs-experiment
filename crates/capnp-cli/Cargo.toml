@@ -12,5 +12,6 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+capnp-codegen = { path = "../capnp-codegen" }
 capnp-compiler = { path = "../capnp-compiler" }
-capnp-io = { path = "../capnp-io" }
+capnp-schema = { path = "../capnp-schema" }
