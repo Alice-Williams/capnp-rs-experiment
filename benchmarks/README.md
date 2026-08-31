@@ -94,6 +94,18 @@ within 5%; a qualifying multi-message batch must reach 3.0x:
 bash benchmarks/run-m31-batch-pipeline.sh benchmarks/results/<run-name>
 ```
 
+## RPC server-scheduling benchmark
+
+`server_scheduling` submits one burst through a single service/executor adapter
+and records throughput, p50/p99 dispatch-to-completion latency, and the maximum
+consecutive completion run for four evenly loaded keys. The runner compares one
+and four CPU workers, then records serial and keyed policies under the same
+load:
+
+```sh
+bash benchmarks/run-m39-server-scheduling.sh benchmarks/results/<run-name>
+```
+
 The checked-in qualification run is
 `results/2026-08-31-m31-g-drive-docker`. New configurations use the
 `M31_BENCH_*` variables and a fresh output directory.

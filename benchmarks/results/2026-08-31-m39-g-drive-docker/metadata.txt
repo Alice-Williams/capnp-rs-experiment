@@ -1,0 +1,17 @@
+format_version=1
+generated_utc=2026-08-31T06:06:12Z
+environment=Debian Trixie dev container under Docker Desktop
+kernel=Linux 6.18.33.2-microsoft-standard-WSL2 #1 SMP PREEMPT_DYNAMIC Thu Jun 18 21:54:43 UTC 2026 x86_64 GNU/Linux
+cpu_model=Intel(R) Core(TM) i7-6700K CPU @ 4.00GHz
+logical_cpus=8
+memory_bytes=25157029888
+rustc=rustc 1.98.0 (88d9e12ae 2026-08-18)
+base_git_commit=adf0a0798f6782a8733be9ff53185da6826b1261
+scheduler_module_sha256=f69933c1c4c9fc5ef392a4d91c9b94e203ad7483ec4a8529542f5afb64730a53
+benchmark_example_sha256=633b3ca1f503e8985d8b3cbf8633ab071d01c3bf82f8c3dfd6838118ddbeeeeb
+jobs=64
+rounds_per_job=5000000
+samples_per_configuration=7
+timer=Rust Instant; latency begins before same-connection dispatch burst and ends inside each handler
+fairness=max consecutive completions for one of four evenly loaded keys; lower is fairer
+concurrent_four_to_one_ratio=3.853

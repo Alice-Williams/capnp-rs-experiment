@@ -109,6 +109,11 @@ compatibility, transport-complete shutdown with surfaced errors, and
 generation-safe capability recreation that distinguishes disconnect from
 overload.
 
+[RPC server scheduling](docs/rpc/server-scheduling.md) adds explicit concurrent,
+FIFO serial, and per-key execution policies, bounded generic/Tokio-style and CPU
+executor adapters, plus a dedicated-thread local server that isolates non-Send
+state behind thread-safe clients.
+
 This is experimental software and is not yet suitable for production use.
 
 ## License

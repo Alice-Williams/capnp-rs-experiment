@@ -22,6 +22,7 @@ use capnp_schema::{CompiledSchema, DynamicError};
 mod driver;
 mod flow;
 mod reconnect;
+mod scheduler;
 
 pub use capnp_rpc_core::{
     ActorLimits, AnswerKey, CancellationSignal, CapDescriptor, CapabilityError, CapabilityStats,
@@ -40,6 +41,10 @@ pub use reconnect::{
     CapabilityReconnector, ReconnectLease, RetryDisposition, classify_connection_error,
     classify_exception,
 };
+pub use scheduler::{
+    Concurrent, ExecutorService, GenericExecutor, Keyed, LocalServer, SchedulerError, Serial,
+    TaskExecutor, ThreadPoolExecutor, TokioExecutor,
+};
 
 pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
 pub type MessageFuture = BoxFuture<Result<Arc<OwnedMessage>, RpcError>>;
@@ -50,6 +55,7 @@ pub enum RpcError {
     UnknownInterface(u64),
     UnknownMethod { interface_id: u64, method_id: u16 },
     MissingResponse,
+    Scheduler(SchedulerError),
     PipelineExpectedStruct,
     PipelineExpectedCapability,
     Connection(ConnectionError),

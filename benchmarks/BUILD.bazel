@@ -53,3 +53,15 @@ sh_test(
     srcs = ["verify-m31-batch-results.sh"],
     data = glob(["results/2026-08-31-m31-g-drive-docker/**"]),
 )
+
+sh_test(
+    name = "m39_server_scheduling_runner_syntax_test",
+    srcs = ["run-m39-server-scheduling.sh"],
+    args = ["--syntax-check-only"],
+)
+
+sh_test(
+    name = "m39_server_scheduling_results_test",
+    srcs = ["verify-m39-server-scheduling-results.sh"],
+    data = glob(["results/2026-08-31-m39-g-drive-docker/**"]),
+)

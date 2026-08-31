@@ -65,6 +65,7 @@ json = "M28 bounded reflection codec and native binary/packed/flat JSON conversi
 rpc_level = "M38 cooperative cancellation, clean transport-complete shutdown, disconnect propagation, and generation-safe capability recreation, layered over M37 flow control"
 flow_control = "M37 executor-neutral send-now/ack/readiness split with fixed extended windows, adaptive BDP windows, bounded in-flight bytes and waiters, and pinned C++ behavioral parity"
 rpc_lifecycle = "M38 last-lease cancellation, application opt-out, legacy Finish deferral, noFinishNeeded handling, waiter-complete disconnect, surfaced shutdown errors, and disconnect-only reconnect classification"
+rpc_scheduling = "M39 concurrent, FIFO serial, and keyed scheduling; bounded CPU/generic/Tokio-style executors; dedicated-thread non-Send local state"
 parallel_read = "M29 zero-copy Arc-owned list partitions and deterministic retained-subtree work plans for scoped or external executors"
 parallel_build = "M30 disjoint primitive partitions plus sealed single-segment worker fragments with deterministic far-link finalization"
 batch_pipeline = "M31 bounded reservation-window scheduling for ordered concurrent process/build/pack work with no-pool single-item paths"
@@ -114,6 +115,19 @@ M35 = "complete"
 M36 = "complete"
 M37 = "complete"
 M38 = "complete"
+M39 = "complete"
+
+[evidence.M39]
+crate = "crates/capnp-rpc"
+sources = ["ADR-0004 actor/application boundary", "pinned Cap'n Proto capability.h Server::dispatchCall and CapabilityServerSet", "pinned capability.c++ local dispatch and local promise clients"]
+policies = ["Concurrent permits independent overlap", "Serial admits in dispatch order and holds one FIFO permit through full completion", "Keyed serializes equal keys while different keys overlap", "canceled FIFO waiters are skipped without starving successors", "dead keyed gates are weak and cleaned opportunistically"]
+executors = ["TaskExecutor accepts owned Send futures", "GenericExecutor adapts fallible spawn callbacks", "TokioExecutor adapts tokio::spawn without a mandatory Tokio dependency", "ThreadPoolExecutor has positive worker and bounded FIFO queue limits", "overload and spawn failure complete the response immediately", "handler panic completes with Panicked and workers survive"]
+local_server = ["state factory runs on the dedicated thread so the state need not be Send", "Rc<Cell<_>> isolation is tested behind a Send + Sync LocalServer", "owned requests use a bounded channel", "calls are serial", "overload, disconnect, and panic complete every response"]
+benchmark = "benchmarks/results/2026-08-31-m39-g-drive-docker: 64 calls x 5,000,000 rounds, seven-sample medians on i7-6700K Docker/WSL2"
+performance = ["concurrent 1-worker 201.616 jobs/s, p99 317.277 ms", "concurrent 4-worker 776.802 jobs/s, p99 82.289 ms", "3.853x same-connection CPU scaling", "serial 4-worker 196.465 jobs/s", "keyed 4-worker 763.947 jobs/s with median maximum same-key completion run 1"]
+documentation = "docs/rpc/server-scheduling.md"
+limitations = ["Tokio integration is callback-based to avoid a runtime dependency", "LocalServer callback is synchronous", "policy wrappers schedule application work only", "M40 owns Level-1 release hardening"]
+validation = "24 capnp-rpc tests plus the scheduling benchmark harness; Rust 1.98 and 1.85 workspace tests; doctests; Clippy -D warnings; shell syntax; complete Bazel suite"
 
 [evidence.M38]
 crates = ["crates/capnp-rpc-core", "crates/capnp-rpc"]
