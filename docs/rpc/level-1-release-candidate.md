@@ -68,14 +68,22 @@ implement the executor-neutral `DuplexTransport` boundary and are driven by
   and at least 100,000 sessions. Every session asserts empty connection-owned
   tables after disconnect; Linux RSS after warm-up may not grow by more than
   64 MiB.
-- `tools/verify-m40-soak-result.sh` accepts only a checked-in `PASS` result
-  with at least 86,400 elapsed seconds and 100,000 sessions, and binds it to
-  the exact soak example and runner hashes in the result metadata.
+- `tools/run-m40-release-soak.sh` is the authoritative long-run launcher. It
+  requires a new `M40_SOAK_RESULT_DIR`, a clean worktree, and release-sized
+  settings, then records the source commit, source-tree digest, toolchain,
+  settings, checkpoints, and final console output without overwriting prior
+  evidence.
+- `tools/verify-m40-soak-result.sh` accepts only a `PASS` result with at least
+  86,400 elapsed seconds and 100,000 sessions. It cross-checks the recorded
+  settings, gate declaration, RSS bound, commit ancestry, and exact release
+  source inputs. Pass the result directory explicitly; the historical default
+  remains the deliberately rejected interim run.
 - `tools/verify-m40-release-gates.sh` composes the interop, fuzz, soak,
   recorded parallel-performance, exact shared-budget, lifecycle, and shell
   gates. A shorter duration is a smoke test and must never be recorded as the
-  release result. Set `M40_USE_RECORDED_SOAK=1` only to verify the already
-  completed, hash-bound 24-hour result instead of starting another run.
+  release result. Set `M40_USE_RECORDED_SOAK=1` and
+  `M40_SOAK_RESULT_DIR=<recorded-result-directory>` only to verify the already
+  completed, source-bound 24-hour result instead of starting another run.
 - The preserved 2026-08-31 run is only an interim development soak: it was
   stopped at 12,420 seconds and 735,873,468 sessions with 3,052 KiB RSS. Its
   `INTERIM_STOPPED` record is deliberately rejected by the release verifier;

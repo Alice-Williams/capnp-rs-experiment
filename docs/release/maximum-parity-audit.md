@@ -74,6 +74,17 @@ that the manifest retains the required milestone/evidence states and that this
 audit continues to name every blocker; it never converts a candidate into a
 release merely because the fast test suite passes.
 
+The authoritative M40 run must use `tools/run-m40-release-soak.sh` with a new
+`M40_SOAK_RESULT_DIR`. The wrapper refuses dirty worktrees, reused result
+directories, and settings below 100,000 sessions or 86,400 seconds. It records
+the exact source commit, source-tree digest, settings, toolchain, and durable
+checkpoint output before invoking `tools/verify-m40-soak-result.sh`. That
+verifier accepts an explicit result directory and rejects incomplete,
+below-threshold, internally inconsistent, excessive-memory, or source-diverged
+evidence. The older 12,420-second interim directory remains the default only
+to make accidental release-gate use fail closed; it is never upgraded in
+place.
+
 The full-platform soak is `tools/run-m48-full-platform-soak.sh`. Its release
 defaults require at least 100,000 sessions and 172,800 seconds after warmup.
 Each session randomizes the order of the address-book, calculator, and platform
