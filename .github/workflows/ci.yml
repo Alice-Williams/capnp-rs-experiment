@@ -22,6 +22,16 @@ jobs:
       - name: Test Cargo workspace with development Rust
         run: cargo test --workspace --all-targets
 
+      - name: Smoke-test Level-1 release fuzz and soak harnesses
+        env:
+          M40_FUZZ_MIN_CASES: 1000
+          M40_FUZZ_SECONDS: 0
+          M40_SOAK_MIN_SESSIONS: 1000
+          M40_SOAK_SECONDS: 0
+        run: |
+          bash tools/run-m40-rpc-fuzz.sh
+          bash tools/run-m40-level1-soak.sh
+
       - name: Model exact shared traversal accounting
         run: |
           cargo test -p capnp-message --features loom-tests loom_proves_competing_charges_preserve_the_hard_limit

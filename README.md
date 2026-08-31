@@ -22,10 +22,12 @@ The original engineering dossier has been decomposed into 49 dependency-ordered
 milestones under [`docs/plan`](docs/plan/README.md). The Phase 0 foundation,
 oracle corpus, benchmark harnesses, and safety/concurrency ADRs are complete.
 Implementation has completed the conformance-first wire, construction,
-reflection, code-generation, native compiler, text-tooling, and JSON-tooling
-phases plus all three parallel-processing milestones. The RPC phase now has a
-pinned, revision-tolerant schema binding and bounded executor-neutral transport
-envelope; the connection actor and protocol tables remain the next milestone.
+reflection, code-generation, native compiler, text-tooling, JSON-tooling, and
+parallel-processing phases. The RPC implementation now covers the complete
+two-party Level-1 boundary: bounded actor-owned tables, capability lifetimes,
+promise pipelines and E-order, flow control, cancellation/disconnect/reconnect,
+and explicit thread-safe scheduling policies. M40 is hardening that boundary
+as the `1.0.0-rc.1` release candidate.
 
 The repository is a fifteen-crate workspace matching the intended architecture.
 `capnp-wire` implements M03's no_std words, little-endian scalar access, checked
@@ -113,6 +115,12 @@ overload.
 FIFO serial, and per-key execution policies, bounded generic/Tokio-style and CPU
 executor adapters, plus a dedicated-thread local server that isolates non-Send
 state behind thread-safe clients.
+
+The [Level-1 release candidate report](docs/rpc/level-1-release-candidate.md)
+defines the executable Rust/C++ matrix and fuzz, soak, performance, and security
+gates. Applications coming from the established Rust implementation should use
+the [migration guide](docs/migration-from-capnproto-rust.md); source-level API
+compatibility is intentionally not claimed.
 
 This is experimental software and is not yet suitable for production use.
 

@@ -1,6 +1,6 @@
 # M40 — Level-1 interoperability, fuzz, and release gate
 
-- Status: planned
+- Status: in-progress
 - Phase: 6
 - Depends on: M37, M38, M39
 
@@ -23,4 +23,3 @@ Rust/C++ matrices pass; 24-hour randomized soak is leak/hang free; fuzz/performa
 ## Scope boundary
 
 Later milestone behavior may be anticipated in types only where required to avoid a known compatibility dead end. It must not be implemented or claimed here.
-
