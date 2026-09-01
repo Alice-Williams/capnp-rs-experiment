@@ -1,6 +1,6 @@
 # M46 — Persistent capabilities and SturdyRefs
 
-- Status: implementation candidate complete on `dev/m46-persistent-capabilities`; activation awaits M40
+- Status: complete
 - Phase: 7
 - Depends on: M38, M40
 

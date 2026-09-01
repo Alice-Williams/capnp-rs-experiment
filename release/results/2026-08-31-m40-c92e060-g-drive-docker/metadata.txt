@@ -1,0 +1,11 @@
+source_commit=c92e060cbaf75d47bd53cac7b5ae63ec47d5ba9a
+source_tree_sha256=bfb101ea3d36f4313a579bd1366a2ef8fb735153a11c87538943ba971a4042d9
+started_at=2026-08-31T19:57:00Z
+minimum_sessions=100000
+duration_seconds=86400
+max_rss_growth_kib=65536
+seed=7868967635439804779
+rustc=rustc 1.98.0 (88d9e12ae 2026-08-18)
+cargo=cargo 1.98.0 (797e8a9bc 2026-08-05)
+kernel=Linux 6.18.33.2-microsoft-standard-WSL2 x86_64 GNU/Linux
+completed_at=2026-09-01T19:57:39Z

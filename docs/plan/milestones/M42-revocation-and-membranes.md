@@ -1,6 +1,6 @@
 # M42 — Revocation and membranes
 
-- Status: implementation candidate; activation awaits M40 and M41
+- Status: complete
 - Phase: 7
 - Depends on: M41
 

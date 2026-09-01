@@ -1,5 +1,5 @@
 manifest_version = 1
-updated = "2026-08-31"
+updated = "2026-09-01"
 
 [project]
 license = "MIT"
@@ -62,17 +62,17 @@ generated_api = "M37 typed data, exact pipelines, and eager ordered local stream
 native_compiler = "M26 native multi-file compile and id CLI, plugin-compatible request streaming, deterministic built-in Rust output, self-hosted generation without a system capnp compiler, and canonical named declarations nested in interfaces"
 text_tools = "M27 bounded native text encode/decode/eval with standard, packed, and flat modes and pinned C++ short-format parity"
 json = "M28 bounded reflection codec and native binary/packed/flat JSON conversion with pinned C++ policy and annotations"
-rpc_level = "M38 cooperative cancellation, clean transport-complete shutdown, disconnect propagation, and generation-safe capability recreation, layered over M37 flow control"
+rpc_level = "M40 release-validated two-party Level 1 with cooperative cancellation, transport-complete shutdown, disconnect propagation, generation-safe capability recreation, and a leak-free 24-hour frozen-source soak"
 flow_control = "M37 executor-neutral send-now/ack/readiness split with fixed extended windows, adaptive BDP windows, bounded in-flight bytes and waiters, and pinned C++ behavioral parity"
 rpc_lifecycle = "M38 last-lease cancellation, application opt-out, legacy Finish deferral, noFinishNeeded handling, waiter-complete disconnect, surfaced shutdown errors, and disconnect-only reconnect classification"
 rpc_scheduling = "M39 concurrent, FIFO serial, and keyed scheduling; bounded CPU/generic/Tokio-style executors; dedicated-thread non-Send local state"
-local_capabilities = "M41 implementation candidate: promise/broken/disabled clients, shared and provisional pipelines, dynamic clients/servers, raw tail transfer, bounded capability lists, and exact-set local unwrap; activation awaits M40"
-revocation_membranes = "M42 implementation candidate: revocable servers and recursive bidirectional capability membranes with stable identity, promise resolution, policy interception, and bounded wrapper/call resources; activation awaits M40 and M41"
-attached_resources = "M43 implementation candidate: generic one-owner attachments, pinned attachedFd binding, and bounded Unix SCM_RIGHTS transfer with capability fallback; activation awaits M40"
-level3_handoffs = "M44 implementation candidate: pinned Level-3 wire surface plus authenticated executor-neutral provision, accept, forwarding, return-routing, and embargo coordination; activation awaits M40"
-level4_join = "M45 implementation candidate: pinned Join wire surface plus authenticated network-parameterized distributed equality, transparent forwarding, result relay, and direct common-root connection; activation awaits M40 and M44"
-persistent_capabilities = "M46 implementation candidate: realm-branded SturdyRefs, typed save/restore, durable owner sealing, expiry, revocation, and fresh-connection restart recovery; activation awaits M40"
-compatibility_adapters = "M47 implementation candidate: bounded ByteStream, JSON-RPC, HTTP/CONNECT, and WebSocket lifecycle adapters with exact pinned C++ corpus parity; activation awaits M40-M46"
+local_capabilities = "M41 promise/broken/disabled clients, shared and provisional pipelines, dynamic clients/servers, raw tail transfer, bounded capability lists, and exact-set local unwrap"
+revocation_membranes = "M42 revocable servers and recursive bidirectional capability membranes with stable identity, promise resolution, policy interception, and bounded wrapper/call resources"
+attached_resources = "M43 generic one-owner attachments, pinned attachedFd binding, and bounded Unix SCM_RIGHTS transfer with capability fallback"
+level3_handoffs = "M44 pinned Level-3 wire surface plus authenticated executor-neutral provision, accept, forwarding, return-routing, and embargo coordination"
+level4_join = "M45 pinned Join wire surface plus authenticated network-parameterized distributed equality, transparent forwarding, result relay, and direct common-root connection"
+persistent_capabilities = "M46 realm-branded SturdyRefs, typed save/restore, durable owner sealing, expiry, revocation, and fresh-connection restart recovery"
+compatibility_adapters = "M47 bounded ByteStream, JSON-RPC, HTTP/CONNECT, and WebSocket lifecycle adapters with exact pinned C++ corpus parity"
 native_examples = "M47 native-compiler address-book and capability-calculator examples plus streaming, cancellation, concurrency, authenticated handoff, distributed equality, and restart persistence integration"
 parallel_read = "M29 zero-copy Arc-owned list partitions and deterministic retained-subtree work plans for scoped or external executors"
 parallel_build = "M30 disjoint primitive partitions plus sealed single-segment worker fragments with deterministic far-link finalization"
@@ -124,13 +124,14 @@ M36 = "complete"
 M37 = "complete"
 M38 = "complete"
 M39 = "complete"
-M41 = "implementation candidate; activation awaits M40 completion"
-M42 = "implementation candidate; activation awaits M40 and M41 activation"
-M43 = "implementation candidate; activation awaits M40 completion"
-M44 = "implementation candidate; activation awaits M40 completion"
-M45 = "implementation candidate; activation awaits M40 and M44 activation"
-M46 = "implementation candidate; activation awaits M40 completion"
-M47 = "implementation candidate; activation awaits M40-M46 activation"
+M40 = "complete"
+M41 = "complete"
+M42 = "complete"
+M43 = "complete"
+M44 = "complete"
+M45 = "complete"
+M46 = "complete"
+M47 = "complete"
 
 [evidence.M47]
 crates = ["crates/capnp-compat", "crates/capnp-examples"]
@@ -139,7 +140,7 @@ adapters = ["explicit-end ByteStream with bounded path shortening and cancellati
 examples = ["native compiler and code generator build canonical nested sample schemas without a system capnp compiler", "address-book nested lists, text, enum, union, standard and packed persistence, and pinned C++ decode", "calculator server-created functions, client callback, recursive expressions, promised Value pipeline, and concurrent dispatch", "ordered streaming, explicit cancellation, authenticated direct-handoff planning, distributed equality, and sealed SturdyRef restart restoration"]
 oracle_checks = ["tools/verify-m47-byte-stream.sh: 12 pinned C++ plus 6 native cases", "tools/verify-m47-json-rpc.sh: 3 pinned C++ plus 7 native cases", "tools/verify-m47-http-websocket.sh: 12 HTTP and 2 WebSocket pinned C++ plus 12 native cases", "tools/verify-m47-examples.sh: native scenarios, pinned C++ address-book decode, and pinned calculator pipeline trace"]
 documentation = ["docs/compatibility/m47-oracle-inventory.md", "docs/compatibility/byte-stream.md", "docs/compatibility/json-rpc.md", "docs/compatibility/http-websocket.md", "docs/compatibility/examples.md"]
-limitations = ["activation awaits the M40 release gate and M41-M46 activation", "adapters are executor-neutral protocol boundaries, not a general web server, URL/TLS stack, production JSON parser, database, or network identity system"]
+limitations = ["adapters are executor-neutral protocol boundaries, not a general web server, URL/TLS stack, production JSON parser, database, or network identity system"]
 validation = "all focused pinned C++ and native verifiers; workspace Cargo all-target tests and doctests; rustdoc and Clippy with warnings denied; shell syntax; complete 30-test Bazel suite"
 
 [evidence.M46]
@@ -151,7 +152,7 @@ restore_checks = ["bounded token before validation", "realm authentication", "du
 lifecycle = ["save rejects already-expired grants before mutation", "dropping or cloning a token does not affect object ownership", "grant-specific and object-wide revocation survive restart", "restart restoration constructs fresh connection state"]
 oracle_check = "tools/verify-m46-persistent-capabilities.sh: pinned schema surface plus native restart, fresh-connection, owner, expiry, tamper, unknown, mismatch, revocation, and quota model tests"
 documentation = "docs/rpc/persistent-capabilities.md"
-limitations = ["activation awaits the M40 release gate", "application supplies database, cryptography, owner authentication, trusted clock, network dialer, stable object IDs, and realm transformations", "no universal C++ behavioral oracle exists because persistence formats and restoration are application-defined"]
+limitations = ["application supplies database, cryptography, owner authentication, trusted clock, network dialer, stable object IDs, and realm transformations", "no universal C++ behavioral oracle exists because persistence formats and restoration are application-defined"]
 validation = "focused restart/security model, positive API and wrong-realm compile-fail docs; workspace Cargo, rustdoc, strict Clippy, shell syntax, MSRV, and all 30 Bazel tests"
 
 [evidence.M45]
@@ -164,7 +165,7 @@ proxy_and_cancellation = ["only caller-resolved fully transparent proxies may fo
 limits = ["bounded paths", "bounded active Join sessions", "bounded transparent forwarding hops", "input limit failures are complete-or-unchanged"]
 oracle_check = "tools/verify-m45-level4-join.sh: pinned generic and two-party schema declarations plus native wire, direct/proxy/forward/reflection/revoke/malicious/cancel/quota model tests; no C++ behavioral Join oracle exists at the pinned revision"
 documentation = "docs/rpc/level-4-join.md"
-limitations = ["activation awaits the M40 release gate and M44 activation", "network implementations supply authenticated dialing, key/result encoding, and common-root proof", "concrete rpc-twoparty batching is network policy rather than a generic coordinator feature", "no pinned C++ Join implementation or behavioral corpus", "persistent capabilities remain M46"]
+limitations = ["network implementations supply authenticated dialing, key/result encoding, and common-root proof", "concrete rpc-twoparty batching is network policy rather than a generic coordinator feature", "no pinned C++ Join implementation or behavioral corpus", "persistent capabilities are owned by M46"]
 validation = "focused schema, opaque-wire, public API doctest, misuse compile-fail, direct, proxy, multi-hop reflection, result relay, forged token, wrong path, unrelated root, revocation, cancellation, and quota tests; workspace Cargo, rustdoc, Clippy, shell syntax, MSRV, and Bazel gates"
 
 [evidence.M44]
@@ -177,7 +178,7 @@ ordering = ["provision-scoped embargo IDs", "Accept and pipeline delivery wait f
 limits = ["bounded provisions", "bounded pending accepts", "bounded embargoes per provision", "bounded pending and adopted return routes", "limit failures are complete-or-unchanged"]
 oracle_check = "tools/verify-m44-level3-handoffs.sh: all six pinned C++ basic/self/forwarding/denied/reflected/embargo cases pass, followed by native wire and authenticated-router simulations"
 documentation = "docs/rpc/level-3-handoffs.md"
-limitations = ["activation awaits the M40 release gate", "network implementations supply their own authenticated dialer and token encoding", "no FD-bearing introduction", "Level-4 Join and persistence remain M45-M46"]
+limitations = ["network implementations supply their own authenticated dialer and token encoding", "no FD-bearing introduction", "Level-4 Join and persistence are owned by M45-M46"]
 validation = "focused wire, fallback, three/four-vat, self, forwarding/reflection, embargo, forged-token, return-route, quota, and pinned C++ tests; workspace Cargo, rustdoc, Clippy, shell syntax, MSRV, and Bazel gates"
 
 [evidence.M43]
@@ -189,7 +190,7 @@ unix_transport = ["safe rustix SCM_RIGHTS over connected UnixStream", "one-frame
 limits_and_fallback = ["checked envelope resource count and byte charge", "checked attached index space with complete-or-unchanged failure", "zero-FD receiver discards authority while delivering the RPC capability"]
 oracle_check = "tools/verify-m43-attached-resources.sh: all three pinned C++ FD transfer/limit/queued-lifetime cases pass, followed by native ports"
 documentation = "docs/rpc/attached-resources.md"
-limitations = ["activation awaits the M40 release gate", "local membranes do not pass attachments implicitly", "no Windows handle or TCP attachment transport", "three-party handoff/equality/persistence remain M44-M46"]
+limitations = ["local membranes do not pass attachments implicitly", "no Windows handle or TCP attachment transport", "three-party handoff/equality/persistence are owned by M44-M46"]
 validation = "focused real Unix-domain-socket, ownership, wire, actor, fallback, compile-fail, and pinned C++ tests; workspace Cargo, rustdoc, Clippy, shell syntax, MSRV, and Bazel gates"
 
 [evidence.M42]
@@ -202,7 +203,7 @@ revocation = ["outstanding forwarded calls are woken and fail", "later forwarded
 limits = ["checked wrapper registry bound", "checked outstanding forwarded-call bound", "limit failure occurs before target dispatch or registry growth"]
 oracle_check = "tools/verify-m42-membranes.sh: pinned C++ RevocableServer case and all 17 local/remote object, promise, copy, concurrent-resolution, reflection, and revoke membrane cases pass, followed by native ports"
 documentation = "docs/rpc/revocation-and-membranes.md"
-limitations = ["activation awaits the M40 release gate and M41 activation", "attached descriptors/resources remain M43", "distributed handoff/equality/persistence remain M44-M46"]
+limitations = ["attached descriptors/resources are owned by M43", "distributed handoff/equality/persistence are owned by M44-M46"]
 validation = "focused generated/runtime tests and exact pinned C++ corpus pass; workspace Cargo all-target tests, doctests and compile-fail docs, rustdoc -D warnings, Clippy -D warnings, shell syntax, and complete 30-test Bazel suite pass"
 
 [evidence.M41]
@@ -215,8 +216,20 @@ tail_and_unwrap = ["raw response plus capability-table tail transfer", "nested p
 limits = ["bounded capability table length", "bounded provisional pipeline entries", "duplicate provisional paths rejected", "pipeline can be installed once"]
 oracle_check = "tools/verify-m41-local-capabilities.sh: all 28 pinned C++ capability cases from Basic through clone() pass, followed by native promise/pipeline/dynamic/tail/server-set ports"
 documentation = "docs/rpc/local-capability-utilities.md"
-limitations = ["M40 release-soak completion is required before activation", "revocation and membranes begin at pinned RevocableServer and remain M42", "attached resources remain M43", "distributed handoff/equality/persistence remain M44-M46"]
+limitations = ["revocation and membranes are owned by M42", "attached resources are owned by M43", "distributed handoff/equality/persistence are owned by M44-M46"]
 validation = "focused generated/runtime tests and pinned C++ capability corpus pass; workspace Cargo, docs, Clippy, and Bazel fast gates recorded on the development branch"
+
+[evidence.M40]
+source_commit = "c92e060cbaf75d47bd53cac7b5ae63ec47d5ba9a"
+source_tree_sha256 = "bfb101ea3d36f4313a579bd1366a2ef8fb735153a11c87538943ba971a4042d9"
+result_dir = "release/results/2026-08-31-m40-c92e060-g-drive-docker"
+started_at = "2026-08-31T19:57:00Z"
+completed_at = "2026-09-01T19:57:39Z"
+duration_seconds = 86400
+sessions = 3794488678
+rss_kib = { baseline = 3048, maximum = 3048, final = 3048 }
+soak = "PASS: every disconnected session released all connection-owned state"
+validation = ["tools/verify-m40-soak-result.sh", "tools/verify-m40-release-gates.sh with recorded soak", "pinned Rust/C++ interoperability matrix", "60-second hostile RPC decoder fuzz gate", "recorded parallel performance gates", "unsafe-code scan", "Loom and actor lifecycle tests", "isolated-target capnp-wire and capnp-message Miri tests", "all shell syntax"]
 
 [evidence.M39]
 crate = "crates/capnp-rpc"

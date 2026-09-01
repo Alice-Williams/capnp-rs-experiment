@@ -1,6 +1,6 @@
 # M41 — Mature local capability utilities
 
-- Status: implementation candidate; activation awaits M40 completion
+- Status: complete
 - Phase: 7
 - Depends on: M40
 

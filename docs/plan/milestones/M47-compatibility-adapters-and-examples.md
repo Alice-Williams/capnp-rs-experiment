@@ -1,6 +1,6 @@
 # M47 — C++ compatibility adapters and examples
 
-- Status: implementation candidate; activation awaits M40-M46
+- Status: complete
 - Phase: 7
 - Depends on: M28, M41, M42, M43, M44, M45, M46
 
@@ -26,9 +26,8 @@ All four `tools/verify-m47-*.sh` gates pass against pinned C++ commit
 `e7c9cd96f1505b5ae486db7821006c2f5dce5b5b`. The native examples additionally
 cover distributed equality and decode a native address-book frame with the
 pinned C++ tool. Workspace all-target tests, doctests, strict Clippy, rustdoc,
-shell syntax, and all 30 Bazel tests pass. The candidate remains inactive until
-the outstanding M40 24-hour release soak and dependent candidate activations
-complete.
+shell syntax, and all 30 Bazel tests pass. The M40 release gate and all M41-M46
+dependencies are complete.
 
 ## Scope boundary
 

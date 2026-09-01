@@ -1,6 +1,6 @@
 # M43 — Attached file descriptors and resources
 
-- Status: implementation candidate; activation awaits M40
+- Status: complete
 - Phase: 7
 - Depends on: M40
 
@@ -32,4 +32,4 @@ Later milestone behavior may be anticipated in types only where required to avoi
 
 Three-party handoff, distributed equality, persistence, Windows handle
 transfer, TCP attachment transfer, and implicit local-membrane FD passthrough
-remain outside this milestone. M40 completion is required before activation.
+remain outside this milestone.

@@ -95,15 +95,15 @@ wire safety or protocol ordering.
 - [M37 — Streaming and adaptive flow control](milestones/M37-streaming-and-flow-control.md) — complete
 - [M38 — Cancellation, disconnect, and reconnect](milestones/M38-cancellation-disconnect-and-reconnect.md) — complete
 - [M39 — Thread-safe server scheduling](milestones/M39-thread-safe-server-scheduling.md) — complete
-- [M40 — Level-1 release gate](milestones/M40-level-1-release-gate.md) — in progress; authoritative 24-hour soak running at `c92e060`
+- [M40 — Level-1 release gate](milestones/M40-level-1-release-gate.md) — complete
 
 ### Phase 7 — Maximum RPC and C++ product parity
 
-- [M41 — Mature local capability utilities](milestones/M41-local-capability-utilities.md) — implementation candidate; activation awaits M40
-- [M42 — Revocation and membranes](milestones/M42-revocation-and-membranes.md) — implementation candidate; activation awaits M40 and M41
-- [M43 — Attached descriptors/resources](milestones/M43-attached-resources.md) — implementation candidate; activation awaits M40
-- [M44 — Level-3 introductions and handoffs](milestones/M44-level-3-handoffs.md) — implementation candidate; activation awaits M40
-- [M45 — Level-4 Join and distributed equality](milestones/M45-level-4-join.md) — implementation candidate; activation awaits M40 and M44
-- [M46 — Persistent capabilities and SturdyRefs](milestones/M46-persistent-capabilities.md) — implementation candidate; activation awaits M40
-- [M47 — C++ compatibility adapters and examples](milestones/M47-compatibility-adapters-and-examples.md) — implementation candidate; activation awaits M40-M46
+- [M41 — Mature local capability utilities](milestones/M41-local-capability-utilities.md) — complete
+- [M42 — Revocation and membranes](milestones/M42-revocation-and-membranes.md) — complete
+- [M43 — Attached descriptors/resources](milestones/M43-attached-resources.md) — complete
+- [M44 — Level-3 introductions and handoffs](milestones/M44-level-3-handoffs.md) — complete
+- [M45 — Level-4 Join and distributed equality](milestones/M45-level-4-join.md) — complete
+- [M46 — Persistent capabilities and SturdyRefs](milestones/M46-persistent-capabilities.md) — complete
+- [M47 — C++ compatibility adapters and examples](milestones/M47-compatibility-adapters-and-examples.md) — complete
 - [M48 — Maximum-parity release gate](milestones/M48-maximum-parity-release-gate.md) — in progress; authoritative 48-hour soak running at `c92e060`

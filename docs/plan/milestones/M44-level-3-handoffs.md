@@ -1,6 +1,6 @@
 # M44 — Level-3 introductions and handoffs
 
-- Status: implementation candidate complete on `dev/m44-level3-handoffs`; activation awaits M40
+- Status: complete
 - Phase: 7
 - Depends on: M40
 

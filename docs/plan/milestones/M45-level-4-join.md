@@ -1,6 +1,6 @@
 # M45 — Level-4 Join and distributed equality
 
-- Status: implementation candidate complete on `dev/m45-level4-join`; activation awaits M40 and M44
+- Status: complete
 - Phase: 7
 - Depends on: M44
 
