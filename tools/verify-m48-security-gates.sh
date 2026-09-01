@@ -29,9 +29,19 @@ cargo test -p capnp-message --features loom-tests \
   loom_parallel_plan_preserves_precharge_and_nested_budget
 cargo test -p capnp-message --features loom-tests \
   loom_lane_arrival_order_finalizes_deterministically
-cargo +nightly-2026-08-31 miri test -p capnp-wire
-cargo +nightly-2026-08-31 miri test -p capnp-message \
+
+# Do not reuse the workspace's Miri target: stale runner artifacts can retain
+# dependency metadata from another toolchain or revision. A unique target also
+# keeps this final security gate reproducible after interrupted local runs.
+miri_target_parent=${CARGO_TARGET_DIR:-"$repo_root/target"}
+mkdir -p -- "$miri_target_parent"
+miri_target_dir=$(mktemp -d "$miri_target_parent/m48-miri.XXXXXXXX")
+trap 'rm -rf -- "$miri_target_dir"' EXIT
+CARGO_TARGET_DIR="$miri_target_dir" cargo +nightly-2026-08-31 miri test -p capnp-wire
+CARGO_TARGET_DIR="$miri_target_dir" cargo +nightly-2026-08-31 miri test -p capnp-message \
   miri_disjoint_primitive_partitions_do_not_alias
+rm -rf -- "$miri_target_dir"
+trap - EXIT
 
 bash tools/verify-m48-performance-results.sh "$performance_results"
 printf 'M48 security, conformance, build, and performance gates OK\n'

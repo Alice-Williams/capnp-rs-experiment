@@ -33,9 +33,20 @@ fi
 cargo test --quiet -p capnp-message --features loom-tests \
   loom_proves_competing_charges_preserve_the_hard_limit
 cargo test --quiet -p capnp-rpc-core actor::tests
-cargo +nightly-2026-08-31 miri test --quiet -p capnp-wire
-cargo +nightly-2026-08-31 miri test --quiet -p capnp-message \
+
+# Cargo Miri's workspace target can retain runner artifacts whose dependency
+# metadata no longer resolves after other toolchains or revisions use it. Keep
+# the release gate independent of that cache, while placing the disposable
+# target under the caller's selected target root (the G: drive on Windows).
+miri_target_parent=${CARGO_TARGET_DIR:-"$repo_root/target"}
+mkdir -p -- "$miri_target_parent"
+miri_target_dir=$(mktemp -d "$miri_target_parent/m40-miri.XXXXXXXX")
+trap 'rm -rf -- "$miri_target_dir"' EXIT
+CARGO_TARGET_DIR="$miri_target_dir" cargo +nightly-2026-08-31 miri test --quiet -p capnp-wire
+CARGO_TARGET_DIR="$miri_target_dir" cargo +nightly-2026-08-31 miri test --quiet -p capnp-message \
   miri_disjoint_primitive_partitions_do_not_alias
+rm -rf -- "$miri_target_dir"
+trap - EXIT
 bash tools/check-shell-syntax.sh
 
 printf 'M40 release gates OK\n'
