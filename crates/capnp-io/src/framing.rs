@@ -449,10 +449,7 @@ pub fn encode_frame(segments: &[&[u8]], limits: FrameLimits) -> Result<Vec<u8>, 
         .ok_or(FrameError::BodyLengthOverflow)?;
     let mut output = Vec::with_capacity(encoded_len);
     output.extend_from_slice(&(segment_count - 1).to_le_bytes());
-    for segment in segments {
-        let words = (segment.len() / 8) as u32;
-        output.extend_from_slice(&words.to_le_bytes());
-    }
+    append_segment_sizes(&mut output, segments);
     if segment_count % 2 == 0 {
         output.extend_from_slice(&[0; 4]);
     }
@@ -461,6 +458,25 @@ pub fn encode_frame(segments: &[&[u8]], limits: FrameLimits) -> Result<Vec<u8>, 
     }
     debug_assert_eq!(output.len(), encoded_len);
     Ok(output)
+}
+
+#[cfg(feature = "alloc")]
+fn append_segment_sizes(output: &mut Vec<u8>, segments: &[&[u8]]) {
+    const BATCH_SEGMENTS: usize = 32;
+    if segments.len() < 8 {
+        for segment in segments {
+            output.extend_from_slice(&((segment.len() / 8) as u32).to_le_bytes());
+        }
+        return;
+    }
+
+    for batch in segments.chunks(BATCH_SEGMENTS) {
+        let mut encoded = [0_u8; BATCH_SEGMENTS * 4];
+        for (slot, segment) in encoded.chunks_exact_mut(4).zip(batch) {
+            slot.copy_from_slice(&((segment.len() / 8) as u32).to_le_bytes());
+        }
+        output.extend_from_slice(&encoded[..batch.len() * 4]);
+    }
 }
 
 fn effective_segment_limit(limits: FrameLimits) -> u32 {
