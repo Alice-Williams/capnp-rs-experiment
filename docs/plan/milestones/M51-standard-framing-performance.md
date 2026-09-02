@@ -30,11 +30,11 @@ packing, schema, or RPC layer.
 
 ## Implementation checklist
 
-- [ ] Trace Rust and pinned C++ framing paths and define exact matched work.
-- [ ] Add one-, two-, and many-segment parse/encode benchmarks with checksum
+- [x] Trace Rust and pinned C++ framing paths and define exact matched work.
+- [x] Add one-, two-, and many-segment parse/encode benchmarks with checksum
   equivalence.
-- [ ] Record and verify the unmodified M51 baseline.
-- [ ] Inspect assembly or profiles for material gaps.
+- [x] Record and verify the unmodified M51 baseline.
+- [x] Inspect assembly or profiles for material gaps.
 - [ ] Optimize only framing/table code while preserving all size, overflow,
   truncation, allocation, and caller-storage guarantees.
 - [ ] Record final comparisons and explain residual variance.
