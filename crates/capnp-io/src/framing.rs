@@ -415,7 +415,6 @@ pub fn encode_frame(segments: &[&[u8]], limits: FrameLimits) -> Result<Vec<u8>, 
     let table_len = (segments.len() / 2 + 1)
         .checked_mul(8)
         .ok_or(FrameError::BodyLengthOverflow)?;
-    let mut sizes = Vec::with_capacity(segments.len());
     let mut total_words = 0u64;
     for (index, segment) in segments.iter().enumerate() {
         if segment.len() % 8 != 0 {
@@ -437,7 +436,6 @@ pub fn encode_frame(segments: &[&[u8]], limits: FrameLimits) -> Result<Vec<u8>, 
                 limit: limits.max_total_words,
             });
         }
-        sizes.push(words as u32);
     }
 
     let body_len = usize::try_from(
@@ -451,7 +449,8 @@ pub fn encode_frame(segments: &[&[u8]], limits: FrameLimits) -> Result<Vec<u8>, 
         .ok_or(FrameError::BodyLengthOverflow)?;
     let mut output = Vec::with_capacity(encoded_len);
     output.extend_from_slice(&(segment_count - 1).to_le_bytes());
-    for words in sizes {
+    for segment in segments {
+        let words = (segment.len() / 8) as u32;
         output.extend_from_slice(&words.to_le_bytes());
     }
     if segment_count % 2 == 0 {
