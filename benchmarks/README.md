@@ -64,6 +64,17 @@ time:
 bash benchmarks/run-native-phase-breakdown.sh benchmarks/results/<run-name>
 ```
 
+The sequential native RPC comparison uses the same Ping interface, one
+bootstrap, and the same UInt64 request/result loop as C++. The native
+`MemoryTransport` passes owned message envelopes directly, whereas the C++ KJ
+pipe transports bytes. The result is therefore a useful lower-bound comparison
+for the native RPC state machine, not evidence that its framing cost matches
+C++:
+
+```console
+bash benchmarks/run-native-cpp-rpc.sh benchmarks/results/<run-name>
+```
+
 ## Exact traversal-budget microbenchmark
 
 M06 adds a single-thread comparison of complete local and atomic shared budget

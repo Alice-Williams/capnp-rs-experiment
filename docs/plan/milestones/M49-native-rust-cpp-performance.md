@@ -27,9 +27,9 @@ Rust is faster.
 
 ## Implementation checklist
 
-- [ ] Extend the checked-in runner with native Rust executables for the common
+- [x] Extend the checked-in runner with native Rust executables for the common
   C++ carsales, catrank, and expression-evaluation workloads.
-- [ ] Add a native Rust two-party RPC benchmark matching the existing Ping
+- [x] Add a native Rust two-party RPC benchmark matching the existing Ping
   schema, sequential request/reply pattern, and in-memory transport.
 - [ ] Record a fresh comparison run with raw samples and environment metadata.
 - [ ] Attribute material gaps using profiles or targeted component timings.

@@ -15,6 +15,7 @@ workspace = true
 capnp-io = { path = "../capnp-io" }
 capnp-message = { path = "../capnp-message" }
 capnp-rpc = { path = "../capnp-rpc" }
+capnp-rpc-core = { path = "../capnp-rpc-core" }
 capnp-schema = { path = "../capnp-schema" }
 
 [build-dependencies]

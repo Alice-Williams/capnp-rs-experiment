@@ -162,6 +162,7 @@ dependencies = [
  "capnp-io",
  "capnp-message",
  "capnp-rpc",
+ "capnp-rpc-core",
  "capnp-schema",
 ]
 
