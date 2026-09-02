@@ -1,9 +1,10 @@
 use std::hint::black_box;
+use std::io::Cursor;
 use std::time::Instant;
 
 use capnp_io::{
     BorrowedFrameRead, FrameLimits, PreparedSegments, Segment, encode_frame, encode_prepared_frame,
-    parse_frame_into,
+    parse_frame_into, read_frame, write_frame,
 };
 
 const SEED: u64 = 0x4d59_5df4_d0f3_3173;
@@ -39,6 +40,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let prepared = PreparedSegments::new(&views, limits)?;
             measure(|| encode_prepared_many(&prepared, passes))?
         }
+        "stream-read" => {
+            let encoded = encode_frame(&views, limits)?;
+            measure_io(|| stream_read_many(&encoded, limits, passes))?
+        }
+        "stream-write" => measure_io(|| stream_write_many(&views, limits, passes))?,
         _ => return Err("unknown benchmark mode".into()),
     };
     println!("{elapsed_ns}\t{checksum}");
@@ -69,6 +75,14 @@ fn fixture_segments(count: usize) -> Vec<Vec<u8>> {
 fn measure(
     operation: impl FnOnce() -> Result<u64, capnp_io::FrameError>,
 ) -> Result<(u128, u64), capnp_io::FrameError> {
+    let started = Instant::now();
+    let checksum = operation()?;
+    Ok((started.elapsed().as_nanos(), checksum))
+}
+
+fn measure_io(
+    operation: impl FnOnce() -> Result<u64, capnp_io::IoFrameError>,
+) -> Result<(u128, u64), capnp_io::IoFrameError> {
     let started = Instant::now();
     let checksum = operation()?;
     Ok((started.elapsed().as_nanos(), checksum))
@@ -132,6 +146,45 @@ fn encode_prepared_many(
             ^ u64::from(encoded[encoded.len() - 1]).rotate_left(19);
         checksum = checksum.rotate_left(9) ^ fingerprint;
         black_box(encoded);
+    }
+    Ok(black_box(checksum))
+}
+
+fn stream_read_many(
+    encoded: &[u8],
+    limits: FrameLimits,
+    passes: usize,
+) -> Result<u64, capnp_io::IoFrameError> {
+    let mut checksum = SEED;
+    for _ in 0..passes {
+        let mut input = Cursor::new(encoded);
+        let frame = read_frame(&mut input, limits)?.expect("fixture contains one frame");
+        let fingerprint = (frame.len() as u64)
+            ^ u64::from(frame[0]).rotate_left(7)
+            ^ u64::from(frame[frame.len() - 1]).rotate_left(19)
+            ^ u64::from(u32::from_le_bytes(
+                frame[4..8].try_into().expect("frame header"),
+            ))
+            .rotate_left(31);
+        checksum = checksum.rotate_left(9) ^ fingerprint;
+        black_box(frame);
+    }
+    Ok(black_box(checksum))
+}
+
+fn stream_write_many(
+    segments: &[&[u8]],
+    limits: FrameLimits,
+    passes: usize,
+) -> Result<u64, capnp_io::IoFrameError> {
+    let mut checksum = SEED;
+    for _ in 0..passes {
+        let frame = write_frame(Vec::new(), segments, limits, usize::MAX)?;
+        let fingerprint = (frame.len() as u64)
+            ^ u64::from(frame[0]).rotate_left(7)
+            ^ u64::from(frame[frame.len() - 1]).rotate_left(19);
+        checksum = checksum.rotate_left(9) ^ fingerprint;
+        black_box(frame);
     }
     Ok(black_box(checksum))
 }

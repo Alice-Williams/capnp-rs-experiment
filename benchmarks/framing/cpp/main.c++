@@ -1,5 +1,6 @@
 #include <capnp/endian.h>
 #include <capnp/serialize.h>
+#include <kj/io.h>
 
 #include <bit>
 #include <charconv>
@@ -95,6 +96,39 @@ uint64_t encodeMany(
   return checksum;
 }
 
+uint64_t streamReadMany(kj::ArrayPtr<const capnp::word> encoded, size_t passes) {
+  uint64_t checksum = SEED;
+  auto sourceBytes = encoded.asBytes();
+  for (size_t pass = 0; pass < passes; ++pass) {
+    kj::ArrayInputStream input(sourceBytes);
+    capnp::InputStreamMessageReader reader(input);
+    auto first = reader.getSegment(0);
+    auto fingerprint = uint64_t{sourceBytes.size()}
+        ^ std::rotl(uint64_t{sourceBytes[0]}, 7)
+        ^ std::rotl(uint64_t{sourceBytes[sourceBytes.size() - 1]}, 19)
+        ^ std::rotl(uint64_t{first.size()}, 31);
+    checksum = std::rotl(checksum, 9) ^ fingerprint;
+  }
+  return checksum;
+}
+
+uint64_t streamWriteMany(
+    kj::ArrayPtr<const kj::ArrayPtr<const capnp::word>> segments,
+    size_t encodedBytes,
+    size_t passes) {
+  uint64_t checksum = SEED;
+  for (size_t pass = 0; pass < passes; ++pass) {
+    kj::VectorOutputStream output(encodedBytes);
+    capnp::writeMessage(output, segments);
+    auto bytes = output.getArray();
+    auto fingerprint = uint64_t{bytes.size()}
+        ^ std::rotl(uint64_t{bytes[0]}, 7)
+        ^ std::rotl(uint64_t{bytes[bytes.size() - 1]}, 19);
+    checksum = std::rotl(checksum, 9) ^ fingerprint;
+  }
+  return checksum;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -115,6 +149,11 @@ int main(int argc, char** argv) {
     checksum = parseMany(encoded.asPtr(), segmentCount, passes);
   } else if (mode == "encode") {
     checksum = encodeMany(kj::arrayPtr(views.data(), views.size()), passes);
+  } else if (mode == "stream-read") {
+    checksum = streamReadMany(encoded.asPtr(), passes);
+  } else if (mode == "stream-write") {
+    checksum = streamWriteMany(
+        kj::arrayPtr(views.data(), views.size()), encoded.size() * 8, passes);
   } else {
     std::cerr << "unknown benchmark mode\n";
     return 2;

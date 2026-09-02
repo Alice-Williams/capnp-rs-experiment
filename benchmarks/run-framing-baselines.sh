@@ -63,6 +63,12 @@ workloads=(
     'encode-prepared encode 1'
     'encode-prepared encode 2'
     'encode-prepared encode 64'
+    'stream-read stream-read 1'
+    'stream-read stream-read 2'
+    'stream-read stream-read 64'
+    'stream-write stream-write 1'
+    'stream-write stream-write 2'
+    'stream-write stream-write 64'
 )
 
 run_workload() {
