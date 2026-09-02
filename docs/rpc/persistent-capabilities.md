@@ -72,5 +72,5 @@ The pinned C++ tree provides the schema but no universal persistence runtime or
 behavioral corpus, which follows from the schema's application-defined realm
 design. M46 does not choose a database, key-management system, public identity,
 wall clock, network dialer, concrete SturdyRef encoding, or automatic realm
-gateway. It remains an implementation candidate until the M40 release gate is
-complete.
+gateway. The completed M40 release gate activated M46 while leaving those
+application policies explicit.

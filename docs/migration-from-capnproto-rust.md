@@ -90,7 +90,7 @@ Overload means back off, and application calls are never replayed implicitly.
 | Traversal limits are local reader options | All clones consume one exact shared budget |
 | Builder mutation can be shared through application synchronization | Ordinary builders remain exclusive; only typed partitions cross workers |
 | Reconnect wrappers may retry transparently | Generations recreate authority, but callers own replay safety and backoff |
-| Local capability helpers and membranes are broadly available | Deferred to M41–M43 and not claimed by this candidate |
+| Local capability helpers and membranes are broadly available | M41–M43 provide local clients, pipelines, revocation, membranes, and attached-resource boundaries; transport-specific authentication and OS-handle policy remain explicit |
 
 Before switching production traffic, run
 `tools/verify-m40-level1-interop.sh` at the pinned revision and add an

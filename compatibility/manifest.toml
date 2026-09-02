@@ -1,5 +1,5 @@
 manifest_version = 1
-updated = "2026-09-01"
+updated = "2026-09-02"
 
 [project]
 license = "MIT"
@@ -74,6 +74,7 @@ level4_join = "M45 pinned Join wire surface plus authenticated network-parameter
 persistent_capabilities = "M46 realm-branded SturdyRefs, typed save/restore, durable owner sealing, expiry, revocation, and fresh-connection restart recovery"
 compatibility_adapters = "M47 bounded ByteStream, JSON-RPC, HTTP/CONNECT, and WebSocket lifecycle adapters with exact pinned C++ corpus parity"
 native_examples = "M47 native-compiler address-book and capability-calculator examples plus streaming, cancellation, concurrency, authenticated handoff, distributed equality, and restart persistence integration"
+maximum_parity = "M48 release-validated M00-M47 inventory with pinned C++ oracles, Rust 1.85 and 1.98 validation, Bazel, fuzzing, Loom, Miri, performance gates, and a leak-bounded frozen-source 48-hour full-platform soak"
 parallel_read = "M29 zero-copy Arc-owned list partitions and deterministic retained-subtree work plans for scoped or external executors"
 parallel_build = "M30 disjoint primitive partitions plus sealed single-segment worker fragments with deterministic far-link finalization"
 batch_pipeline = "M31 bounded reservation-window scheduling for ordered concurrent process/build/pack work with no-pool single-item paths"
@@ -132,6 +133,21 @@ M44 = "complete"
 M45 = "complete"
 M46 = "complete"
 M47 = "complete"
+M48 = "complete"
+
+[evidence.M48]
+source_commit = "c92e060cbaf75d47bd53cac7b5ae63ec47d5ba9a"
+source_tree_sha256 = "0fa9f8998bfd01ac8cab800d0fba2da0954c4f04ef4abe67832f972e2a879d60"
+result_dir = "release/results/2026-08-31-m48-c92e060-g-drive-docker"
+started_at = "2026-08-31T19:57:25Z"
+completed_at = "2026-09-02T19:57:59Z"
+duration_seconds = 172800
+sessions = 307313331
+warmup_sessions = 100
+rss_kib = { baseline = 3500, maximum = 3908, final = 3684, maximum_growth_allowed = 65536 }
+soak = "PASS: every session exercised address-book persistence, calculator capabilities, streaming cancellation, authenticated handoff, distributed equality, and persistent restart"
+inventory = "all M00-M47 surfaces are implemented or explicitly Rust-inapplicable; no blocked release surface remains"
+validation = ["tools/verify-m48-soak-result.sh", "tools/verify-m48-security-gates.sh", "complete pinned C++ oracle suite", "Rust 1.98 and 1.85 workspace all-target and doc tests", "rustdoc and Clippy with warnings denied", "complete 30-test Bazel suite", "60-second hostile RPC decoder fuzz gate", "three Loom concurrency models", "isolated-target capnp-wire and capnp-message Miri tests", "recorded parallel and scheduling performance gates", "unsafe-code and shell-syntax scans"]
 
 [evidence.M47]
 crates = ["crates/capnp-compat", "crates/capnp-examples"]

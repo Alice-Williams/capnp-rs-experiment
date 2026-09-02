@@ -9,8 +9,8 @@ inapplicable. It does not mean C++ ABI compatibility or that this repository
 reimplements KJ and unrelated C++ platform libraries.
 
 No release may be called complete while a row is `candidate` or `blocked`.
-Implementation evidence can be complete while activation remains blocked by a
-long-running release gate.
+Every row below is now activated, and both long-running release gates have
+durable provenance-bound `PASS` evidence.
 
 ## Product parity matrix
 
@@ -23,17 +23,17 @@ long-running release gate.
 | Native parser, semantic/layout compiler, request/codegen, CLI | M22–M26 | implemented | pinned C++ requests, self-hosted generation, multi-file CLI tests, compiled nested-interface declaration regression | none known |
 | Text and JSON tools | M27–M28 | implemented | pinned C++ text corpus and byte-exact JSON policy fixtures | production application JSON policy remains caller-owned |
 | Parallel read/build/batch scheduling | M29–M31 | implemented | deterministic concurrency tests and source-bound M48 four-core results | none known |
-| RPC schema, transport, Level 0 tables, capability lifetime | M32–M34 | implemented | lossless schema/wire tests and pinned capability interop | activation follows M40 |
-| Pipelines, promise resolution, E-order | M35–M36 | implemented | pinned calculator/resolve transcripts and actor race tests | activation follows M40 |
-| Streaming, cancellation, reconnect, scheduling | M37–M39 | implemented | pinned C++ flow/lifecycle cases, fault tests, source-bound M48 scheduling results | activation follows M40 |
-| Level-1 v1 release | M40 | in progress | interop, fuzz, security and performance gates pass; authoritative `c92e060` soak is running | required 86,400-second same-commit soak has not passed |
-| Local capabilities, membranes, attached resources | M41–M43 | candidate | exact pinned C++ corpora plus native compile/lifetime/quota tests | activate after M40; attached OS handles are Unix-only |
-| Authenticated Level 3 handoff | M44 | candidate | six pinned C++ cases and authenticated native router simulations | activate after M40 |
-| Level 4 distributed equality | M45 | candidate | pinned wire surface and adversarial native network model | no pinned C++ behavioral implementation exists; activate after M40/M44 |
-| Persistent capabilities | M46 | candidate | pinned interface plus restart, sealing, expiry, tamper and revocation model | realm database, cryptography, clock, owner authentication and dialer remain application policy |
-| ByteStream, JSON-RPC, HTTP/CONNECT, WebSocket | M47 | candidate | exact pinned C++ case inventory plus bounded native lifecycle tests | activate after M40–M46 |
-| Address-book, calculator and full-platform examples | M47 | candidate | canonical nested sample schemas, native/C++ address-book cross-read and calculator pipeline/callback/platform scenarios | activate after M40–M46 |
-| Maximum-parity release | M48 | in progress | this audit, executable gates, fresh release-commit performance evidence, and the complete `c92e060` security/CI gates | multi-day full-platform fault/soak and every predecessor activation |
+| RPC schema, transport, Level 0 tables, capability lifetime | M32–M34 | complete | lossless schema/wire tests and pinned capability interop | none known |
+| Pipelines, promise resolution, E-order | M35–M36 | complete | pinned calculator/resolve transcripts and actor race tests | none known |
+| Streaming, cancellation, reconnect, scheduling | M37–M39 | complete | pinned C++ flow/lifecycle cases, fault tests, source-bound M48 scheduling results | none known |
+| Level-1 v1 release | M40 | complete | interop, fuzz, security and performance gates plus the 86,400-second `c92e060` soak | none known |
+| Local capabilities, membranes, attached resources | M41–M43 | complete | exact pinned C++ corpora plus native compile/lifetime/quota tests | attached OS handles are Unix-only |
+| Authenticated Level 3 handoff | M44 | complete | six pinned C++ cases and authenticated native router simulations | network authentication remains application policy |
+| Level 4 distributed equality | M45 | complete | pinned wire surface and adversarial native network model | no pinned C++ behavioral implementation exists |
+| Persistent capabilities | M46 | complete | pinned interface plus restart, sealing, expiry, tamper and revocation model | realm database, cryptography, clock, owner authentication and dialer remain application policy |
+| ByteStream, JSON-RPC, HTTP/CONNECT, WebSocket | M47 | complete | exact pinned C++ case inventory plus bounded native lifecycle tests | production web stack remains application policy |
+| Address-book, calculator and full-platform examples | M47 | complete | canonical nested sample schemas, native/C++ address-book cross-read and calculator pipeline/callback/platform scenarios | none known |
+| Maximum-parity release | M48 | complete | this audit, executable gates, fresh release-commit performance evidence, complete security gates, and the 172,800-second `c92e060` full-platform soak | none |
 
 ## C++ facilities that are Rust-inapplicable
 
@@ -54,13 +54,14 @@ Rust-native implementation should not reproduce.
   transport would be a distinct authenticated transport policy, not wire
   compatibility with Unix descriptors.
 
-## Outstanding hard blockers
+## Resolved release blockers
 
-1. M40 needs a checked-in `PASS` result from an uninterrupted 86,400-second
-   same-commit Level-1 soak. Its preserved approximately 3-hour run is useful
-   development evidence, not a release result.
-2. M48 needs a multi-day full-platform fault/soak result exercising the
-   capability layers and compatibility adapters, bound to exact source hashes.
+1. M40's 86,400-second same-commit Level-1 requirement passed from `c92e060`
+   with 3,794,488,678 sessions and no RSS growth. The earlier approximately
+   3-hour run remains development evidence only.
+2. M48's multi-day full-platform fault/soak requirement passed from the same
+   commit after 172,800 seconds and 307,313,331 sessions. Its baseline,
+   maximum, and final RSS were 3,500, 3,908, and 3,684 KiB respectively.
 
 The final security gate is resolved for source commit
 `c92e060cbaf75d47bd53cac7b5ae63ec47d5ba9a`. An exact local invocation of
@@ -76,7 +77,8 @@ composition was therefore rerun at that exact commit and passed again,
 including the phase-aware inventory, every pinned oracle, Cargo/MSRV/Bazel,
 the bounded fuzz target, Loom, Miri, and the release performance checks. The
 changes after `c92e060` remain outside both soak wrappers' recorded source-input
-sets, so this verifier hardening and its evidence do not alter either live run.
+sets, so this verifier hardening and its evidence do not alter either recorded
+run.
 
 The former nested-interface declaration compiler blocker is resolved. Named
 declarations now take precedence over contextual methods, a compiled-schema
@@ -85,7 +87,8 @@ pinned C++ nesting rather than flattened substitutes.
 
 The executable inventory check is `tools/verify-m48-inventory.sh`. It verifies
 that the manifest retains the required milestone/evidence states and that this
-audit continues to name every blocker. It accepts exactly three dependency-
+audit continues to name every resolved blocker and explicit exclusion. It
+accepts exactly three dependency-
 consistent phases: M41–M47 candidates while M40 is pending, atomic M40–M47
 activation while M48 remains absent, or M00–M48 complete with M48 evidence.
 Partial activation is rejected, and the verifier never converts a candidate
@@ -130,6 +133,13 @@ The performance blocker is resolved by
 passes all four qualification gates. Rejected noisy/pre-fix attempts are kept
 beside the accepted results and explained in that result root's README rather
 than being discarded or mistaken for release evidence.
+
+The final full-platform result is
+`release/results/2026-08-31-m48-c92e060-g-drive-docker`. It records source tree
+SHA-256 `0fa9f8998bfd01ac8cab800d0fba2da0954c4f04ef4abe67832f972e2a879d60`,
+started at `2026-08-31T19:57:25Z`, completed at `2026-09-02T19:57:59Z`, and
+passes `tools/verify-m48-soak-result.sh`. The complete final security gate was
+rerun after completion and passed before activation.
 
 The executable fast release boundary is
 `tools/verify-m48-security-gates.sh`: every pinned oracle, unsafe-code and shell

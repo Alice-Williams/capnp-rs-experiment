@@ -73,5 +73,5 @@ handoff/embargo cases.
 M44 does not define a public-internet identity scheme, make opaque tokens
 portable between unrelated connections, pass file descriptors during an
 introduction, implement Level-4 `Join`, or implement persistent capabilities.
-The Level-3 APIs remain an implementation candidate until the M40 release gate
-is complete.
+The completed M40 release gate activated these Level-3 APIs; deployments still
+have to supply their authenticated network identity and token policy.

@@ -26,8 +26,8 @@ The 2026-08-31 Docker/WSL2 run was cleanly stopped after the durable
 12,420-second checkpoint with 735,873,468 sessions and 3,052 KiB RSS. It is
 preserved under `release/results/2026-08-31-m40-g-drive-docker` as useful
 approximately-3-hour development evidence. Its status is `INTERIM_STOPPED`,
-not `PASS`; the required 86,400-second soak remains incomplete and M40 stays
-in progress.
+not `PASS`, so it did not satisfy the release gate. The authoritative result
+below subsequently completed the required 86,400-second soak and M40.
 
 ## Authoritative release evidence
 

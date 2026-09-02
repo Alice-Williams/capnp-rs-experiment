@@ -98,5 +98,5 @@ The coordinator does not prescribe TLS, Noise, public-key identities, token
 formats, or dialing. It does not implement the concrete two-party batching
 optimization sketched in `rpc-twoparty.capnp`, integrate a particular async
 executor, bypass opaque policy proxies, persist capabilities, or claim a C++
-Join oracle that does not exist. M45 remains an implementation candidate until
-the M40 release gate and its M44 dependency are activated.
+Join oracle that does not exist. The completed M40 release gate and activated
+M44 dependency now activate M45; the network-specific policies remain explicit.

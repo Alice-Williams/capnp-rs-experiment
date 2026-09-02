@@ -106,4 +106,4 @@ wire safety or protocol ordering.
 - [M45 — Level-4 Join and distributed equality](milestones/M45-level-4-join.md) — complete
 - [M46 — Persistent capabilities and SturdyRefs](milestones/M46-persistent-capabilities.md) — complete
 - [M47 — C++ compatibility adapters and examples](milestones/M47-compatibility-adapters-and-examples.md) — complete
-- [M48 — Maximum-parity release gate](milestones/M48-maximum-parity-release-gate.md) — in progress; authoritative 48-hour soak running at `c92e060`
+- [M48 — Maximum-parity release gate](milestones/M48-maximum-parity-release-gate.md) — complete

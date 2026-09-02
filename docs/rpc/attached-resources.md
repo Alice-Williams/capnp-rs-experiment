@@ -79,5 +79,5 @@ wire, actor, and transport-envelope APIs but do not export the Unix adapter.
 M43 does not pass file descriptors through M42 local membranes, invent Windows
 handle-transfer semantics, provide TCP descriptor transfer, or add three-party
 handoff/equality/persistence. Those boundaries remain conservative or belong
-to M44–M46. Activation of this stacked implementation candidate still awaits
-the M40 release-soak gate.
+to M44–M46. The completed M40 release-soak gate activated this implementation;
+the platform and transport exclusions remain unchanged.

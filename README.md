@@ -28,8 +28,9 @@ two-party Level-1 boundary: bounded actor-owned tables, capability lifetimes,
 promise pipelines and E-order, flow control, cancellation/disconnect/reconnect,
 and explicit thread-safe scheduling policies. M40's frozen-source 24-hour
 Level-1 soak and release suite passed, activating the M41-M47 maximum-RPC and
-compatibility work. M48 is running the final 48-hour maximum-parity release
-gate.
+compatibility work. M48's frozen-source 48-hour full-platform soak and complete
+security, conformance, build, performance, and release suite passed, completing
+the maximum-parity engineering plan.
 
 The repository is a fifteen-crate workspace matching the intended architecture.
 `capnp-wire` implements M03's no_std words, little-endian scalar access, checked

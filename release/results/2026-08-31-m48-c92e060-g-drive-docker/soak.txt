@@ -1,0 +1,3 @@
+status=PASS
+m48-full-platform-soak-ok sessions=307313331 warmup_sessions=100 seed=7868976431532826987 elapsed_seconds=172800 baseline_rss_kib=3500 maximum_rss_kib=3908 final_rss_kib=3684
+gate=PASS: at least 100000 sessions and 172800 wall-clock seconds; each session exercised address-book persistence, calculator capabilities, streaming cancellation, authenticated handoff, distributed equality, and persistent restart

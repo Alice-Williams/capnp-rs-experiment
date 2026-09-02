@@ -58,5 +58,5 @@ revocation, and lifetime ports.
 
 M42 does not allow attached descriptors or file descriptors through a membrane;
 those remain M43. Three-party handoff, distributed equality, persistence, and
-compatibility adapters remain M44–M47. M40 release-soak completion is still
-required before activating the stacked M41/M42 candidates.
+compatibility adapters remain separate M44–M47 boundaries. The completed M40
+release soak activated the stacked M41/M42 implementation.
