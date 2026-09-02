@@ -49,6 +49,12 @@ sh_test(
 )
 
 sh_test(
+    name = "native_cpp_rpc_results_test",
+    srcs = ["verify-native-cpp-rpc-results.sh"],
+    data = glob(["results/2026-09-02-native-cpp-rpc-g-drive-docker/**"]),
+)
+
+sh_test(
     name = "m29_parallel_runner_syntax_test",
     srcs = ["run-m29-parallel-read.sh"],
     args = ["--syntax-check-only"],

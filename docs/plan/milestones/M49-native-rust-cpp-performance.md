@@ -31,7 +31,8 @@ Rust is faster.
   C++ carsales, catrank, and expression-evaluation workloads.
 - [x] Add a native Rust two-party RPC benchmark matching the existing Ping
   schema, sequential request/reply pattern, and in-memory transport.
-- [ ] Record a fresh comparison run with raw samples and environment metadata.
+- [x] Record fresh data and RPC comparison runs with raw samples and
+  environment metadata.
 - [ ] Attribute material gaps using profiles or targeted component timings.
 - [ ] Publish a concise report covering slower, faster, and inapplicable cases.
 - [ ] Add result-integrity and runner checks to Bazel/CI.

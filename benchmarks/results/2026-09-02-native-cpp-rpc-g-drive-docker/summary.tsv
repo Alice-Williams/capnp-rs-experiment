@@ -1,0 +1,3 @@
+implementation	transport	iterations	runs	mean_ns_per_call	median_ns_per_call	min_ns_per_call	max_ns_per_call
+cpp	byte-pipe	10000	9	5258.20	5199.26	4779.90	5919.47
+native	message-envelopes	10000	9	14343.27	13806.17	13609.55	17153.13
