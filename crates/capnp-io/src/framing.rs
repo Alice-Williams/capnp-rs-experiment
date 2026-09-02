@@ -318,16 +318,16 @@ pub enum FrameRead<'a> {
 #[cfg(feature = "alloc")]
 #[derive(Debug, Eq, PartialEq)]
 pub struct PreparedSegments<'a> {
-    segments: Box<[PreparedSegment<'a>]>,
+    pub(crate) segments: Box<[PreparedSegment<'a>]>,
     table_len: usize,
     encoded_len: usize,
 }
 
 #[cfg(feature = "alloc")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct PreparedSegment<'a> {
-    bytes: &'a [u8],
-    word_count: u32,
+pub(crate) struct PreparedSegment<'a> {
+    pub(crate) bytes: &'a [u8],
+    pub(crate) word_count: u32,
 }
 
 #[cfg(feature = "alloc")]

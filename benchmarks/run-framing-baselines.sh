@@ -69,6 +69,9 @@ workloads=(
     'stream-write stream-write 1'
     'stream-write stream-write 2'
     'stream-write stream-write 64'
+    'stream-write-prepared stream-write 1'
+    'stream-write-prepared stream-write 2'
+    'stream-write-prepared stream-write 64'
 )
 
 run_workload() {

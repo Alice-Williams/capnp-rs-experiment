@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use capnp_io::{
     BorrowedFrameRead, FrameLimits, PreparedSegments, Segment, encode_frame, encode_prepared_frame,
-    parse_frame_into, read_frame, write_frame,
+    parse_frame_into, read_frame, write_frame, write_prepared_frame,
 };
 
 const SEED: u64 = 0x4d59_5df4_d0f3_3173;
@@ -45,6 +45,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             measure_io(|| stream_read_many(&encoded, limits, passes))?
         }
         "stream-write" => measure_io(|| stream_write_many(&views, limits, passes))?,
+        "stream-write-prepared" => {
+            let prepared = PreparedSegments::new(&views, limits)?;
+            measure_io(|| stream_write_prepared_many(&prepared, passes))?
+        }
         _ => return Err("unknown benchmark mode".into()),
     };
     println!("{elapsed_ns}\t{checksum}");
@@ -180,6 +184,23 @@ fn stream_write_many(
     let mut checksum = SEED;
     for _ in 0..passes {
         let frame = write_frame(Vec::new(), segments, limits, usize::MAX)?;
+        let fingerprint = (frame.len() as u64)
+            ^ u64::from(frame[0]).rotate_left(7)
+            ^ u64::from(frame[frame.len() - 1]).rotate_left(19);
+        checksum = checksum.rotate_left(9) ^ fingerprint;
+        black_box(frame);
+    }
+    Ok(black_box(checksum))
+}
+
+fn stream_write_prepared_many(
+    segments: &PreparedSegments<'_>,
+    passes: usize,
+) -> Result<u64, capnp_io::IoFrameError> {
+    let mut checksum = SEED;
+    for _ in 0..passes {
+        let output = Vec::with_capacity(segments.encoded_len());
+        let frame = write_prepared_frame(output, segments, usize::MAX)?;
         let fingerprint = (frame.len() as u64)
             ^ u64::from(frame[0]).rotate_left(7)
             ^ u64::from(frame[frame.len() - 1]).rotate_left(19);

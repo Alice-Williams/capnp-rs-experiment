@@ -14,8 +14,8 @@ use capnp_wire::read_u32_le;
 use std::io::{self, Read, Write};
 
 use crate::{
-    BorrowedFrameRead, FrameError, FrameLimits, MAX_SEGMENTS, Segment, encode_frame, parse_frame,
-    parse_frame_into,
+    BorrowedFrameRead, FrameError, FrameLimits, MAX_SEGMENTS, PreparedSegments, Segment,
+    encode_frame, parse_frame, parse_frame_into,
 };
 
 #[derive(Debug)]
@@ -242,6 +242,42 @@ pub fn write_frame<W: Write>(
     Ok(bounded.into_inner())
 }
 
+/// Writes already-validated segments directly without materializing a
+/// contiguous intermediate frame.
+pub fn write_prepared_frame<W: Write>(
+    writer: W,
+    segments: &PreparedSegments<'_>,
+    output_limit: usize,
+) -> Result<W, IoFrameError> {
+    if segments.encoded_len() > output_limit {
+        return Err(IoFrameError::OutputLimit {
+            requested: segments.encoded_len(),
+            limit: output_limit,
+        });
+    }
+    let mut bounded = BoundedWriter::new(writer, output_limit);
+    const BATCH_SEGMENTS: usize = 32;
+    for (batch_index, batch) in segments.segments.chunks(BATCH_SEGMENTS).enumerate() {
+        let prefix = usize::from(batch_index == 0) * 4;
+        let mut table = [0_u8; BATCH_SEGMENTS * 4 + 4];
+        if batch_index == 0 {
+            table[..4].copy_from_slice(&((segments.len() as u32) - 1).to_le_bytes());
+        }
+        for (slot, segment) in table[prefix..].chunks_exact_mut(4).zip(batch.iter()) {
+            slot.copy_from_slice(&segment.word_count.to_le_bytes());
+        }
+        bounded.write_all(&table[..prefix + batch.len() * 4])?;
+    }
+    if segments.len() % 2 == 0 {
+        bounded.write_all(&[0; 4])?;
+    }
+    for segment in &segments.segments {
+        bounded.write_all(segment.bytes)?;
+    }
+    bounded.flush()?;
+    Ok(bounded.into_inner())
+}
+
 /// Stable byte backing suitable for memory-mapped files and similar storage.
 ///
 /// The backing can be an application-owned mmap type implementing
@@ -285,7 +321,10 @@ impl<B: AsRef<[u8]>> MappedFrame<B> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec;
+    use std::cell::Cell;
     use std::io::Cursor;
+    use std::rc::Rc;
 
     const FRAME: &[u8] = include_bytes!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -327,6 +366,19 @@ mod tests {
             let written = self.max.min(input.len());
             self.bytes.extend_from_slice(&input[..written]);
             Ok(written)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct CountingWriter(Rc<Cell<usize>>);
+
+    impl Write for CountingWriter {
+        fn write(&mut self, input: &[u8]) -> io::Result<usize> {
+            self.0.set(self.0.get() + input.len());
+            Ok(input.len())
         }
 
         fn flush(&mut self) -> io::Result<()> {
@@ -377,6 +429,42 @@ mod tests {
             Err(IoFrameError::OutputLimit { .. })
         ));
         assert!(bounded.into_inner().bytes.is_empty());
+    }
+
+    #[test]
+    fn prepared_writer_matches_contiguous_encoding_across_table_batches() {
+        let bodies = (0_u8..64).map(|value| vec![value; 8]).collect::<Vec<_>>();
+        let segments = bodies.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let prepared =
+            PreparedSegments::new(&segments, FrameLimits::default()).expect("segments prepare");
+        let expected = encode_frame(&segments, FrameLimits::default()).expect("frame encodes");
+
+        let actual = write_prepared_frame(
+            Vec::with_capacity(prepared.encoded_len()),
+            &prepared,
+            prepared.encoded_len(),
+        )
+        .expect("prepared frame writes");
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn prepared_writer_rejects_output_limit_before_first_write() {
+        let segment = [0_u8; 8];
+        let prepared =
+            PreparedSegments::new(&[&segment], FrameLimits::default()).expect("segment prepares");
+        let written = Rc::new(Cell::new(0));
+
+        assert!(matches!(
+            write_prepared_frame(
+                CountingWriter(Rc::clone(&written)),
+                &prepared,
+                prepared.encoded_len() - 1,
+            ),
+            Err(IoFrameError::OutputLimit { .. })
+        ));
+        assert_eq!(written.get(), 0);
     }
 
     #[test]
