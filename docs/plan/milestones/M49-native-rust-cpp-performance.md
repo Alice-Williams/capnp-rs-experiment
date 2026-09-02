@@ -45,7 +45,7 @@ Checked-in source and scripts reproduce every stated comparison, raw samples
 support the summary, checksums prove equivalent results, and each causal claim
 is backed by a profile or an isolated benchmark.
 
-Commit `0b29b1cf9561363469dbf77903097ed20261cdbd` passed the development and
+Commit `0b29b1ce07b5878210f0c6187102a704411ee670` passed the development and
 Rust 1.85 workspace tests, documentation and compile-fail tests, formatting,
 Clippy with warnings denied, and `bazelisk test //...` in the Linux development
 container. The benchmark result verifiers were included in the Bazel pass.
