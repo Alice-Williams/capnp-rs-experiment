@@ -1,0 +1,7 @@
+case	segments	cpp_median_ns_per_frame	native_median_ns_per_frame	native_over_cpp
+encode	1	27.9738	23.8796	0.854
+encode	2	42.5488	23.7115	0.557
+encode	64	219.3124	316.5485	1.443
+parse	1	15.7130	8.5366	0.543
+parse	2	41.3747	10.1847	0.246
+parse	64	298.0713	122.8620	0.412
