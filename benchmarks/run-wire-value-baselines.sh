@@ -8,7 +8,7 @@ output=${1:-}
 warmups=${BENCH_WARMUPS:-2}
 runs=${BENCH_RUNS:-9}
 words=${WIRE_BENCH_WORDS:-4096}
-passes=${WIRE_BENCH_PASSES:-2500}
+passes=${WIRE_BENCH_PASSES:-10000}
 
 if [[ "$output" == "--syntax-check-only" ]]; then
     exit 0
