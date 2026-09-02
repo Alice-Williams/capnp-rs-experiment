@@ -3,8 +3,10 @@
 #include <kj/io.h>
 
 #include <bit>
+#include <array>
 #include <charconv>
 #include <chrono>
+#include <cstring>
 #include <cstdint>
 #include <iostream>
 #include <string_view>
@@ -65,18 +67,61 @@ uint64_t parseMany(kj::ArrayPtr<const capnp::word> encoded, size_t segmentCount,
   uint64_t checksum = SEED;
   for (size_t pass = 0; pass < passes; ++pass) {
     capnp::FlatArrayMessageReader reader(encoded);
-    auto first = reader.getSegment(0);
-    auto last = reader.getSegment(segmentCount - 1);
-    auto firstBytes = first.asBytes();
-    auto lastBytes = last.asBytes();
     auto encodedBytes = static_cast<size_t>(reader.getEnd() - encoded.begin()) * 8;
     auto fingerprint = uint64_t{segmentCount}
         ^ std::rotl(uint64_t{segmentCount / 2 + 1} * 8, 11)
-        ^ std::rotl(uint64_t{encodedBytes}, 23)
-        ^ std::rotl(uint64_t{first.size()}, 37)
-        ^ std::rotl(uint64_t{last.size()}, 49)
-        ^ std::rotl(uint64_t{firstBytes[0]}, 7)
-        ^ std::rotl(uint64_t{lastBytes[lastBytes.size() - 1]}, 19);
+        ^ std::rotl(uint64_t{encodedBytes}, 23);
+    for (size_t index = 0; index < segmentCount; ++index) {
+      auto segment = reader.getSegment(index);
+      auto bytes = segment.asBytes();
+      fingerprint = std::rotl(fingerprint, 9)
+          ^ uint64_t{index}
+          ^ std::rotl(uint64_t{segment.size()}, 13)
+          ^ std::rotl(uint64_t{bytes[0]}, 29)
+          ^ std::rotl(uint64_t{bytes[bytes.size() - 1]}, 47);
+    }
+    checksum = std::rotl(checksum, 9) ^ fingerprint;
+  }
+  return checksum;
+}
+
+uint64_t parseNoAllocMany(
+    kj::ArrayPtr<const capnp::word> encoded, size_t expectedCount, size_t passes) {
+  uint64_t checksum = SEED;
+  std::array<kj::ArrayPtr<const capnp::word>, 64> segments;
+  for (size_t pass = 0; pass < passes; ++pass) {
+    auto table = reinterpret_cast<const capnp::_::WireValue<uint32_t>*>(encoded.begin());
+    auto segmentCount = size_t{table[0].get()} + 1;
+    if (segmentCount != expectedCount || segmentCount > segments.size()) {
+      throw std::invalid_argument("unexpected segment count");
+    }
+    size_t offset = segmentCount / 2 + 1;
+    if (offset > encoded.size()) throw std::invalid_argument("truncated table");
+    uint64_t totalWords = 0;
+    for (size_t index = 0; index < segmentCount; ++index) {
+      auto words = uint64_t{table[index + 1].get()};
+      if (words > UINT64_MAX - totalWords) throw std::overflow_error("word count overflow");
+      totalWords += words;
+      if (totalWords > 8 * 1024 * 1024) throw std::invalid_argument("message too large");
+    }
+    if (totalWords > encoded.size() - offset) throw std::invalid_argument("truncated body");
+    for (size_t index = 0; index < segmentCount; ++index) {
+      auto words = size_t{table[index + 1].get()};
+      segments[index] = encoded.slice(offset, offset + words);
+      offset += words;
+    }
+    auto fingerprint = uint64_t{segmentCount}
+        ^ std::rotl(uint64_t{segmentCount / 2 + 1} * 8, 11)
+        ^ std::rotl(uint64_t{offset * 8}, 23);
+    for (size_t index = 0; index < segmentCount; ++index) {
+      auto segment = segments[index];
+      auto bytes = segment.asBytes();
+      fingerprint = std::rotl(fingerprint, 9)
+          ^ uint64_t{index}
+          ^ std::rotl(uint64_t{segment.size()}, 13)
+          ^ std::rotl(uint64_t{bytes[0]}, 29)
+          ^ std::rotl(uint64_t{bytes[bytes.size() - 1]}, 47);
+    }
     checksum = std::rotl(checksum, 9) ^ fingerprint;
   }
   return checksum;
@@ -101,12 +146,32 @@ uint64_t streamReadMany(kj::ArrayPtr<const capnp::word> encoded, size_t passes) 
   auto sourceBytes = encoded.asBytes();
   for (size_t pass = 0; pass < passes; ++pass) {
     kj::ArrayInputStream input(sourceBytes);
-    capnp::InputStreamMessageReader reader(input);
-    auto first = reader.getSegment(0);
-    auto fingerprint = uint64_t{sourceBytes.size()}
-        ^ std::rotl(uint64_t{sourceBytes[0]}, 7)
-        ^ std::rotl(uint64_t{sourceBytes[sourceBytes.size() - 1]}, 19)
-        ^ std::rotl(uint64_t{first.size()}, 31);
+    std::array<kj::byte, 264> table;
+    input.read(kj::arrayPtr(table.data(), size_t{8}));
+    auto wireTable = reinterpret_cast<const capnp::_::WireValue<uint32_t>*>(table.data());
+    auto segmentCount = size_t{wireTable[0].get()} + 1;
+    if (segmentCount == 0 || segmentCount > 512) {
+      throw std::invalid_argument("invalid segment count");
+    }
+    auto tableBytes = (segmentCount / 2 + 1) * 8;
+    if (tableBytes > 8) {
+      input.read(kj::arrayPtr(table.data() + 8, tableBytes - 8));
+    }
+    size_t bodyBytes = 0;
+    for (size_t index = 0; index < segmentCount; ++index) {
+      auto words = size_t{wireTable[index + 1].get()};
+      if (words > (SIZE_MAX - bodyBytes) / sizeof(capnp::word)) {
+        throw std::overflow_error("message size overflow");
+      }
+      bodyBytes += words * sizeof(capnp::word);
+    }
+    auto frame = kj::heapArray<kj::byte>(tableBytes + bodyBytes);
+    std::memcpy(frame.begin(), table.data(), tableBytes);
+    input.read(frame.slice(tableBytes, frame.size()));
+    auto fingerprint = uint64_t{frame.size()}
+        ^ std::rotl(uint64_t{frame[0]}, 7)
+        ^ std::rotl(uint64_t{frame[frame.size() - 1]}, 19)
+        ^ std::rotl(uint64_t{wireTable[1].get()}, 31);
     checksum = std::rotl(checksum, 9) ^ fingerprint;
   }
   return checksum;
@@ -147,6 +212,8 @@ int main(int argc, char** argv) {
   uint64_t checksum;
   if (mode == "parse") {
     checksum = parseMany(encoded.asPtr(), segmentCount, passes);
+  } else if (mode == "parse-noalloc") {
+    checksum = parseNoAllocMany(encoded.asPtr(), segmentCount, passes);
   } else if (mode == "encode") {
     checksum = encodeMany(kj::arrayPtr(views.data(), views.size()), passes);
   } else if (mode == "stream-read") {

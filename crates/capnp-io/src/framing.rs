@@ -102,24 +102,14 @@ impl core::error::Error for FrameError {}
 /// Immutable location and contents of one segment within a parsed frame.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Segment<'a> {
-    id: u32,
-    word_count: u32,
     bytes: &'a [u8],
 }
 
 impl<'a> Segment<'a> {
-    pub const EMPTY: Self = Self {
-        id: 0,
-        word_count: 0,
-        bytes: &[],
-    };
-
-    pub const fn id(self) -> u32 {
-        self.id
-    }
+    pub const EMPTY: Self = Self { bytes: &[] };
 
     pub const fn word_count(self) -> u32 {
-        self.word_count
+        (self.bytes.len() / WORD_BYTES) as u32
     }
 
     pub const fn bytes(self) -> &'a [u8] {
@@ -179,6 +169,7 @@ pub enum BorrowedFrameRead<'input, 'storage> {
 /// assert!(remaining.is_empty());
 /// # Ok::<(), capnp_io::FrameError>(())
 /// ```
+#[inline]
 pub fn parse_frame_into<'input, 'storage>(
     input: &'input [u8],
     limits: FrameLimits,
@@ -214,12 +205,81 @@ pub fn parse_frame_into<'input, 'storage>(
         });
     }
 
-    let mut total_words = 0_u64;
-    for index in 0..count {
-        let table_offset = 4_usize
-            .checked_mul(index + 1)
+    if count == 1 {
+        let words = read_u32_le(input, 4).expect("complete table was checked");
+        let total_words = u64::from(words);
+        if total_words > limits.max_total_words {
+            return Err(FrameError::MessageTooLarge {
+                words: total_words,
+                limit: limits.max_total_words,
+            });
+        }
+        let body_len = usize::try_from(total_words * WORD_BYTES as u64)
+            .map_err(|_| FrameError::BodyLengthOverflow)?;
+        let encoded_len = table_len
+            .checked_add(body_len)
             .ok_or(FrameError::BodyLengthOverflow)?;
-        let words = read_u32_le(input, table_offset).expect("complete table was checked");
+        if input.len() < encoded_len {
+            return Err(FrameError::TruncatedBody {
+                expected: body_len,
+                available: input.len() - table_len,
+            });
+        }
+        storage[0] = Segment {
+            bytes: &input[table_len..encoded_len],
+        };
+        return Ok(BorrowedFrameRead::Message {
+            frame: BorrowedFrame {
+                segments: &storage[..1],
+                table_len,
+                encoded_len,
+            },
+            remaining: &input[encoded_len..],
+        });
+    }
+
+    if count == 2 {
+        let first_words = read_u32_le(input, 4).expect("complete table was checked");
+        let second_words = read_u32_le(input, 8).expect("complete table was checked");
+        let total_words = u64::from(first_words) + u64::from(second_words);
+        if total_words > limits.max_total_words {
+            return Err(FrameError::MessageTooLarge {
+                words: total_words,
+                limit: limits.max_total_words,
+            });
+        }
+        let body_len = usize::try_from(total_words * WORD_BYTES as u64)
+            .map_err(|_| FrameError::BodyLengthOverflow)?;
+        let encoded_len = table_len
+            .checked_add(body_len)
+            .ok_or(FrameError::BodyLengthOverflow)?;
+        if input.len() < encoded_len {
+            return Err(FrameError::TruncatedBody {
+                expected: body_len,
+                available: input.len() - table_len,
+            });
+        }
+        let second_offset = table_len + first_words as usize * WORD_BYTES;
+        storage[0] = Segment {
+            bytes: &input[table_len..second_offset],
+        };
+        storage[1] = Segment {
+            bytes: &input[second_offset..encoded_len],
+        };
+        return Ok(BorrowedFrameRead::Message {
+            frame: BorrowedFrame {
+                segments: &storage[..2],
+                table_len,
+                encoded_len,
+            },
+            remaining: &input[encoded_len..],
+        });
+    }
+
+    let size_table = &input[4..4 + count * 4];
+    let mut total_words = 0_u64;
+    for encoded_words in size_table.chunks_exact(4) {
+        let words = u32::from_le_bytes(encoded_words.try_into().expect("four-byte table entry"));
         total_words = total_words
             .checked_add(u64::from(words))
             .ok_or(FrameError::TotalWordsOverflow)?;
@@ -247,17 +307,12 @@ pub fn parse_frame_into<'input, 'storage>(
     }
 
     let mut body_offset = table_len;
-    for (index, slot) in storage[..count].iter_mut().enumerate() {
-        let table_offset = 4 * (index + 1);
-        let word_count = read_u32_le(input, table_offset).expect("complete table was checked");
-        let byte_len = usize::try_from(u64::from(word_count) * WORD_BYTES as u64)
-            .map_err(|_| FrameError::BodyLengthOverflow)?;
-        let end = body_offset
-            .checked_add(byte_len)
-            .ok_or(FrameError::BodyLengthOverflow)?;
+    for (slot, encoded_words) in storage[..count].iter_mut().zip(size_table.chunks_exact(4)) {
+        let word_count =
+            u32::from_le_bytes(encoded_words.try_into().expect("four-byte table entry"));
+        let byte_len = word_count as usize * WORD_BYTES;
+        let end = body_offset + byte_len;
         *slot = Segment {
-            id: u32::try_from(index).map_err(|_| FrameError::BodyLengthOverflow)?,
-            word_count,
             bytes: &input[body_offset..end],
         };
         body_offset = end;
@@ -434,15 +489,10 @@ pub fn parse_frame(input: &[u8], limits: FrameLimits) -> Result<FrameRead<'_>, F
 
     let mut segments = Vec::with_capacity(count);
     let mut body_offset = table_len;
-    for (index, word_count) in sizes.into_iter().enumerate() {
-        let byte_len = usize::try_from(u64::from(word_count) * 8)
-            .map_err(|_| FrameError::BodyLengthOverflow)?;
-        let end = body_offset
-            .checked_add(byte_len)
-            .ok_or(FrameError::BodyLengthOverflow)?;
+    for word_count in sizes {
+        let byte_len = usize::try_from(word_count).expect("validated body length fits usize") * 8;
+        let end = body_offset + byte_len;
         segments.push(Segment {
-            id: u32::try_from(index).map_err(|_| FrameError::BodyLengthOverflow)?,
-            word_count,
             bytes: &input[body_offset..end],
         });
         body_offset = end;
@@ -621,6 +671,10 @@ mod tests {
 
     #[test]
     fn caller_segment_storage_parses_without_copying_or_allocation() {
+        assert_eq!(
+            core::mem::size_of::<Segment<'_>>(),
+            core::mem::size_of::<&[u8]>()
+        );
         let mut storage = [Segment::EMPTY; MAX_SEGMENTS as usize];
         let (frame, remaining) = match parse_frame_into(MANY, FrameLimits::default(), &mut storage)
             .expect("many-segment frame parses")

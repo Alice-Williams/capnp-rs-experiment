@@ -44,6 +44,8 @@ mkdir -p -- "$output"
     printf 'clang=%s\n' "$(clang++ --version | head -n1)"
     printf 'cpp_oracle_commit=%s\n' "$cpp_commit"
     printf 'cpp_primitive=capnp::FlatArrayMessageReader and capnp::messageToFlatArray\n'
+    printf 'cpp_stream_read=source-derived contiguous raw-frame reader matching capnp_io::read_frame\n'
+    printf 'cpp_stream_write=capnp::writeMessage\n'
     printf 'native_commit=%s\n' "$native_commit"
     printf 'cpp_binary_sha256=%s\n' "$(sha256sum "$cpp_benchmark" | cut -d ' ' -f1)"
     printf 'native_binary_sha256=%s\n' "$(sha256sum "$native_benchmark" | cut -d ' ' -f1)"
@@ -57,6 +59,9 @@ workloads=(
     'parse parse 1'
     'parse parse 2'
     'parse parse 64'
+    'parse-noalloc parse-noalloc 1'
+    'parse-noalloc parse-noalloc 2'
+    'parse-noalloc parse-noalloc 64'
     'encode encode 1'
     'encode encode 2'
     'encode encode 64'

@@ -108,16 +108,17 @@ fn parse_many<'input>(
             unreachable!();
         };
         let segments = frame.segments();
-        let first = segments[0];
-        let last = segments[segments.len() - 1];
-        let fingerprint = (segments.len() as u64)
+        let mut fingerprint = (segments.len() as u64)
             ^ (frame.table_len() as u64).rotate_left(11)
             ^ (frame.encoded_len() as u64).rotate_left(23)
-            ^ u64::from(first.word_count()).rotate_left(37)
-            ^ u64::from(last.word_count()).rotate_left(49)
-            ^ u64::from(first.bytes()[0]).rotate_left(7)
-            ^ u64::from(last.bytes()[last.bytes().len() - 1]).rotate_left(19)
             ^ remaining.len() as u64;
+        for (index, segment) in segments.iter().enumerate() {
+            fingerprint = fingerprint.rotate_left(9)
+                ^ index as u64
+                ^ u64::from(segment.word_count()).rotate_left(13)
+                ^ u64::from(segment.bytes()[0]).rotate_left(29)
+                ^ u64::from(segment.bytes()[segment.bytes().len() - 1]).rotate_left(47);
+        }
         checksum = checksum.rotate_left(9) ^ fingerprint;
     }
     Ok(black_box(checksum))
