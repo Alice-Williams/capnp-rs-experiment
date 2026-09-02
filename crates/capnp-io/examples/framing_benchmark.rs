@@ -32,7 +32,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let encoded_len =
         (views.len() / 2 + 1) * 8 + views.iter().map(|segment| segment.len()).sum::<usize>();
     let (elapsed_ns, checksum) = match mode.as_str() {
-        "parse" => {
+        "parse" | "parse-noalloc" => {
             let encoded = encode_frame(&views, limits)?;
             let mut storage = [Segment::EMPTY; 64];
             measure(|| parse_many(&encoded, limits, &mut storage, passes))?
