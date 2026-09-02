@@ -75,6 +75,13 @@ C++:
 bash benchmarks/run-native-cpp-rpc.sh benchmarks/results/<run-name>
 ```
 
+An opt-in `Instant` breakdown attributes the native request loop without
+changing ordinary benchmark timing:
+
+```console
+bash benchmarks/run-native-rpc-phase-breakdown.sh benchmarks/results/<run-name>
+```
+
 ## Exact traversal-budget microbenchmark
 
 M06 adds a single-thread comparison of complete local and atomic shared budget

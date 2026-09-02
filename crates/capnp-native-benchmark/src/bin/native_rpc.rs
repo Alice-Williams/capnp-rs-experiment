@@ -2,6 +2,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
+use std::time::{Duration, Instant};
 
 use capnp_message::{ExclusiveArena, OwnedMessage, ReaderLimits};
 use capnp_rpc::{
@@ -14,6 +15,17 @@ use capnp_schema::DynamicAnyPointer;
 
 const PING_INTERFACE_ID: u64 = 0xedeceb51a9a148d1;
 const PING_METHOD_ID: u16 = 0;
+const PROFILE_NAMES: [&str; 9] = [
+    "request_build",
+    "submit_call",
+    "client_request",
+    "server_dispatch",
+    "server_handle",
+    "server_return",
+    "client_return",
+    "result_check",
+    "server_finish",
+];
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let iterations = std::env::args()
@@ -60,16 +72,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     expect_pending(&mut server)?;
 
     let mut checksum = 0_u64;
+    let mut profile = PhaseProfile::from_environment();
     for index in 0..iterations {
+        profile.begin();
+        let params = data_message(index)?;
+        profile.mark(0);
         let mut response = client_handle.call_imported(
             import_id,
             PING_INTERFACE_ID,
             PING_METHOD_ID,
-            data_message(index)?,
+            params,
             Vec::new(),
         )?;
+        profile.mark(1);
         expect_pending(&mut client)?;
+        profile.mark(2);
         let dispatch = expect_dispatch(&mut server)?;
+        profile.mark(3);
         let IncomingRequest::Call {
             interface_id,
             method_id,
@@ -86,16 +105,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         dispatch
             .completion
             .complete(HandlerResult::Results(data_message(request_value + 1)?))?;
+        profile.mark(4);
         expect_pending(&mut server)?;
+        profile.mark(5);
         expect_pending(&mut client)?;
+        profile.mark(6);
         let results = expect_results(&mut response)?;
         checksum ^= read_value(&results.content)?;
+        profile.mark(7);
         expect_pending(&mut server)?;
+        profile.mark(8);
     }
 
     if checksum != expected_checksum(iterations) {
         return Err("ping checksum mismatch".into());
     }
+    profile.report(iterations);
     println!("{checksum}");
     Ok(())
 }
@@ -180,4 +205,47 @@ fn read_value(content: &DynamicAnyPointer) -> Result<u64, Box<dyn std::error::Er
 
 fn expected_checksum(iterations: u64) -> u64 {
     (1..=iterations).fold(0, std::ops::BitXor::bitxor)
+}
+
+struct PhaseProfile {
+    enabled: bool,
+    last: Option<Instant>,
+    totals: [Duration; PROFILE_NAMES.len()],
+}
+
+impl PhaseProfile {
+    fn from_environment() -> Self {
+        Self {
+            enabled: std::env::var_os("CAPNP_BENCH_PROFILE").is_some(),
+            last: None,
+            totals: [Duration::ZERO; PROFILE_NAMES.len()],
+        }
+    }
+
+    fn begin(&mut self) {
+        if self.enabled {
+            self.last = Some(Instant::now());
+        }
+    }
+
+    fn mark(&mut self, phase: usize) {
+        if !self.enabled {
+            return;
+        }
+        let now = Instant::now();
+        if let Some(last) = self.last.replace(now) {
+            self.totals[phase] += now.duration_since(last);
+        }
+    }
+
+    fn report(&self, iterations: u64) {
+        if !self.enabled {
+            return;
+        }
+        eprint!("profile iterations={iterations}");
+        for (name, total) in PROFILE_NAMES.iter().zip(self.totals) {
+            eprint!(" {name}_ns={}", total.as_nanos());
+        }
+        eprintln!();
+    }
 }
