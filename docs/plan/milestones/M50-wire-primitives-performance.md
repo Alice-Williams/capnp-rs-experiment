@@ -29,7 +29,7 @@ portability.
 
 ## Implementation checklist
 
-- [ ] Add matched C++ and native endian scalar read/write benchmarks.
+- [x] Add matched C++ and native endian scalar read/write benchmarks.
 - [ ] Record and verify the unmodified M49/M50 baseline.
 - [ ] Inspect optimized assembly or profiles for any material gap.
 - [ ] Optimize the narrowest owning wire primitive without adding `unsafe` or
