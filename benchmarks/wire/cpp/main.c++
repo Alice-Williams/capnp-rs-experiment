@@ -2,6 +2,7 @@
 
 #include <bit>
 #include <charconv>
+#include <chrono>
 #include <cstdint>
 #include <iostream>
 #include <string_view>
@@ -54,6 +55,7 @@ int main(int argc, char** argv) {
   }
 
   uint64_t result = SEED;
+  auto started = std::chrono::steady_clock::now();
   if (mode == "read") {
     for (size_t pass = 0; pass < passes; ++pass) {
       for (const auto& word: words) {
@@ -73,6 +75,8 @@ int main(int argc, char** argv) {
     std::cerr << "unknown benchmark mode\n";
     return 2;
   }
-  std::cout << result << '\n';
+  auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now() - started);
+  std::cout << elapsed.count() << '\t' << result << '\n';
   return 0;
 }

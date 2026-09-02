@@ -59,7 +59,7 @@ mkdir -p -- "$output"
     printf 'warmups=%s\nrecorded_runs=%s\nwords=%s\npasses=%s\n' \
         "$warmups" "$runs" "$words" "$passes"
     printf 'order=alternating C++/native first for every sample\n'
-    printf 'timer=GNU date nanosecond wall clock around one child process\n'
+    printf 'timer=steady monotonic clock inside each binary around the measured primitive loop\n'
 } > "$output/metadata.txt"
 
 printf 'implementation\tcase\twords\tpasses\trun\telapsed_ns\tchecksum\n' \
@@ -81,19 +81,19 @@ run_workload() {
     local case_name=$2
     local cpp_mode=$3
     local run=$4
-    local start
-    local finish
+    local measurement
+    local elapsed_ns
     local checksum
-    start=$(date +%s%N)
     if [[ "$implementation" == cpp ]]; then
-        checksum=$("$cpp_benchmark" "$cpp_mode" "$words" "$passes")
+        measurement=$("$cpp_benchmark" "$cpp_mode" "$words" "$passes")
     else
-        checksum=$("$native_benchmark" "$case_name" "$words" "$passes")
+        measurement=$("$native_benchmark" "$case_name" "$words" "$passes")
     fi
-    finish=$(date +%s%N)
+    IFS=$'\t' read -r elapsed_ns checksum <<< "$measurement"
+    [[ "$elapsed_ns" =~ ^[1-9][0-9]*$ ]]
     [[ "$checksum" =~ ^[0-9]+$ ]]
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$implementation" "$case_name" \
-        "$words" "$passes" "$run" "$((finish - start))" "$checksum" \
+        "$words" "$passes" "$run" "$elapsed_ns" "$checksum" \
         >> "$output/results.tsv"
 }
 

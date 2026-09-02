@@ -1,4 +1,5 @@
 use std::hint::black_box;
+use std::time::Instant;
 
 use capnp_wire::{Word, WordSlice, WordSliceMut, read_u64_le, write_u64_le};
 
@@ -24,19 +25,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut bytes = vec![0_u8; byte_len];
     fill(&mut bytes)?;
 
-    let checksum = match mode.as_str() {
-        "checked-read" => checked_read(&bytes, passes)?,
-        "word-read" => word_read(&bytes, passes)?,
-        "validated-read" => validated_read(&bytes, passes)?,
-        "word-array-read" => word_array_read(&bytes, passes)?,
-        "checked-write" => checked_write(&mut bytes, passes)?,
-        "word-write" => word_write(&mut bytes, passes)?,
-        "validated-write" => validated_write(&mut bytes, passes)?,
-        "word-array-write" => word_array_write(&bytes, passes)?,
+    let (elapsed_ns, checksum) = match mode.as_str() {
+        "checked-read" => measure(|| checked_read(&bytes, passes))?,
+        "word-read" => measure(|| word_read(&bytes, passes))?,
+        "validated-read" => measure(|| validated_read(&bytes, passes))?,
+        "word-array-read" => {
+            let words = collect_words(&bytes)?;
+            measure(|| word_array_read(&words, passes))?
+        }
+        "checked-write" => measure(|| checked_write(&mut bytes, passes))?,
+        "word-write" => measure(|| word_write(&mut bytes, passes))?,
+        "validated-write" => measure(|| validated_write(&mut bytes, passes))?,
+        "word-array-write" => {
+            let mut words = collect_words(&bytes)?;
+            measure(|| word_array_write(&mut words, passes))?
+        }
         _ => return Err("unknown benchmark mode".into()),
     };
-    println!("{checksum}");
+    println!("{elapsed_ns}\t{checksum}");
     Ok(())
+}
+
+fn measure(
+    operation: impl FnOnce() -> Result<u64, capnp_wire::WireError>,
+) -> Result<(u128, u64), capnp_wire::WireError> {
+    let started = Instant::now();
+    let checksum = operation()?;
+    Ok((started.elapsed().as_nanos(), checksum))
 }
 
 fn fill(bytes: &mut [u8]) -> Result<(), capnp_wire::WireError> {
@@ -79,11 +94,10 @@ fn validated_read(bytes: &[u8], passes: usize) -> Result<u64, capnp_wire::WireEr
     Ok(black_box(checksum))
 }
 
-fn word_array_read(bytes: &[u8], passes: usize) -> Result<u64, capnp_wire::WireError> {
-    let words = collect_words(bytes)?;
+fn word_array_read(words: &[Word], passes: usize) -> Result<u64, capnp_wire::WireError> {
     let mut checksum = SEED;
     for _ in 0..passes {
-        for word in &words {
+        for word in words {
             checksum = checksum.rotate_left(7) ^ word.get();
         }
     }
@@ -124,16 +138,15 @@ fn validated_write(bytes: &mut [u8], passes: usize) -> Result<u64, capnp_wire::W
     checksum(bytes)
 }
 
-fn word_array_write(bytes: &[u8], passes: usize) -> Result<u64, capnp_wire::WireError> {
-    let mut words = collect_words(bytes)?;
+fn word_array_write(words: &mut [Word], passes: usize) -> Result<u64, capnp_wire::WireError> {
     let mut state = SEED;
     for _ in 0..passes {
-        for word in &mut words {
+        for word in &mut *words {
             state = xorshift(state);
             word.set(state);
         }
     }
-    checksum_words(&words)
+    checksum_words(words)
 }
 
 fn collect_words(bytes: &[u8]) -> Result<Vec<Word>, capnp_wire::WireError> {
