@@ -1,6 +1,6 @@
 use std::hint::black_box;
 
-use capnp_wire::{Word, read_u64_le, write_u64_le};
+use capnp_wire::{Word, WordSlice, WordSliceMut, read_u64_le, write_u64_le};
 
 const SEED: u64 = 0x4d59_5df4_d0f3_3173;
 
@@ -27,8 +27,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let checksum = match mode.as_str() {
         "checked-read" => checked_read(&bytes, passes)?,
         "word-read" => word_read(&bytes, passes)?,
+        "validated-read" => validated_read(&bytes, passes)?,
         "checked-write" => checked_write(&mut bytes, passes)?,
         "word-write" => word_write(&mut bytes, passes)?,
+        "validated-write" => validated_write(&mut bytes, passes)?,
         _ => return Err("unknown benchmark mode".into()),
     };
     println!("{checksum}");
@@ -64,6 +66,17 @@ fn word_read(bytes: &[u8], passes: usize) -> Result<u64, capnp_wire::WireError> 
     Ok(black_box(checksum))
 }
 
+fn validated_read(bytes: &[u8], passes: usize) -> Result<u64, capnp_wire::WireError> {
+    let words = WordSlice::new(bytes)?;
+    let mut checksum = SEED;
+    for _ in 0..passes {
+        for word in words {
+            checksum = checksum.rotate_left(7) ^ word.get();
+        }
+    }
+    Ok(black_box(checksum))
+}
+
 fn checked_write(bytes: &mut [u8], passes: usize) -> Result<u64, capnp_wire::WireError> {
     let mut state = SEED;
     for _ in 0..passes {
@@ -81,6 +94,18 @@ fn word_write(bytes: &mut [u8], passes: usize) -> Result<u64, capnp_wire::WireEr
         for offset in (0..bytes.len()).step_by(8) {
             state = xorshift(state);
             Word::from_u64(state).write_to(bytes, offset)?;
+        }
+    }
+    checksum(bytes)
+}
+
+fn validated_write(bytes: &mut [u8], passes: usize) -> Result<u64, capnp_wire::WireError> {
+    let mut words = WordSliceMut::new(bytes)?;
+    let mut state = SEED;
+    for _ in 0..passes {
+        for slot in words.iter_mut() {
+            state = xorshift(state);
+            slot.set(Word::from_u64(state));
         }
     }
     checksum(bytes)

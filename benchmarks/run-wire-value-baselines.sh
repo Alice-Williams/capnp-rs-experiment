@@ -68,8 +68,10 @@ printf 'implementation\tcase\twords\tpasses\trun\telapsed_ns\tchecksum\n' \
 workloads=(
     'checked-read read'
     'word-read read'
+    'validated-read read'
     'checked-write write'
     'word-write write'
+    'validated-write write'
 )
 
 run_workload() {

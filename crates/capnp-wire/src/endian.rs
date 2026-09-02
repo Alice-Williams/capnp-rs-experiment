@@ -1,4 +1,5 @@
 use crate::{WORD_BYTES, WireError, checked_range};
+use core::slice::{ChunksExact, ChunksExactMut};
 
 /// One on-wire word stored as bytes, with no native alignment requirement.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
@@ -32,6 +33,129 @@ impl Word {
     #[inline]
     pub fn write_to(self, bytes: &mut [u8], offset: usize) -> Result<(), WireError> {
         write_array(bytes, offset, self.0)
+    }
+}
+
+/// A complete wire-word region validated once before iteration.
+#[derive(Clone, Copy, Debug)]
+pub struct WordSlice<'a> {
+    bytes: &'a [u8],
+}
+
+impl<'a> WordSlice<'a> {
+    pub fn new(bytes: &'a [u8]) -> Result<Self, WireError> {
+        validate_word_len(bytes.len())?;
+        Ok(Self { bytes })
+    }
+
+    pub const fn len(&self) -> usize {
+        self.bytes.len() / WORD_BYTES
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
+
+    pub fn iter(&self) -> WordIter<'_> {
+        WordIter(self.bytes.chunks_exact(WORD_BYTES))
+    }
+}
+
+impl<'a> IntoIterator for WordSlice<'a> {
+    type Item = Word;
+    type IntoIter = WordIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        WordIter(self.bytes.chunks_exact(WORD_BYTES))
+    }
+}
+
+pub struct WordIter<'a>(ChunksExact<'a, u8>);
+
+impl Iterator for WordIter<'_> {
+    type Item = Word;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next().map(|bytes| {
+            Word::from_le_bytes(
+                bytes
+                    .try_into()
+                    .expect("chunks_exact always returns one complete wire word"),
+            )
+        })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.0.size_hint()
+    }
+}
+
+impl ExactSizeIterator for WordIter<'_> {}
+impl core::iter::FusedIterator for WordIter<'_> {}
+
+/// A mutable complete wire-word region validated once before iteration.
+#[derive(Debug)]
+pub struct WordSliceMut<'a> {
+    bytes: &'a mut [u8],
+}
+
+impl<'a> WordSliceMut<'a> {
+    pub fn new(bytes: &'a mut [u8]) -> Result<Self, WireError> {
+        validate_word_len(bytes.len())?;
+        Ok(Self { bytes })
+    }
+
+    pub const fn len(&self) -> usize {
+        self.bytes.len() / WORD_BYTES
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
+
+    pub fn iter_mut(&mut self) -> WordIterMut<'_> {
+        WordIterMut(self.bytes.chunks_exact_mut(WORD_BYTES))
+    }
+}
+
+pub struct WordIterMut<'a>(ChunksExactMut<'a, u8>);
+
+impl<'a> Iterator for WordIterMut<'a> {
+    type Item = WordSlot<'a>;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next().map(WordSlot)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.0.size_hint()
+    }
+}
+
+impl ExactSizeIterator for WordIterMut<'_> {}
+impl core::iter::FusedIterator for WordIterMut<'_> {}
+
+pub struct WordSlot<'a>(&'a mut [u8]);
+
+impl WordSlot<'_> {
+    #[inline]
+    pub fn set(self, value: Word) {
+        self.0.copy_from_slice(&value.to_le_bytes());
+    }
+}
+
+fn validate_word_len(len: usize) -> Result<(), WireError> {
+    let remainder = len % WORD_BYTES;
+    if remainder == 0 {
+        Ok(())
+    } else {
+        Err(WireError::OutOfBounds {
+            offset: len - remainder,
+            len: WORD_BYTES,
+            available: len,
+        })
     }
 }
 
@@ -196,5 +320,30 @@ mod tests {
             write_u32_le(&mut bytes, usize::MAX, 1),
             Err(WireError::ArithmeticOverflow)
         ));
+    }
+
+    #[test]
+    fn validated_word_slices_iterate_and_write_without_losing_bytes() {
+        let mut bytes = [0_u8; 16];
+        {
+            let mut words = WordSliceMut::new(&mut bytes).expect("two complete words");
+            assert_eq!(words.len(), 2);
+            assert!(!words.is_empty());
+            for (slot, value) in words
+                .iter_mut()
+                .zip([0x0123_4567_89ab_cdef, 0xfedc_ba98_7654_3210])
+            {
+                slot.set(Word::from_u64(value));
+            }
+        }
+        let words = WordSlice::new(&bytes).expect("two complete words");
+        assert_eq!(words.len(), 2);
+        assert!(!words.is_empty());
+        let mut values = words.into_iter().map(Word::get);
+        assert_eq!(values.next(), Some(0x0123_4567_89ab_cdef));
+        assert_eq!(values.next(), Some(0xfedc_ba98_7654_3210));
+        assert_eq!(values.next(), None);
+        assert!(WordSlice::new(&bytes[..15]).is_err());
+        assert!(WordSliceMut::new(&mut bytes[..15]).is_err());
     }
 }
