@@ -29,6 +29,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let segments = fixture_segments(segment_count);
     let views: Vec<&[u8]> = segments.iter().map(Vec::as_slice).collect();
     let limits = FrameLimits::default();
+    let encoded_len =
+        (views.len() / 2 + 1) * 8 + views.iter().map(|segment| segment.len()).sum::<usize>();
     let (elapsed_ns, checksum) = match mode.as_str() {
         "parse" => {
             let encoded = encode_frame(&views, limits)?;
@@ -44,7 +46,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let encoded = encode_frame(&views, limits)?;
             measure_io(|| stream_read_many(&encoded, limits, passes))?
         }
-        "stream-write" => measure_io(|| stream_write_many(&views, limits, passes))?,
+        "stream-write" => measure_io(|| stream_write_many(&views, limits, encoded_len, passes))?,
         "stream-write-prepared" => {
             let prepared = PreparedSegments::new(&views, limits)?;
             measure_io(|| stream_write_prepared_many(&prepared, passes))?
@@ -179,11 +181,13 @@ fn stream_read_many(
 fn stream_write_many(
     segments: &[&[u8]],
     limits: FrameLimits,
+    encoded_len: usize,
     passes: usize,
 ) -> Result<u64, capnp_io::IoFrameError> {
     let mut checksum = SEED;
     for _ in 0..passes {
-        let frame = write_frame(Vec::new(), segments, limits, usize::MAX)?;
+        let output = Vec::with_capacity(encoded_len);
+        let frame = write_frame(output, segments, limits, usize::MAX)?;
         let fingerprint = (frame.len() as u64)
             ^ u64::from(frame[0]).rotate_left(7)
             ^ u64::from(frame[frame.len() - 1]).rotate_left(19);
