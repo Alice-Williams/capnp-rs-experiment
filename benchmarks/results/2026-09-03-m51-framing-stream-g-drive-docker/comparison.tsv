@@ -1,0 +1,16 @@
+case	segments	cpp_median_ns_per_frame	native_median_ns_per_frame	native_over_cpp
+encode	1	23.8453	21.4312	0.899
+encode	2	28.6495	24.0473	0.839
+encode	64	232.9965	218.3777	0.937
+encode-prepared	1	24.7813	18.4770	0.746
+encode-prepared	2	24.6093	20.8571	0.848
+encode-prepared	64	219.8618	159.8286	0.727
+parse	1	13.7907	8.2765	0.600
+parse	2	34.8719	9.9425	0.285
+parse	64	269.7205	109.5459	0.406
+stream-read	1	52.3548	78.7082	1.503
+stream-read	2	81.3164	66.5056	0.818
+stream-read	64	255.7157	125.7327	0.492
+stream-write	1	31.0597	42.4863	1.368
+stream-write	2	41.9442	46.8105	1.116
+stream-write	64	565.0863	258.6419	0.458
