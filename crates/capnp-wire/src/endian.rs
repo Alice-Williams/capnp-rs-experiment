@@ -9,18 +9,27 @@ pub struct Word([u8; WORD_BYTES]);
 impl Word {
     pub const ZERO: Self = Self([0; WORD_BYTES]);
 
+    #[inline]
     pub const fn from_le_bytes(bytes: [u8; WORD_BYTES]) -> Self {
         Self(bytes)
     }
 
+    #[inline]
     pub const fn to_le_bytes(self) -> [u8; WORD_BYTES] {
         self.0
     }
 
+    #[inline]
     pub const fn get(self) -> u64 {
         u64::from_le_bytes(self.0)
     }
 
+    #[inline]
+    pub fn set(&mut self, value: u64) {
+        self.0 = value.to_le_bytes();
+    }
+
+    #[inline]
     pub const fn from_u64(value: u64) -> Self {
         Self(value.to_le_bytes())
     }
@@ -65,6 +74,7 @@ impl<'a> IntoIterator for WordSlice<'a> {
     type Item = Word;
     type IntoIter = WordIter<'a>;
 
+    #[inline]
     fn into_iter(self) -> Self::IntoIter {
         WordIter(self.bytes.chunks_exact(WORD_BYTES))
     }
@@ -265,6 +275,14 @@ mod tests {
         assert_eq!(read_i32_le(&bytes, 11), Ok(-0x0123_4567));
         assert_eq!(read_u64_le(&bytes, 15), Ok(0x0123_4567_89ab_cdef));
         assert_eq!(read_i64_le(&bytes, 23), Ok(-0x0123_4567_89ab_cdef));
+    }
+
+    #[test]
+    fn direct_word_set_matches_little_endian_storage() {
+        let mut word = Word::ZERO;
+        word.set(0x0123_4567_89ab_cdef);
+        assert_eq!(word.get(), 0x0123_4567_89ab_cdef);
+        assert_eq!(word.to_le_bytes(), 0x0123_4567_89ab_cdef_u64.to_le_bytes());
     }
 
     #[test]

@@ -69,9 +69,11 @@ workloads=(
     'checked-read read'
     'word-read read'
     'validated-read read'
+    'word-array-read read'
     'checked-write write'
     'word-write write'
     'validated-write write'
+    'word-array-write write'
 )
 
 run_workload() {
