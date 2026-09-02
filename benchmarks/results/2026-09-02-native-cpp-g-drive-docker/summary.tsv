@@ -1,0 +1,11 @@
+implementation	case	mode	scratch	compression	iterations	runs	mean_ns_per_iteration	median_ns_per_iteration	min_ns_per_iteration	max_ns_per_iteration
+cpp	carsales	bytes	no-reuse	none	500	9	46714.49	44091.74	39148.23	63929.55
+cpp	carsales	bytes	no-reuse	packed	500	9	75976.82	75392.75	63664.31	88852.34
+cpp	carsales	object	no-reuse	none	500	9	45316.80	41683.02	37186.24	62868.04
+cpp	catrank	bytes	no-reuse	none	100	9	623858.28	566373.64	474694.98	1015798.19
+cpp	eval	bytes	no-reuse	packed	10000	9	7223.13	6049.30	5573.23	12831.47
+native	carsales	bytes	no-reuse	none	500	9	1200491.74	1154345.96	924322.84	1560292.71
+native	carsales	bytes	no-reuse	packed	500	9	1257927.26	1243367.07	1047807.15	1592726.60
+native	carsales	object	no-reuse	none	500	9	1192095.64	1147670.04	950249.24	1638308.04
+native	catrank	bytes	no-reuse	none	100	9	3355207.30	2564556.08	2258686.27	9082373.53
+native	eval	bytes	no-reuse	packed	10000	9	93143.92	84309.51	68914.17	162660.05
