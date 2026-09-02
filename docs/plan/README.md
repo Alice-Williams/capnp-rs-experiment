@@ -110,4 +110,4 @@ wire safety or protocol ordering.
 
 ### Phase 8 — Post-release performance characterization
 
-- [M49 — Native Rust versus C++ performance characterization](milestones/M49-native-rust-cpp-performance.md) — in-progress ([report](../performance/native-vs-cpp-v0.1.md))
+- [M49 — Native Rust versus C++ performance characterization](milestones/M49-native-rust-cpp-performance.md) — complete ([report](../performance/native-vs-cpp-v0.1.md))

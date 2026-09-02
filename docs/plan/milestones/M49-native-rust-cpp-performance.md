@@ -1,6 +1,6 @@
 # M49 — Native Rust versus C++ performance characterization
 
-- Status: in-progress
+- Status: complete on `perf/cpp-scenario-comparison`
 - Phase: 8
 - Depends on: M48
 
@@ -37,13 +37,18 @@ Rust is faster.
   microbenchmark, and traced generated/runtime hot paths.
 - [x] Publish a concise report covering slower, faster, and inapplicable cases.
 - [x] Add result-integrity and runner checks to Bazel/CI.
-- [ ] Run the full Cargo and Bazel validation gates.
+- [x] Run the full Cargo and Bazel validation gates.
 
 ## Required exit evidence
 
 Checked-in source and scripts reproduce every stated comparison, raw samples
 support the summary, checksums prove equivalent results, and each causal claim
 is backed by a profile or an isolated benchmark.
+
+Commit `0b29b1cf9561363469dbf77903097ed20261cdbd` passed the development and
+Rust 1.85 workspace tests, documentation and compile-fail tests, formatting,
+Clippy with warnings denied, and `bazelisk test //...` in the Linux development
+container. The benchmark result verifiers were included in the Bazel pass.
 
 ## Scope boundary
 
