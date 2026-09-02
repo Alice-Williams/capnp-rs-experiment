@@ -1,0 +1,10 @@
+phase	total_ns	ns_per_call
+request_build	19455593	194.56
+submit_call	9569162	95.69
+client_request	267976661	2679.77
+server_dispatch	253742020	2537.42
+server_handle	31055294	310.55
+server_return	227156107	2271.56
+client_return	267843891	2678.44
+result_check	12103272	121.03
+server_finish	121414895	1214.15

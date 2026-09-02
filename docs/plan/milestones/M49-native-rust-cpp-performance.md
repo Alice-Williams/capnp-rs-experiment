@@ -33,7 +33,8 @@ Rust is faster.
   schema, sequential request/reply pattern, and in-memory transport.
 - [x] Record fresh data and RPC comparison runs with raw samples and
   environment metadata.
-- [ ] Attribute material gaps using profiles or targeted component timings.
+- [x] Attribute material gaps using native phase timing, the traversal-budget
+  microbenchmark, and traced generated/runtime hot paths.
 - [ ] Publish a concise report covering slower, faster, and inapplicable cases.
 - [ ] Add result-integrity and runner checks to Bazel/CI.
 - [ ] Run the full Cargo and Bazel validation gates.
