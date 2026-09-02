@@ -1,0 +1,9 @@
+case	words	cpp_median_ns_per_operation	native_median_ns_per_operation	native_over_cpp
+checked-read	4096	0.8889	1.3355	1.502
+checked-write	4096	1.8497	2.3013	1.244
+validated-read	4096	0.8690	1.3697	1.576
+validated-write	4096	1.8356	2.3020	1.254
+word-array-read	4096	0.8962	1.3186	1.471
+word-array-write	4096	1.8284	2.3473	1.284
+word-read	4096	0.8753	1.3317	1.521
+word-write	4096	1.8764	2.2996	1.226
