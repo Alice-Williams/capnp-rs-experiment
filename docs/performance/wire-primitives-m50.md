@@ -78,3 +78,10 @@ Additional evidence:
   `benchmarks/results/2026-09-02-m50-pointer-baseline-g-drive-docker/`
 - Post-inlining pointer result:
   `benchmarks/results/2026-09-02-m50-pointer-inline-g-drive-docker/`
+
+## Validation
+
+The completed implementation passed the full development Rust workspace tests,
+doctests and compile-fail examples, formatting, Clippy with warnings denied,
+the Rust 1.85 workspace test gate, all 47 Bazel tests, and the pinned nightly
+Miri strict-alignment suite for `capnp-wire`.

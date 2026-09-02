@@ -1,6 +1,6 @@
 # M50 — Wire primitives performance
 
-- Status: in-progress
+- Status: complete
 - Phase: 9
 - Depends on: M49
 
@@ -36,7 +36,7 @@ portability.
   weakening checked bounds, unaligned access, or endian behavior.
 - [x] Add matched wire-word and pointer-bitfield cases.
 - [x] Record the final comparison and explain any residual variance.
-- [ ] Add runner/result checks to Bazel and run full Cargo/Bazel validation.
+- [x] Add runner/result checks to Bazel and run full Cargo/Bazel validation.
 
 ## Scalar checkpoint
 
