@@ -1,0 +1,9 @@
+format_version=1
+generated_utc=2026-09-02T20:58:15Z
+native_commit=cb55252c9b1ffe9a0224f3bab374ce217309fe42
+native_binary_sha256=5de80390b22b22d09c6aef390f64e6d20fd6a76c12e8d820bd9ca341ef2e9a5e
+environment=Debian Trixie dev container under Docker Desktop
+kernel=Linux 6.18.33.2-microsoft-standard-WSL2 #1 SMP PREEMPT_DYNAMIC Thu Jun 18 21:54:43 UTC 2026 x86_64 GNU/Linux
+cpu_model=Intel(R) Core(TM) i7-6700K CPU @ 4.00GHz
+rustc=rustc 1.98.0 (88d9e12ae 2026-08-18)
+method=Instant around seven native phases; wall timer around child process

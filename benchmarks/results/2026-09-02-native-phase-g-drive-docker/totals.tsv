@@ -1,0 +1,6 @@
+case	mode	compression	iterations	wall_ns	phase_ns	unattributed_ns
+carsales	object	none	2000	1548325349	1527886721	20438628
+carsales	bytes	none	2000	1472644980	1450427871	22217109
+carsales	bytes	packed	2000	1619959380	1606373764	13585616
+catrank	bytes	none	500	723541303	710264020	13277283
+eval	bytes	packed	50000	2629636361	2597240271	32396090
