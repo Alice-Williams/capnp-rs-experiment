@@ -6,6 +6,8 @@ result_dir=${1:-"$repo_root/benchmarks/results/2026-09-02-m50-wire-baseline-g-dr
 expected_cases=${2:-4}
 warmups=$(sed -n 's/^warmups=//p' "$result_dir/metadata.txt")
 recorded_runs=$(sed -n 's/^recorded_runs=//p' "$result_dir/metadata.txt")
+expected_words=$(sed -n 's/^words=//p' "$result_dir/metadata.txt")
+expected_passes=$(sed -n 's/^passes=//p' "$result_dir/metadata.txt")
 expected_results=$((1 + expected_cases * 2 * (warmups + recorded_runs)))
 expected_summary=$((1 + expected_cases * 2))
 expected_comparison=$((1 + expected_cases))
@@ -25,27 +27,29 @@ test "$(wc -l < "$result_dir/results.tsv")" -eq "$expected_results"
 test "$(wc -l < "$result_dir/summary.tsv")" -eq "$expected_summary"
 test "$(wc -l < "$result_dir/comparison.tsv")" -eq "$expected_comparison"
 
-awk -F '\t' -v expected="$expected_results" -v cases="$expected_cases" '
+awk -F '\t' -v expected="$expected_results" -v cases="$expected_cases" \
+    -v words="$expected_words" -v passes="$expected_passes" '
     NR == 1 {
         if ($0 != "implementation\tcase\twords\tpasses\trun\telapsed_ns\tchecksum") exit 1;
         next;
     }
-    NF != 7 || $3 != 4096 || $4 != 2500 || $6 <= 0 || $7 < 0 { exit 1 }
+    NF != 7 || $3 != words || $4 != passes || $6 <= 0 || $7 < 0 { exit 1 }
     $1 != "cpp" && $1 != "native" { exit 1 }
     !($2 in checksum) { checksum[$2] = $7; next }
     $7 != checksum[$2] { exit 1 }
     END { if (NR != expected || length(checksum) != cases) exit 1 }
 ' "$result_dir/results.tsv"
 
-awk -F '\t' -v expected="$expected_summary" '
+awk -F '\t' -v expected="$expected_summary" -v words="$expected_words" \
+    -v passes="$expected_passes" -v runs="$recorded_runs" '
     NR == 1 { next }
-    NF != 9 || $3 != 4096 || $4 != 2500 || $5 != 9 || $6 <= 0 || $7 <= 0 || $8 <= 0 || $9 <= 0 { exit 1 }
+    NF != 9 || $3 != words || $4 != passes || $5 != runs || $6 <= 0 || $7 <= 0 || $8 <= 0 || $9 <= 0 { exit 1 }
     END { if (NR != expected) exit 1 }
 ' "$result_dir/summary.tsv"
 
-awk -F '\t' -v expected="$expected_comparison" '
+awk -F '\t' -v expected="$expected_comparison" -v words="$expected_words" '
     NR == 1 { next }
-    NF != 5 || $2 != 4096 || $3 <= 0 || $4 <= 0 || $5 <= 0 { exit 1 }
+    NF != 5 || $2 != words || $3 <= 0 || $4 <= 0 || $5 <= 0 { exit 1 }
     END { if (NR != expected) exit 1 }
 ' "$result_dir/comparison.tsv"
 

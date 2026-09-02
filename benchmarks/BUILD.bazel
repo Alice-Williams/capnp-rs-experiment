@@ -52,6 +52,26 @@ sh_test(
 )
 
 sh_test(
+    name = "wire_value_internal_timing_results_test",
+    srcs = ["verify-wire-value-results.sh"],
+    args = [
+        "benchmarks/results/2026-09-02-m50-wire-internal-timing-g-drive-docker",
+        "8",
+    ],
+    data = glob(["results/2026-09-02-m50-wire-internal-timing-g-drive-docker/**"]),
+)
+
+sh_test(
+    name = "wire_value_stable_timing_results_test",
+    srcs = ["verify-wire-value-results.sh"],
+    args = [
+        "benchmarks/results/2026-09-02-m50-wire-stable-timing-g-drive-docker",
+        "8",
+    ],
+    data = glob(["results/2026-09-02-m50-wire-stable-timing-g-drive-docker/**"]),
+)
+
+sh_test(
     name = "rpc_runner_syntax_test",
     srcs = ["run-rpc-oracle-baselines.sh"],
     args = ["--syntax-check-only"],
