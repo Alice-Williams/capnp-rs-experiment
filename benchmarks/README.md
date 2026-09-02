@@ -35,6 +35,19 @@ modified.
 Results are baselines, not universal performance claims. Compare revisions on
 the same hardware and container setup.
 
+## Lowest-layer wire values
+
+M50 compares checked native scalar access and native `Word` access with the
+pinned C++ implementation's actual `capnp::_::WireValue<uint64_t>` type:
+
+```console
+bash benchmarks/run-wire-value-baselines.sh benchmarks/results/<run-name>
+```
+
+Inputs, operation order, and checksums are identical. This deliberately keeps
+Rust's checked slice boundary visible while measuring C++'s unchecked internal
+wire value separately.
+
 ## Native workspace versus C++
 
 M49 ports the same carsales, catrank, and expression-evaluation workload logic

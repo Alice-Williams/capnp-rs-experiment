@@ -1,0 +1,17 @@
+implementation	case	words	passes	runs	mean_ns_per_operation	median_ns_per_operation	min_ns_per_operation	max_ns_per_operation
+cpp	checked-read	4096	10000	9	0.5224	0.5154	0.5003	0.5956
+cpp	checked-write	4096	10000	9	1.5111	1.4966	1.4707	1.6515
+cpp	validated-read	4096	10000	9	0.5160	0.5069	0.4959	0.5734
+cpp	validated-write	4096	10000	9	1.5022	1.5090	1.4736	1.5277
+cpp	word-array-read	4096	10000	9	0.5086	0.4994	0.4949	0.5386
+cpp	word-array-write	4096	10000	9	1.5181	1.4972	1.4712	1.5884
+cpp	word-read	4096	10000	9	0.5152	0.5126	0.5004	0.5352
+cpp	word-write	4096	10000	9	1.5040	1.4877	1.4626	1.6530
+native	checked-read	4096	10000	9	0.5277	0.5210	0.4993	0.5700
+native	checked-write	4096	10000	9	1.5191	1.4966	1.4707	1.5990
+native	validated-read	4096	10000	9	0.5066	0.5014	0.4926	0.5305
+native	validated-write	4096	10000	9	1.5174	1.5124	1.4744	1.6024
+native	word-array-read	4096	10000	9	0.5059	0.4974	0.4957	0.5315
+native	word-array-write	4096	10000	9	1.5009	1.5114	1.4648	1.5453
+native	word-read	4096	10000	9	0.5280	0.5265	0.5007	0.5547
+native	word-write	4096	10000	9	1.5026	1.4843	1.4691	1.5815

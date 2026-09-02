@@ -16,6 +16,7 @@ pub enum PointerKind {
 }
 
 impl PointerKind {
+    #[inline]
     const fn from_bits(bits: u32) -> Self {
         match bits & 3 {
             0 => Self::Struct,
@@ -52,6 +53,7 @@ impl ElementSize {
         Self::InlineComposite,
     ];
 
+    #[inline]
     const fn from_bits(bits: u32) -> Self {
         match bits & 7 {
             0 => Self::Void,
@@ -107,59 +109,73 @@ pub struct WirePointer(Word);
 impl WirePointer {
     pub const NULL: Self = Self(Word::ZERO);
 
+    #[inline]
     pub const fn from_le_bytes(bytes: [u8; 8]) -> Self {
         Self(Word::from_le_bytes(bytes))
     }
 
+    #[inline]
     pub const fn to_le_bytes(self) -> [u8; 8] {
         self.0.to_le_bytes()
     }
 
+    #[inline]
     pub const fn from_word(word: Word) -> Self {
         Self(word)
     }
 
+    #[inline]
     pub const fn into_word(self) -> Word {
         self.0
     }
 
+    #[inline]
     pub fn read_from(bytes: &[u8], offset: usize) -> Result<Self, WireError> {
         Ok(Self(Word::read_from(bytes, offset)?))
     }
 
+    #[inline]
     pub fn write_to(self, bytes: &mut [u8], offset: usize) -> Result<(), WireError> {
         self.0.write_to(bytes, offset)
     }
 
+    #[inline]
     pub const fn raw(self) -> u64 {
         self.0.get()
     }
 
+    #[inline]
     pub const fn lower32(self) -> u32 {
         self.raw() as u32
     }
 
+    #[inline]
     pub const fn upper32(self) -> u32 {
         (self.raw() >> 32) as u32
     }
 
+    #[inline]
     pub const fn kind(self) -> PointerKind {
         PointerKind::from_bits(self.lower32())
     }
 
+    #[inline]
     pub const fn is_null(self) -> bool {
         self.raw() == 0
     }
 
+    #[inline]
     pub const fn is_positional(self) -> bool {
         matches!(self.kind(), PointerKind::Struct | PointerKind::List)
     }
 
     /// An `OTHER` pointer is a capability only when all its upper offset bits are zero.
+    #[inline]
     pub const fn is_capability(self) -> bool {
         self.lower32() == PointerKind::Other as u32
     }
 
+    #[inline]
     pub const fn positional_offset(self) -> Option<i32> {
         if self.is_positional() {
             Some((self.lower32() as i32) >> 2)
@@ -168,6 +184,7 @@ impl WirePointer {
         }
     }
 
+    #[inline]
     pub const fn struct_fields(self) -> Option<StructPointerFields> {
         if matches!(self.kind(), PointerKind::Struct) {
             Some(StructPointerFields {
@@ -180,6 +197,7 @@ impl WirePointer {
         }
     }
 
+    #[inline]
     pub const fn inline_composite_tag_fields(self) -> Option<InlineCompositeTagFields> {
         if matches!(self.kind(), PointerKind::Struct) {
             Some(InlineCompositeTagFields {
@@ -192,6 +210,7 @@ impl WirePointer {
         }
     }
 
+    #[inline]
     pub const fn list_fields(self) -> Option<ListPointerFields> {
         if matches!(self.kind(), PointerKind::List) {
             Some(ListPointerFields {
@@ -204,6 +223,7 @@ impl WirePointer {
         }
     }
 
+    #[inline]
     pub const fn far_fields(self) -> Option<FarPointerFields> {
         if matches!(self.kind(), PointerKind::Far) {
             Some(FarPointerFields {
@@ -216,6 +236,7 @@ impl WirePointer {
         }
     }
 
+    #[inline]
     pub const fn capability_index(self) -> Option<u32> {
         if self.is_capability() {
             Some(self.upper32())
@@ -224,6 +245,7 @@ impl WirePointer {
         }
     }
 
+    #[inline]
     pub fn new_struct(offset: i32, data_words: u16, pointer_count: u16) -> Result<Self, WireError> {
         let lower = positional_lower(PointerKind::Struct, offset)?;
         let upper = u32::from(data_words) | (u32::from(pointer_count) << 16);
@@ -231,11 +253,13 @@ impl WirePointer {
     }
 
     /// Encodes the non-null representation used for an empty struct.
+    #[inline]
     pub fn empty_struct() -> Self {
         Self::new_struct(-1, 0, 0).expect("-1 is a valid signed 30-bit offset")
     }
 
     /// Encodes a list pointer. For `InlineComposite`, `count` is the content word count.
+    #[inline]
     pub fn new_list(offset: i32, element_size: ElementSize, count: u32) -> Result<Self, WireError> {
         require_unsigned("list count", count, UNSIGNED_29_MAX)?;
         let lower = positional_lower(PointerKind::List, offset)?;
@@ -243,6 +267,7 @@ impl WirePointer {
         Ok(Self::from_parts(lower, upper))
     }
 
+    #[inline]
     pub fn new_inline_composite_tag(
         element_count: u32,
         data_words: u16,
@@ -258,6 +283,7 @@ impl WirePointer {
         Ok(Self::from_parts(lower, upper))
     }
 
+    #[inline]
     pub fn new_far(
         double_far: bool,
         landing_pad_word: u32,
@@ -269,15 +295,18 @@ impl WirePointer {
         Ok(Self::from_parts(lower, segment_id))
     }
 
+    #[inline]
     pub const fn new_capability(index: u32) -> Self {
         Self::from_parts(PointerKind::Other as u32, index)
     }
 
+    #[inline]
     const fn from_parts(lower: u32, upper: u32) -> Self {
         Self(Word::from_u64((lower as u64) | ((upper as u64) << 32)))
     }
 }
 
+#[inline]
 fn positional_lower(kind: PointerKind, offset: i32) -> Result<u32, WireError> {
     if !(SIGNED_30_MIN..=SIGNED_30_MAX).contains(&offset) {
         return Err(WireError::ValueOutOfRange {
@@ -290,6 +319,7 @@ fn positional_lower(kind: PointerKind, offset: i32) -> Result<u32, WireError> {
     Ok(((offset as u32) << 2) | kind as u32)
 }
 
+#[inline]
 fn require_unsigned(field: &'static str, value: u32, max: u32) -> Result<(), WireError> {
     if value > max {
         Err(WireError::ValueOutOfRange {
