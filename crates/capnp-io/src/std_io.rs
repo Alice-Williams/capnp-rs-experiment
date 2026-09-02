@@ -103,6 +103,19 @@ pub fn read_frame<R: Read>(
     let table_len = (count_usize / 2 + 1)
         .checked_mul(8)
         .ok_or(FrameError::BodyLengthOverflow)?;
+    if table_len == 8 {
+        let mut table = [0_u8; 8];
+        table[..4].copy_from_slice(&header);
+        let table_read = read_until_full(reader, &mut table[4..])?;
+        if table_read != 4 {
+            return Err(FrameError::TruncatedSegmentTable {
+                expected: 8,
+                available: table_read + 4,
+            }
+            .into());
+        }
+        return finish_read_frame(reader, &table, count_usize, limits).map(Some);
+    }
     const STACK_TABLE_SEGMENTS: usize = 64;
     const STACK_TABLE_LEN: usize = (STACK_TABLE_SEGMENTS / 2 + 1) * 8;
     let mut stack_table = [0_u8; STACK_TABLE_LEN];
@@ -127,8 +140,17 @@ pub fn read_frame<R: Read>(
         .into());
     }
 
+    finish_read_frame(reader, table, count_usize, limits).map(Some)
+}
+
+fn finish_read_frame<R: Read>(
+    reader: &mut R,
+    table: &[u8],
+    count: usize,
+    limits: FrameLimits,
+) -> Result<Vec<u8>, IoFrameError> {
     let mut total_words = 0_u64;
-    for index in 0..count_usize {
+    for index in 0..count {
         let offset = 4 * (index + 1);
         let words = read_u32_le(table, offset).expect("complete table");
         total_words = total_words
@@ -148,7 +170,8 @@ pub fn read_frame<R: Read>(
             .ok_or(FrameError::BodyLengthOverflow)?,
     )
     .map_err(|_| FrameError::BodyLengthOverflow)?;
-    let encoded_len = table_len
+    let encoded_len = table
+        .len()
         .checked_add(body_len)
         .ok_or(FrameError::BodyLengthOverflow)?;
     let mut frame = Vec::new();
@@ -157,7 +180,7 @@ pub fn read_frame<R: Read>(
         .map_err(|_| io::Error::other("frame allocation failed"))?;
     frame.extend_from_slice(table);
     frame.resize(encoded_len, 0);
-    let body_read = read_until_full(reader, &mut frame[table_len..])?;
+    let body_read = read_until_full(reader, &mut frame[table.len()..])?;
     if body_read != body_len {
         return Err(FrameError::TruncatedBody {
             expected: body_len,
@@ -165,7 +188,7 @@ pub fn read_frame<R: Read>(
         }
         .into());
     }
-    Ok(Some(frame))
+    Ok(frame)
 }
 
 fn read_until_full<R: Read>(reader: &mut R, mut output: &mut [u8]) -> io::Result<usize> {
