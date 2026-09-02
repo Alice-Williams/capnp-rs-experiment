@@ -48,6 +48,18 @@ Inputs, operation order, and checksums are identical. This deliberately keeps
 Rust's checked slice boundary visible while measuring C++'s unchecked internal
 wire value separately.
 
+## Standard framing
+
+M51 compares one-, two-, and 64-segment parse and encode operations using the
+actual pinned C++ `FlatArrayMessageReader` and `messageToFlatArray` APIs:
+
+```console
+bash benchmarks/run-framing-baselines.sh benchmarks/results/<run-name>
+```
+
+Fixture construction and process launch are outside the timed region. Every
+shape uses identical deterministic segment contents and semantic checksums.
+
 ## Native workspace versus C++
 
 M49 ports the same carsales, catrank, and expression-evaluation workload logic
