@@ -33,7 +33,7 @@ if [[ ! -f "$cpp_source/c++/src/capnp/endian.h" ]]; then
 fi
 cpp_build="$oracle_root/capnproto-$cpp_commit/wire-value-benchmark"
 mkdir -p -- "$cpp_build"
-clang++ -O3 -DNDEBUG -std=c++20 -I "$cpp_source/c++/src" \
+clang++ -O3 -DNDEBUG -std=c++23 -I "$cpp_source/c++/src" \
     "$repo_root/benchmarks/wire/cpp/main.c++" -o "$cpp_build/cpp-wire-value-benchmark"
 cargo build --locked --manifest-path "$repo_root/Cargo.toml" \
     --package capnp-wire --example wire_value_benchmark --release >/dev/null
