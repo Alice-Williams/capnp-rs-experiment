@@ -1,7 +1,9 @@
 use std::hint::black_box;
 use std::time::Instant;
 
-use capnp_wire::{Word, WordSlice, WordSliceMut, read_u64_le, write_u64_le};
+use capnp_wire::{
+    ElementSize, PointerKind, WirePointer, Word, WordSlice, WordSliceMut, read_u64_le, write_u64_le,
+};
 
 const SEED: u64 = 0x4d59_5df4_d0f3_3173;
 
@@ -39,6 +41,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "word-array-write" => {
             let mut words = collect_words(&bytes)?;
             measure(|| word_array_write(&mut words, passes))?
+        }
+        "pointer-decode" => {
+            let pointers = pointer_inputs(words);
+            measure(|| pointer_decode(&pointers, passes))?
+        }
+        "pointer-encode" => {
+            let mut pointers = vec![WirePointer::NULL; words];
+            measure(|| pointer_encode(&mut pointers, passes))?
         }
         _ => return Err("unknown benchmark mode".into()),
     };
@@ -157,6 +167,87 @@ fn checksum_words(words: &[Word]) -> Result<u64, capnp_wire::WireError> {
     let mut checksum = SEED;
     for word in words {
         checksum = checksum.rotate_left(7) ^ word.get();
+    }
+    Ok(black_box(checksum))
+}
+
+fn pointer_inputs(count: usize) -> Vec<WirePointer> {
+    let mut state = SEED ^ u64::try_from(count.saturating_mul(8)).unwrap_or(u64::MAX);
+    (0..count)
+        .map(|_| {
+            state = xorshift(state);
+            WirePointer::from_word(Word::from_u64(state))
+        })
+        .collect()
+}
+
+fn pointer_decode(pointers: &[WirePointer], passes: usize) -> Result<u64, capnp_wire::WireError> {
+    let mut checksum = SEED;
+    for _ in 0..passes {
+        for pointer in pointers {
+            let fingerprint = match pointer.kind() {
+                PointerKind::Struct => {
+                    let fields = pointer.struct_fields().expect("kind was checked");
+                    u64::from(fields.offset as u32)
+                        ^ u64::from(fields.data_words).rotate_left(17)
+                        ^ u64::from(fields.pointer_count).rotate_left(41)
+                }
+                PointerKind::List => {
+                    let fields = pointer.list_fields().expect("kind was checked");
+                    u64::from(fields.offset as u32)
+                        ^ (fields.element_size as u64).rotate_left(13)
+                        ^ u64::from(fields.count).rotate_left(29)
+                }
+                PointerKind::Far => {
+                    let fields = pointer.far_fields().expect("kind was checked");
+                    u64::from(fields.landing_pad_word)
+                        ^ u64::from(fields.double_far).rotate_left(17)
+                        ^ u64::from(fields.segment_id).rotate_left(31)
+                }
+                PointerKind::Other => pointer.capability_index().map_or_else(
+                    || u64::from(pointer.lower32()),
+                    |index| u64::from(index).rotate_left(23),
+                ),
+            };
+            checksum = checksum.rotate_left(7) ^ fingerprint;
+        }
+    }
+    Ok(black_box(checksum))
+}
+
+fn pointer_encode(
+    pointers: &mut [WirePointer],
+    passes: usize,
+) -> Result<u64, capnp_wire::WireError> {
+    let mut state = SEED;
+    for _ in 0..passes {
+        for (index, pointer) in pointers.iter_mut().enumerate() {
+            state = xorshift(state);
+            let lower = state as u32;
+            let upper = (state >> 32) as u32;
+            *pointer = match index & 3 {
+                0 => WirePointer::new_struct(
+                    (lower as i32) >> 2,
+                    upper as u16,
+                    (upper >> 16) as u16,
+                )?,
+                1 => WirePointer::new_list(
+                    (lower as i32) >> 2,
+                    ElementSize::ALL[(upper & 7) as usize],
+                    upper >> 3,
+                )?,
+                2 => WirePointer::new_far((lower & 4) != 0, lower >> 3, upper)?,
+                _ => WirePointer::new_capability(upper),
+            };
+        }
+    }
+    checksum_pointers(pointers)
+}
+
+fn checksum_pointers(pointers: &[WirePointer]) -> Result<u64, capnp_wire::WireError> {
+    let mut checksum = SEED;
+    for pointer in pointers {
+        checksum = checksum.rotate_left(7) ^ pointer.raw();
     }
     Ok(black_box(checksum))
 }

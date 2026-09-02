@@ -14,7 +14,7 @@ expected_comparison=$((1 + expected_cases))
 
 grep -Fx 'cpp_oracle_commit=e7c9cd96f1505b5ae486db7821006c2f5dce5b5b' \
     "$result_dir/metadata.txt"
-grep -Fx 'cpp_primitive=capnp::_::WireValue<uint64_t> from capnp/endian.h' \
+grep -Eq '^cpp_primitive=capnp::_::WireValue<uint64_t> (from capnp/endian.h|plus source-derived private WirePointer field shim)$' \
     "$result_dir/metadata.txt"
 grep -Fx 'recorded_runs=9' "$result_dir/metadata.txt"
 native_commit=$(sed -n 's/^native_commit=//p' "$result_dir/metadata.txt")

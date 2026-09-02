@@ -52,7 +52,7 @@ mkdir -p -- "$output"
     printf 'rustc=%s\n' "$(rustc --version)"
     printf 'clang=%s\n' "$(clang++ --version | head -n1)"
     printf 'cpp_oracle_commit=%s\n' "$cpp_commit"
-    printf 'cpp_primitive=capnp::_::WireValue<uint64_t> from capnp/endian.h\n'
+    printf 'cpp_primitive=capnp::_::WireValue<uint64_t> plus source-derived private WirePointer field shim\n'
     printf 'native_commit=%s\n' "$native_commit"
     printf 'cpp_binary_sha256=%s\n' "$(sha256sum "$cpp_benchmark" | cut -d ' ' -f1)"
     printf 'native_binary_sha256=%s\n' "$(sha256sum "$native_benchmark" | cut -d ' ' -f1)"
@@ -74,6 +74,8 @@ workloads=(
     'word-write write'
     'validated-write write'
     'word-array-write write'
+    'pointer-decode pointer-decode'
+    'pointer-encode pointer-encode'
 )
 
 run_workload() {
