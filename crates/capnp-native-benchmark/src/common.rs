@@ -2,6 +2,7 @@ use std::error::Error;
 use std::fmt;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use capnp_io::{FrameLimits, FrameRead, encode_frame, pack, parse_frame, unpack};
 use capnp_message::{ExclusiveArena, OwnedMessage, ReaderLimits};
@@ -86,6 +87,9 @@ pub fn run<C: Case>(
     compression: Compression,
     iterations: u64,
 ) -> BenchResult<u64> {
+    if std::env::var_os("CAPNP_BENCH_PROFILE").is_some() {
+        return run_profiled::<C>(schema, mode, compression, iterations);
+    }
     if mode == Mode::Object && compression != Compression::None {
         return Err(ArgumentError("object mode requires compression=none").into());
     }
@@ -121,6 +125,101 @@ pub fn run<C: Case>(
         }
     }
     Ok(throughput)
+}
+
+#[derive(Default)]
+struct PhaseTimes {
+    build_request: Duration,
+    encode_request: Duration,
+    decode_request: Duration,
+    handle_request: Duration,
+    encode_response: Duration,
+    decode_response: Duration,
+    check_response: Duration,
+}
+
+fn run_profiled<C: Case>(
+    schema: &Arc<CompiledSchema>,
+    mode: Mode,
+    compression: Compression,
+    iterations: u64,
+) -> BenchResult<u64> {
+    if iterations == 0 {
+        return Err(ArgumentError("profiled runs require at least one iteration").into());
+    }
+    if mode == Mode::Object && compression != Compression::None {
+        return Err(ArgumentError("object mode requires compression=none").into());
+    }
+    let mut random = FastRand::default();
+    let mut throughput = 0_u64;
+    let mut phases = PhaseTimes::default();
+    for _ in 0..iterations {
+        let mut request_arena = new_arena()?;
+        let started = Instant::now();
+        let expected = C::build_request(schema, &mut request_arena, &mut random)?;
+        phases.build_request += started.elapsed();
+        let request = match mode {
+            Mode::Object => owned(request_arena)?,
+            Mode::Bytes => {
+                let started = Instant::now();
+                let bytes = encode(&request_arena, compression)?;
+                phases.encode_request += started.elapsed();
+                throughput = throughput
+                    .checked_add(u64::try_from(bytes.len())?)
+                    .ok_or(ArgumentError("throughput overflow"))?;
+                let started = Instant::now();
+                let message = decode(&bytes, compression)?;
+                phases.decode_request += started.elapsed();
+                message
+            }
+        };
+
+        let started = Instant::now();
+        let response_arena = C::handle_request(schema, request)?;
+        phases.handle_request += started.elapsed();
+        let response = match mode {
+            Mode::Object => owned(response_arena)?,
+            Mode::Bytes => {
+                let started = Instant::now();
+                let bytes = encode(&response_arena, compression)?;
+                phases.encode_response += started.elapsed();
+                throughput = throughput
+                    .checked_add(u64::try_from(bytes.len())?)
+                    .ok_or(ArgumentError("throughput overflow"))?;
+                let started = Instant::now();
+                let message = decode(&bytes, compression)?;
+                phases.decode_response += started.elapsed();
+                message
+            }
+        };
+        let started = Instant::now();
+        let matches = C::check_response(schema, response, expected)?;
+        phases.check_response += started.elapsed();
+        if !matches {
+            return Err(ArgumentError("response did not match the request expectation").into());
+        }
+    }
+    print_phases(&phases, iterations);
+    Ok(throughput)
+}
+
+fn print_phases(phases: &PhaseTimes, iterations: u64) {
+    eprintln!("phase\ttotal_ns\tns_per_iteration");
+    for (name, elapsed) in [
+        ("build_request", phases.build_request),
+        ("encode_request", phases.encode_request),
+        ("decode_request", phases.decode_request),
+        ("handle_request", phases.handle_request),
+        ("encode_response", phases.encode_response),
+        ("decode_response", phases.decode_response),
+        ("check_response", phases.check_response),
+    ] {
+        eprintln!(
+            "{name}\t{}\t{}",
+            elapsed.as_nanos(),
+            elapsed.as_nanos() / u128::from(iterations)
+        );
+    }
 }
 
 pub fn new_arena() -> BenchResult<ExclusiveArena> {

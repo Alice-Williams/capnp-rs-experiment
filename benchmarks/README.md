@@ -53,6 +53,17 @@ same deterministic RNG-derived expectation. Serialized byte counts can differ
 because the allocators choose different segment layouts, so they are recorded
 as context rather than treated as a cross-implementation checksum.
 
+Set `CAPNP_BENCH_PROFILE=1` on the native executable to collect aggregate
+`Instant` timings for request construction, request encode/decode, request
+handling, response encode/decode, and response checking. The reproducible phase
+runner adds a child-process wall timer so arena construction, owned-message
+conversion, schema loading, and loop overhead remain visible as unattributed
+time:
+
+```console
+bash benchmarks/run-native-phase-breakdown.sh benchmarks/results/<run-name>
+```
+
 ## Exact traversal-budget microbenchmark
 
 M06 adds a single-thread comparison of complete local and atomic shared budget
