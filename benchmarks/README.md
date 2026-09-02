@@ -35,6 +35,24 @@ modified.
 Results are baselines, not universal performance claims. Compare revisions on
 the same hardware and container setup.
 
+## Native workspace versus C++
+
+M49 ports the same carsales, catrank, and expression-evaluation workload logic
+to this native workspace. It deliberately uses `no-reuse` for both binaries
+because `ExclusiveArena` does not yet expose a reset/reuse operation:
+
+```console
+bash benchmarks/run-native-cpp-baselines.sh benchmarks/results/<run-name>
+```
+
+The runner alternates which implementation executes first, retains raw samples,
+and reports the median native/C++ ratio. The schemas keep the pinned C++ file
+IDs and wire layout; only the C++ namespace annotation is omitted from the
+native compiler inputs. Each executable validates its response against the
+same deterministic RNG-derived expectation. Serialized byte counts can differ
+because the allocators choose different segment layouts, so they are recorded
+as context rather than treated as a cross-implementation checksum.
+
 ## Exact traversal-budget microbenchmark
 
 M06 adds a single-thread comparison of complete local and atomic shared budget

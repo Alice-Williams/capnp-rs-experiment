@@ -1,0 +1,23 @@
+[package]
+name = "capnp-native-benchmark"
+description = "Native Rust side of the pinned C++ product benchmark scenarios"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+capnp-io = { path = "../capnp-io" }
+capnp-message = { path = "../capnp-message" }
+capnp-rpc = { path = "../capnp-rpc" }
+capnp-schema = { path = "../capnp-schema" }
+
+[build-dependencies]
+capnp-codegen = { path = "../capnp-codegen" }
+capnp-compiler = { path = "../capnp-compiler" }
+capnp-schema = { path = "../capnp-schema" }

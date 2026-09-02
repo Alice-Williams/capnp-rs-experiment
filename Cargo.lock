@@ -154,6 +154,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "capnp-native-benchmark"
+version = "0.1.0"
+dependencies = [
+ "capnp-codegen",
+ "capnp-compiler",
+ "capnp-io",
+ "capnp-message",
+ "capnp-rpc",
+ "capnp-schema",
+]
+
+[[package]]
 name = "capnp-rpc"
 version = "0.1.0"
 dependencies = [
