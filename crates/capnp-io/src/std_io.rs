@@ -102,13 +102,22 @@ pub fn read_frame<R: Read>(
     let table_len = (count_usize / 2 + 1)
         .checked_mul(8)
         .ok_or(FrameError::BodyLengthOverflow)?;
-    let mut frame = Vec::new();
-    frame
-        .try_reserve_exact(table_len)
-        .map_err(|_| io::Error::other("frame table allocation failed"))?;
-    frame.extend_from_slice(&header);
-    frame.resize(table_len, 0);
-    let table_read = read_until_full(reader, &mut frame[4..table_len])?;
+    const STACK_TABLE_SEGMENTS: usize = 64;
+    const STACK_TABLE_LEN: usize = (STACK_TABLE_SEGMENTS / 2 + 1) * 8;
+    let mut stack_table = [0_u8; STACK_TABLE_LEN];
+    let mut heap_table = Vec::new();
+    let table = if table_len <= STACK_TABLE_LEN {
+        stack_table[..4].copy_from_slice(&header);
+        &mut stack_table[..table_len]
+    } else {
+        heap_table
+            .try_reserve_exact(table_len)
+            .map_err(|_| io::Error::other("frame table allocation failed"))?;
+        heap_table.extend_from_slice(&header);
+        heap_table.resize(table_len, 0);
+        heap_table.as_mut_slice()
+    };
+    let table_read = read_until_full(reader, &mut table[4..])?;
     if table_read != table_len - 4 {
         return Err(FrameError::TruncatedSegmentTable {
             expected: table_len,
@@ -120,7 +129,7 @@ pub fn read_frame<R: Read>(
     let mut total_words = 0_u64;
     for index in 0..count_usize {
         let offset = 4 * (index + 1);
-        let words = read_u32_le(&frame, offset).expect("complete table");
+        let words = read_u32_le(table, offset).expect("complete table");
         total_words = total_words
             .checked_add(u64::from(words))
             .ok_or(FrameError::TotalWordsOverflow)?;
@@ -141,9 +150,11 @@ pub fn read_frame<R: Read>(
     let encoded_len = table_len
         .checked_add(body_len)
         .ok_or(FrameError::BodyLengthOverflow)?;
+    let mut frame = Vec::new();
     frame
-        .try_reserve_exact(body_len)
-        .map_err(|_| io::Error::other("frame body allocation failed"))?;
+        .try_reserve_exact(encoded_len)
+        .map_err(|_| io::Error::other("frame allocation failed"))?;
+    frame.extend_from_slice(table);
     frame.resize(encoded_len, 0);
     let body_read = read_until_full(reader, &mut frame[table_len..])?;
     if body_read != body_len {
