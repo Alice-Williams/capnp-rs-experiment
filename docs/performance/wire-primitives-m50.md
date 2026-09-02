@@ -49,4 +49,32 @@ closest representation-level match and is slightly faster on reads and within
 - Pre-optimization baseline and intermediate data remain under
   `benchmarks/results/2026-09-02-m50-wire-*-g-drive-docker/`.
 
-M50 remains open for matched pointer-bitfield decode and encode cases.
+## Pointer-bitfield checkpoint
+
+Because C++ `WirePointer` is private to `layout.c++`, the C++ benchmark uses an
+explicitly labeled, source-derived 8-byte shim. It retains the pinned type's
+`WireValue<uint32_t>` storage and exact release-mode field formulas. Both sides
+decode a deterministic mix of struct, list, far, capability, and reserved
+pointer words, and encode an even mix of the four pointer kinds.
+
+| Case | C++ ns/op | Rust ns/op | Rust / C++ |
+| --- | ---: | ---: | ---: |
+| mixed pointer decode | 7.3896 | 7.1830 | 0.972 |
+| mixed checked pointer encode | 2.4745 | 2.4892 | 1.006 |
+
+The unmodified pointer baseline was 1.054x C++ on decode and 1.298x on encode.
+Explicit cross-crate inlining on pointer accessors, field decoders,
+constructors, and their narrow validation helpers removed constructor calls
+from the optimized hot loop while preserving checked public constructors.
+
+Scalar cases are accepted from the dedicated stable scalar run above. Repeated
+scalar cases in the longer mixed pointer run ranged from 0.964x to 1.080x on
+this shared WSL2 host, while the pointer cases themselves both met the parity
+bound. Both raw datasets are retained so this host variance stays visible.
+
+Additional evidence:
+
+- Pointer baseline:
+  `benchmarks/results/2026-09-02-m50-pointer-baseline-g-drive-docker/`
+- Post-inlining pointer result:
+  `benchmarks/results/2026-09-02-m50-pointer-inline-g-drive-docker/`
