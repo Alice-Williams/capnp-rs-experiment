@@ -24,15 +24,18 @@ impl Word {
         Self(value.to_le_bytes())
     }
 
+    #[inline]
     pub fn read_from(bytes: &[u8], offset: usize) -> Result<Self, WireError> {
         Ok(Self(read_array(bytes, offset)?))
     }
 
+    #[inline]
     pub fn write_to(self, bytes: &mut [u8], offset: usize) -> Result<(), WireError> {
         write_array(bytes, offset, self.0)
     }
 }
 
+#[inline]
 fn read_array<const N: usize>(bytes: &[u8], offset: usize) -> Result<[u8; N], WireError> {
     let range = checked_range(offset, N, bytes.len())?;
     let mut value = [0; N];
@@ -40,6 +43,7 @@ fn read_array<const N: usize>(bytes: &[u8], offset: usize) -> Result<[u8; N], Wi
     Ok(value)
 }
 
+#[inline]
 fn write_array<const N: usize>(
     bytes: &mut [u8],
     offset: usize,
@@ -52,10 +56,12 @@ fn write_array<const N: usize>(
 
 macro_rules! integer_accessors {
     ($read:ident, $write:ident, $ty:ty, $size:expr) => {
+        #[inline]
         pub fn $read(bytes: &[u8], offset: usize) -> Result<$ty, WireError> {
             Ok(<$ty>::from_le_bytes(read_array::<$size>(bytes, offset)?))
         }
 
+        #[inline]
         pub fn $write(bytes: &mut [u8], offset: usize, value: $ty) -> Result<(), WireError> {
             write_array(bytes, offset, value.to_le_bytes())
         }
@@ -69,34 +75,42 @@ integer_accessors!(read_i16_le, write_i16_le, i16, 2);
 integer_accessors!(read_i32_le, write_i32_le, i32, 4);
 integer_accessors!(read_i64_le, write_i64_le, i64, 8);
 
+#[inline]
 pub fn read_u8(bytes: &[u8], offset: usize) -> Result<u8, WireError> {
     Ok(read_array::<1>(bytes, offset)?[0])
 }
 
+#[inline]
 pub fn write_u8(bytes: &mut [u8], offset: usize, value: u8) -> Result<(), WireError> {
     write_array(bytes, offset, [value])
 }
 
+#[inline]
 pub fn read_i8(bytes: &[u8], offset: usize) -> Result<i8, WireError> {
     Ok(i8::from_le_bytes(read_array(bytes, offset)?))
 }
 
+#[inline]
 pub fn write_i8(bytes: &mut [u8], offset: usize, value: i8) -> Result<(), WireError> {
     write_array(bytes, offset, value.to_le_bytes())
 }
 
+#[inline]
 pub fn read_f32_le(bytes: &[u8], offset: usize) -> Result<f32, WireError> {
     Ok(f32::from_bits(read_u32_le(bytes, offset)?))
 }
 
+#[inline]
 pub fn write_f32_le(bytes: &mut [u8], offset: usize, value: f32) -> Result<(), WireError> {
     write_u32_le(bytes, offset, value.to_bits())
 }
 
+#[inline]
 pub fn read_f64_le(bytes: &[u8], offset: usize) -> Result<f64, WireError> {
     Ok(f64::from_bits(read_u64_le(bytes, offset)?))
 }
 
+#[inline]
 pub fn write_f64_le(bytes: &mut [u8], offset: usize, value: f64) -> Result<(), WireError> {
     write_u64_le(bytes, offset, value.to_bits())
 }

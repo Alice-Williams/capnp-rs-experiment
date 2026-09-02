@@ -55,6 +55,7 @@ impl fmt::Display for WireError {
 impl core::error::Error for WireError {}
 
 /// Returns a byte range only after proving both addition and bounds safety.
+#[inline]
 pub fn checked_range(
     offset: usize,
     len: usize,
