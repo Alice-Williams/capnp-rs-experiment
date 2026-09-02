@@ -1,9 +1,9 @@
-# Level-1 v1 release candidate
+# Level-1 compatibility boundary
 
-The workspace version `1.0.0-rc.1` freezes the first two-party Level-1
-compatibility boundary. It is a release candidate, not a production-stability
-claim: the crates remain unpublished and the APIs may still change before a
-final v1 release.
+Workspace version `0.1.0` includes the completed two-party Level-1
+compatibility boundary. It is an experimental release, not a
+production-stability claim: the crates remain unpublished and the APIs may
+still change before 1.0.
 
 ## Compatibility authority and invariants
 
@@ -13,7 +13,7 @@ pinned schemas, and `capnproto-rust` commit
 `2228b71e55cee819c30450bb9bfd9c1f6a722429`. The exact schema hashes and every
 accepted milestone are recorded in `compatibility/manifest.toml`.
 
-The v1 boundary preserves these invariants:
+The v0.1 boundary preserves these invariants:
 
 - complete messages and ancillary resources are owned across async or thread
   boundaries, and every queue/table/allocation has an explicit limit;

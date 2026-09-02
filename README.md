@@ -32,6 +32,9 @@ compatibility work. M48's frozen-source 48-hour full-platform soak and complete
 security, conformance, build, performance, and release suite passed, completing
 the maximum-parity engineering plan.
 
+The `v0.1.0` tag is the first experimental release snapshot. Crates remain
+unpublished and their APIs may change before 1.0.
+
 The repository is a fifteen-crate workspace matching the intended architecture.
 `capnp-wire` implements M03's no_std words, little-endian scalar access, checked
 ranges, and raw pointer bitfields. `capnp-io` implements M04's bounded standard

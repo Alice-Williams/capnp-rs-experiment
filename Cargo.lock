@@ -43,7 +43,7 @@ checksum = "b588b76d00fde79687d7646a9b5bdf3cc0f655e0bbd080335a95d7e96f3587da"
 
 [[package]]
 name = "capnp-async"
-version = "1.0.0-rc.1"
+version = "0.1.0"
 dependencies = [
  "capnp-io",
  "capnp-message",
@@ -52,7 +52,7 @@ dependencies = [
 
 [[package]]
 name = "capnp-cli"
-version = "1.0.0-rc.1"
+version = "0.1.0"
 dependencies = [
  "capnp-codegen",
  "capnp-compiler",
@@ -65,14 +65,14 @@ dependencies = [
 
 [[package]]
 name = "capnp-codegen"
-version = "1.0.0-rc.1"
+version = "0.1.0"
 dependencies = [
  "capnp-schema",
 ]
 
 [[package]]
 name = "capnp-compat"
-version = "1.0.0-rc.1"
+version = "0.1.0"
 dependencies = [
  "capnp-json",
  "capnp-message",
@@ -81,7 +81,7 @@ dependencies = [
 
 [[package]]
 name = "capnp-compiler"
-version = "1.0.0-rc.1"
+version = "0.1.0"
 dependencies = [
  "capnp-codegen",
  "capnp-io",
@@ -91,7 +91,7 @@ dependencies = [
 
 [[package]]
 name = "capnp-examples"
-version = "1.0.0-rc.1"
+version = "0.1.0"
 dependencies = [
  "capnp-codegen",
  "capnp-compat",
@@ -105,7 +105,7 @@ dependencies = [
 
 [[package]]
 name = "capnp-generated-fixture"
-version = "1.0.0-rc.1"
+version = "0.1.0"
 dependencies = [
  "capnp-codegen",
  "capnp-compiler",
@@ -117,7 +117,7 @@ dependencies = [
 
 [[package]]
 name = "capnp-generated-import-fixture"
-version = "1.0.0-rc.1"
+version = "0.1.0"
 dependencies = [
  "capnp-codegen",
  "capnp-compiler",
@@ -129,7 +129,7 @@ dependencies = [
 
 [[package]]
 name = "capnp-io"
-version = "1.0.0-rc.1"
+version = "0.1.0"
 dependencies = [
  "capnp-message",
  "capnp-wire",
@@ -137,7 +137,7 @@ dependencies = [
 
 [[package]]
 name = "capnp-json"
-version = "1.0.0-rc.1"
+version = "0.1.0"
 dependencies = [
  "capnp-io",
  "capnp-message",
@@ -147,7 +147,7 @@ dependencies = [
 
 [[package]]
 name = "capnp-message"
-version = "1.0.0-rc.1"
+version = "0.1.0"
 dependencies = [
  "capnp-wire",
  "loom",
@@ -155,7 +155,7 @@ dependencies = [
 
 [[package]]
 name = "capnp-rpc"
-version = "1.0.0-rc.1"
+version = "0.1.0"
 dependencies = [
  "async-io",
  "capnp-async",
@@ -168,7 +168,7 @@ dependencies = [
 
 [[package]]
 name = "capnp-rpc-core"
-version = "1.0.0-rc.1"
+version = "0.1.0"
 dependencies = [
  "capnp-io",
  "capnp-message",
@@ -177,7 +177,7 @@ dependencies = [
 
 [[package]]
 name = "capnp-schema"
-version = "1.0.0-rc.1"
+version = "0.1.0"
 dependencies = [
  "capnp-io",
  "capnp-message",
@@ -185,7 +185,7 @@ dependencies = [
 
 [[package]]
 name = "capnp-text"
-version = "1.0.0-rc.1"
+version = "0.1.0"
 dependencies = [
  "capnp-io",
  "capnp-message",
@@ -194,7 +194,7 @@ dependencies = [
 
 [[package]]
 name = "capnp-wire"
-version = "1.0.0-rc.1"
+version = "0.1.0"
 
 [[package]]
 name = "cc"

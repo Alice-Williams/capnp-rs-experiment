@@ -6,7 +6,7 @@
 
 ## Outcome
 
-Produce the v1 candidate and complete Level-1 compatibility report.
+Produce the initial release candidate and complete Level-1 compatibility report.
 
 ## Implementation checklist
 

@@ -1,6 +1,6 @@
 # Migrating from `capnproto-rust`
 
-This v1 candidate preserves Cap'n Proto wire, generated-data, and two-party
+This v0.1 release preserves Cap'n Proto wire, generated-data, and two-party
 Level-1 semantics; it is not a drop-in replacement for `capnp`, `capnpc`, or
 `capnp-rpc`. Migrate one schema and boundary at a time and keep a
 cross-language fixture in CI until the application is fully moved.
@@ -82,7 +82,7 @@ Overload means back off, and application calls are never replayed implicitly.
 
 ## Intentional differences to audit
 
-| Existing assumption | v1 candidate behavior |
+| Existing assumption | v0.1 behavior |
 |---|---|
 | Runtime-specific RPC system owns spawning | Core is executor-neutral; executor and scheduling wrapper are explicit |
 | Server objects are usually serialized by the runtime | Default can overlap; choose `Serial` or `Keyed` when ordering is required |

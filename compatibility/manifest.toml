@@ -3,6 +3,7 @@ updated = "2026-09-02"
 
 [project]
 license = "MIT"
+version = "0.1.0"
 
 [upstream.capnproto]
 role = "primary product and protocol oracle"
