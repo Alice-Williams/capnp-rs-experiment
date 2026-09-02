@@ -53,12 +53,23 @@ mkdir -p -- "$output"
 } > "$output/metadata.txt"
 
 printf 'implementation\tcase\tsegments\tpasses\trun\telapsed_ns\tchecksum\n' > "$output/results.tsv"
-workloads=('parse 1' 'parse 2' 'parse 64' 'encode 1' 'encode 2' 'encode 64')
+workloads=(
+    'parse parse 1'
+    'parse parse 2'
+    'parse parse 64'
+    'encode encode 1'
+    'encode encode 2'
+    'encode encode 64'
+    'encode-prepared encode 1'
+    'encode-prepared encode 2'
+    'encode-prepared encode 64'
+)
 
 run_workload() {
-    local implementation=$1 case_name=$2 segments=$3 run=$4 measurement elapsed_ns checksum
+    local implementation=$1 case_name=$2 cpp_mode=$3 segments=$4 run=$5
+    local measurement elapsed_ns checksum
     if [[ "$implementation" == cpp ]]; then
-        measurement=$("$cpp_benchmark" "$case_name" "$segments" "$passes")
+        measurement=$("$cpp_benchmark" "$cpp_mode" "$segments" "$passes")
     else
         measurement=$("$native_benchmark" "$case_name" "$segments" "$passes")
     fi
@@ -72,9 +83,9 @@ run_sample() {
     local label=$1 ordinal=$2 first=cpp second=native
     if ((ordinal % 2 == 0)); then first=native; second=cpp; fi
     for workload in "${workloads[@]}"; do
-        read -r case_name segments <<< "$workload"
-        run_workload "$first" "$case_name" "$segments" "$label"
-        run_workload "$second" "$case_name" "$segments" "$label"
+        read -r case_name cpp_mode segments <<< "$workload"
+        run_workload "$first" "$case_name" "$cpp_mode" "$segments" "$label"
+        run_workload "$second" "$case_name" "$cpp_mode" "$segments" "$label"
     done
 }
 

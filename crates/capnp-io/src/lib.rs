@@ -27,7 +27,9 @@ pub use framing::{
     parse_frame_into,
 };
 #[cfg(feature = "alloc")]
-pub use framing::{Frame, FrameRead, encode_frame, parse_frame};
+pub use framing::{
+    Frame, FrameRead, PreparedSegments, encode_frame, encode_prepared_frame, parse_frame,
+};
 #[cfg(feature = "alloc")]
 pub use packed::{PackedDecoder, PackedEncoder, PackedError, pack, unpack};
 #[cfg(feature = "std")]

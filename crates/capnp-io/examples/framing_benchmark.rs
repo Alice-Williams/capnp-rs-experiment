@@ -1,7 +1,10 @@
 use std::hint::black_box;
 use std::time::Instant;
 
-use capnp_io::{BorrowedFrameRead, FrameLimits, Segment, encode_frame, parse_frame_into};
+use capnp_io::{
+    BorrowedFrameRead, FrameLimits, PreparedSegments, Segment, encode_frame, encode_prepared_frame,
+    parse_frame_into,
+};
 
 const SEED: u64 = 0x4d59_5df4_d0f3_3173;
 
@@ -16,7 +19,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .parse::<usize>()?;
     let passes = args.next().ok_or("missing pass count")?.parse::<usize>()?;
     if args.next().is_some() || !matches!(segment_count, 1 | 2 | 64) || passes == 0 {
-        return Err("expected parse|encode, SEGMENTS in {1,2,64}, and positive PASSES".into());
+        return Err(
+            "expected parse|encode|encode-prepared, SEGMENTS in {1,2,64}, and positive PASSES"
+                .into(),
+        );
     }
 
     let segments = fixture_segments(segment_count);
@@ -29,6 +35,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             measure(|| parse_many(&encoded, limits, &mut storage, passes))?
         }
         "encode" => measure(|| encode_many(&views, limits, passes))?,
+        "encode-prepared" => {
+            let prepared = PreparedSegments::new(&views, limits)?;
+            measure(|| encode_prepared_many(&prepared, passes))?
+        }
         _ => return Err("unknown benchmark mode".into()),
     };
     println!("{elapsed_ns}\t{checksum}");
@@ -101,6 +111,22 @@ fn encode_many(
     let mut checksum = SEED;
     for _ in 0..passes {
         let encoded = encode_frame(segments, limits)?;
+        let fingerprint = (encoded.len() as u64)
+            ^ u64::from(encoded[0]).rotate_left(7)
+            ^ u64::from(encoded[encoded.len() - 1]).rotate_left(19);
+        checksum = checksum.rotate_left(9) ^ fingerprint;
+        black_box(encoded);
+    }
+    Ok(black_box(checksum))
+}
+
+fn encode_prepared_many(
+    segments: &PreparedSegments<'_>,
+    passes: usize,
+) -> Result<u64, capnp_io::FrameError> {
+    let mut checksum = SEED;
+    for _ in 0..passes {
+        let encoded = encode_prepared_frame(segments);
         let fingerprint = (encoded.len() as u64)
             ^ u64::from(encoded[0]).rotate_left(7)
             ^ u64::from(encoded[encoded.len() - 1]).rotate_left(19);

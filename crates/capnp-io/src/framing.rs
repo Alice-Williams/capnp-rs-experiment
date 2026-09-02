@@ -313,6 +313,63 @@ pub enum FrameRead<'a> {
     },
 }
 
+/// Segment descriptors whose alignment, word counts, and aggregate limits have
+/// been validated once for repeated standard-frame encoding.
+#[cfg(feature = "alloc")]
+#[derive(Debug, Eq, PartialEq)]
+pub struct PreparedSegments<'a> {
+    segments: Box<[PreparedSegment<'a>]>,
+    table_len: usize,
+    encoded_len: usize,
+}
+
+#[cfg(feature = "alloc")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PreparedSegment<'a> {
+    bytes: &'a [u8],
+    word_count: u32,
+}
+
+#[cfg(feature = "alloc")]
+impl<'a> PreparedSegments<'a> {
+    pub fn new(segments: &[&'a [u8]], limits: FrameLimits) -> Result<Self, FrameError> {
+        let (segment_count, table_len, body_len) = validate_output_segments(segments, limits)?;
+        let prepared = segments
+            .iter()
+            .map(|bytes| PreparedSegment {
+                bytes,
+                word_count: (bytes.len() / WORD_BYTES) as u32,
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        let encoded_len = table_len
+            .checked_add(body_len)
+            .ok_or(FrameError::BodyLengthOverflow)?;
+        debug_assert_eq!(prepared.len(), segment_count as usize);
+        Ok(Self {
+            segments: prepared,
+            table_len,
+            encoded_len,
+        })
+    }
+
+    pub fn len(&self) -> usize {
+        self.segments.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.segments.is_empty()
+    }
+
+    pub const fn table_len(&self) -> usize {
+        self.table_len
+    }
+
+    pub const fn encoded_len(&self) -> usize {
+        self.encoded_len
+    }
+}
+
 #[cfg(feature = "alloc")]
 pub fn parse_frame(input: &[u8], limits: FrameLimits) -> Result<FrameRead<'_>, FrameError> {
     if input.is_empty() {
@@ -403,6 +460,44 @@ pub fn parse_frame(input: &[u8], limits: FrameLimits) -> Result<FrameRead<'_>, F
 
 #[cfg(feature = "alloc")]
 pub fn encode_frame(segments: &[&[u8]], limits: FrameLimits) -> Result<Vec<u8>, FrameError> {
+    let (segment_count, table_len, body_len) = validate_output_segments(segments, limits)?;
+    let encoded_len = table_len
+        .checked_add(body_len)
+        .ok_or(FrameError::BodyLengthOverflow)?;
+    let mut output = Vec::with_capacity(encoded_len);
+    output.extend_from_slice(&(segment_count - 1).to_le_bytes());
+    append_segment_sizes(&mut output, segments);
+    if segment_count % 2 == 0 {
+        output.extend_from_slice(&[0; 4]);
+    }
+    for segment in segments {
+        output.extend_from_slice(segment);
+    }
+    debug_assert_eq!(output.len(), encoded_len);
+    Ok(output)
+}
+
+#[cfg(feature = "alloc")]
+pub fn encode_prepared_frame(segments: &PreparedSegments<'_>) -> Vec<u8> {
+    let segment_count = segments.segments.len() as u32;
+    let mut output = Vec::with_capacity(segments.encoded_len);
+    output.extend_from_slice(&(segment_count - 1).to_le_bytes());
+    append_prepared_sizes(&mut output, &segments.segments);
+    if segment_count % 2 == 0 {
+        output.extend_from_slice(&[0; 4]);
+    }
+    for segment in &segments.segments {
+        output.extend_from_slice(segment.bytes);
+    }
+    debug_assert_eq!(output.len(), segments.encoded_len);
+    output
+}
+
+#[cfg(feature = "alloc")]
+fn validate_output_segments(
+    segments: &[&[u8]],
+    limits: FrameLimits,
+) -> Result<(u32, usize, usize), FrameError> {
     if segments.is_empty() {
         return Err(FrameError::NoSegments);
     }
@@ -444,20 +539,7 @@ pub fn encode_frame(segments: &[&[u8]], limits: FrameLimits) -> Result<Vec<u8>, 
             .ok_or(FrameError::BodyLengthOverflow)?,
     )
     .map_err(|_| FrameError::BodyLengthOverflow)?;
-    let encoded_len = table_len
-        .checked_add(body_len)
-        .ok_or(FrameError::BodyLengthOverflow)?;
-    let mut output = Vec::with_capacity(encoded_len);
-    output.extend_from_slice(&(segment_count - 1).to_le_bytes());
-    append_segment_sizes(&mut output, segments);
-    if segment_count % 2 == 0 {
-        output.extend_from_slice(&[0; 4]);
-    }
-    for segment in segments {
-        output.extend_from_slice(segment);
-    }
-    debug_assert_eq!(output.len(), encoded_len);
-    Ok(output)
+    Ok((segment_count, table_len, body_len))
 }
 
 #[cfg(feature = "alloc")]
@@ -474,6 +556,24 @@ fn append_segment_sizes(output: &mut Vec<u8>, segments: &[&[u8]]) {
         let mut encoded = [0_u8; BATCH_SEGMENTS * 4];
         for (slot, segment) in encoded.chunks_exact_mut(4).zip(batch) {
             slot.copy_from_slice(&((segment.len() / 8) as u32).to_le_bytes());
+        }
+        output.extend_from_slice(&encoded[..batch.len() * 4]);
+    }
+}
+
+#[cfg(feature = "alloc")]
+fn append_prepared_sizes(output: &mut Vec<u8>, segments: &[PreparedSegment<'_>]) {
+    const BATCH_SEGMENTS: usize = 32;
+    if segments.len() < 8 {
+        for segment in segments {
+            output.extend_from_slice(&segment.word_count.to_le_bytes());
+        }
+        return;
+    }
+    for batch in segments.chunks(BATCH_SEGMENTS) {
+        let mut encoded = [0_u8; BATCH_SEGMENTS * 4];
+        for (slot, segment) in encoded.chunks_exact_mut(4).zip(batch) {
+            slot.copy_from_slice(&segment.word_count.to_le_bytes());
         }
         output.extend_from_slice(&encoded[..batch.len() * 4]);
     }
@@ -635,6 +735,13 @@ mod tests {
         for count in 1..=4 {
             let segments = &storage[..count];
             let encoded = encode_frame(segments, FrameLimits::default()).expect("frame encodes");
+            let prepared =
+                PreparedSegments::new(segments, FrameLimits::default()).expect("segments prepare");
+            assert_eq!(prepared.len(), count);
+            assert!(!prepared.is_empty());
+            assert_eq!(prepared.encoded_len(), encoded.len());
+            assert_eq!(prepared.table_len(), (count / 2 + 1) * 8);
+            assert_eq!(encode_prepared_frame(&prepared), encoded);
             let (frame, remaining) =
                 message_parts(parse_frame(&encoded, FrameLimits::default()).expect("frame parses"))
                     .expect("encoded frame is not empty");
