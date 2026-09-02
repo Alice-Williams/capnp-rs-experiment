@@ -494,7 +494,7 @@ pub fn encode_prepared_frame(segments: &PreparedSegments<'_>) -> Vec<u8> {
 }
 
 #[cfg(feature = "alloc")]
-fn validate_output_segments(
+pub(crate) fn validate_output_segments(
     segments: &[&[u8]],
     limits: FrameLimits,
 ) -> Result<(u32, usize, usize), FrameError> {

@@ -13,9 +13,10 @@ use alloc::vec::Vec;
 use capnp_wire::read_u32_le;
 use std::io::{self, Read, Write};
 
+use crate::framing::validate_output_segments;
 use crate::{
     BorrowedFrameRead, FrameError, FrameLimits, MAX_SEGMENTS, PreparedSegments, Segment,
-    encode_frame, parse_frame, parse_frame_into,
+    parse_frame, parse_frame_into,
 };
 
 #[derive(Debug)]
@@ -246,9 +247,35 @@ pub fn write_frame<W: Write>(
     frame_limits: FrameLimits,
     output_limit: usize,
 ) -> Result<W, IoFrameError> {
-    let frame = encode_frame(segments, frame_limits)?;
+    let (segment_count, table_len, body_len) = validate_output_segments(segments, frame_limits)?;
+    let encoded_len = table_len
+        .checked_add(body_len)
+        .ok_or(FrameError::BodyLengthOverflow)?;
+    if encoded_len > output_limit {
+        return Err(IoFrameError::OutputLimit {
+            requested: encoded_len,
+            limit: output_limit,
+        });
+    }
     let mut bounded = BoundedWriter::new(writer, output_limit);
-    bounded.write_all(&frame)?;
+    const BATCH_SEGMENTS: usize = 32;
+    for (batch_index, batch) in segments.chunks(BATCH_SEGMENTS).enumerate() {
+        let prefix = usize::from(batch_index == 0) * 4;
+        let mut table = [0_u8; BATCH_SEGMENTS * 4 + 4];
+        if batch_index == 0 {
+            table[..4].copy_from_slice(&(segment_count - 1).to_le_bytes());
+        }
+        for (slot, segment) in table[prefix..].chunks_exact_mut(4).zip(batch.iter()) {
+            slot.copy_from_slice(&((segment.len() / 8) as u32).to_le_bytes());
+        }
+        bounded.write_all(&table[..prefix + batch.len() * 4])?;
+    }
+    if segment_count % 2 == 0 {
+        bounded.write_all(&[0; 4])?;
+    }
+    for segment in segments {
+        bounded.write_all(segment)?;
+    }
     bounded.flush()?;
     Ok(bounded.into_inner())
 }
@@ -332,6 +359,7 @@ impl<B: AsRef<[u8]>> MappedFrame<B> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::encode_frame;
     use alloc::vec;
     use std::cell::Cell;
     use std::io::Cursor;
@@ -461,6 +489,23 @@ mod tests {
     }
 
     #[test]
+    fn checked_writer_matches_contiguous_encoding_with_partial_writes() {
+        let bodies = (0_u8..64).map(|value| vec![value; 8]).collect::<Vec<_>>();
+        let segments = bodies.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let expected = encode_frame(&segments, FrameLimits::default()).expect("frame encodes");
+        let writer = PartialWriter {
+            bytes: Vec::new(),
+            max: 3,
+            interrupt: true,
+        };
+
+        let actual = write_frame(writer, &segments, FrameLimits::default(), expected.len())
+            .expect("checked frame writes");
+
+        assert_eq!(actual.bytes, expected);
+    }
+
+    #[test]
     fn prepared_writer_rejects_output_limit_before_first_write() {
         let segment = [0_u8; 8];
         let prepared =
@@ -472,6 +517,23 @@ mod tests {
                 CountingWriter(Rc::clone(&written)),
                 &prepared,
                 prepared.encoded_len() - 1,
+            ),
+            Err(IoFrameError::OutputLimit { .. })
+        ));
+        assert_eq!(written.get(), 0);
+    }
+
+    #[test]
+    fn checked_writer_rejects_output_limit_before_first_write() {
+        let segment = [0_u8; 8];
+        let written = Rc::new(Cell::new(0));
+
+        assert!(matches!(
+            write_frame(
+                CountingWriter(Rc::clone(&written)),
+                &[&segment],
+                FrameLimits::default(),
+                15,
             ),
             Err(IoFrameError::OutputLimit { .. })
         ));
