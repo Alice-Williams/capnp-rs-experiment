@@ -107,3 +107,7 @@ wire safety or protocol ordering.
 - [M46 — Persistent capabilities and SturdyRefs](milestones/M46-persistent-capabilities.md) — complete
 - [M47 — C++ compatibility adapters and examples](milestones/M47-compatibility-adapters-and-examples.md) — complete
 - [M48 — Maximum-parity release gate](milestones/M48-maximum-parity-release-gate.md) — complete
+
+### Phase 8 — Post-release performance characterization
+
+- [M49 — Native Rust versus C++ performance characterization](milestones/M49-native-rust-cpp-performance.md) — in-progress
