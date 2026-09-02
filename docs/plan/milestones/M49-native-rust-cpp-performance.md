@@ -35,8 +35,8 @@ Rust is faster.
   environment metadata.
 - [x] Attribute material gaps using native phase timing, the traversal-budget
   microbenchmark, and traced generated/runtime hot paths.
-- [ ] Publish a concise report covering slower, faster, and inapplicable cases.
-- [ ] Add result-integrity and runner checks to Bazel/CI.
+- [x] Publish a concise report covering slower, faster, and inapplicable cases.
+- [x] Add result-integrity and runner checks to Bazel/CI.
 - [ ] Run the full Cargo and Bazel validation gates.
 
 ## Required exit evidence
