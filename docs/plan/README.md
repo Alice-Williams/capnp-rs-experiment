@@ -112,4 +112,5 @@ wire safety or protocol ordering.
 
 - [M49 — Native Rust versus C++ performance characterization](milestones/M49-native-rust-cpp-performance.md) — complete ([report](../performance/native-vs-cpp-v0.1.md))
 - [Bottom-up performance program](performance-stack.md)
-- [M50 — Wire primitives performance](milestones/M50-wire-primitives-performance.md) — in-progress
+- [M50 — Wire primitives performance](milestones/M50-wire-primitives-performance.md) — complete ([report](../performance/wire-primitives-m50.md))
+- [M51 — Standard framing performance](milestones/M51-standard-framing-performance.md) — in-progress
