@@ -476,9 +476,9 @@ mod tests {
             .expect("borrowed fixture validates");
         let reader = wire_fixture::BorrowedReader::from_root(&message)
             .expect("borrowed generated root opens");
-        assert_eq!(reader.uint32_value().expect("u32"), 4_000_000_000);
-        assert_eq!(reader.color().expect("enum"), Color::Blue);
-        assert_eq!(reader.defaulted().expect("default XOR"), 0);
+        assert_eq!(reader.uint32_value(), 4_000_000_000);
+        assert_eq!(reader.color(), Color::Blue);
+        assert_eq!(reader.defaulted(), 0);
         assert!(
             reader
                 .text()
@@ -489,6 +489,29 @@ mod tests {
         );
         assert!(!reader.data().expect("borrowed data").is_empty());
         Ok(())
+    }
+
+    #[test]
+    fn borrowed_generated_reader_defaults_a_short_data_section() {
+        let mut arena = ExclusiveArena::new(16, 256).expect("arena");
+        arena
+            .init_root_struct(1, 0)
+            .expect("short root")
+            .set_u32(1, 77, 0)
+            .expect("in-range scalar");
+        let storage = arena.into_segments();
+        let segments = storage
+            .iter()
+            .map(|segment| segment.as_ref())
+            .collect::<Vec<_>>();
+        let message = BorrowedMessage::new(&segments, ReaderLimits::default())
+            .expect("short message validates");
+        let reader =
+            wire_fixture::BorrowedReader::from_root(&message).expect("short generated root opens");
+        assert_eq!(reader.int32_value(), 77);
+        assert_eq!(reader.uint64_value(), 0);
+        assert_eq!(reader.defaulted(), 123_456);
+        assert_eq!(reader.color(), Color::Red);
     }
 
     #[test]

@@ -1171,16 +1171,17 @@ fn emit_borrowed_reader(
     structure: &capnp_schema::StructSchema,
     names: &Names,
 ) -> Result<(), GenerateError> {
+    let data_bytes = usize::from(structure.data_word_count) * 8;
     writeln!(
         output,
         "    #[allow(dead_code)]\n    #[derive(Clone, Copy, Debug)]"
     )
     .map_err(|_| GenerateError::Format)?;
-    writeln!(output, "    pub struct BorrowedReader<'context, 'data, B: capnp_message::TraversalBudget> {{ inner: capnp_message::StructReader<'context, 'data, B>, data: capnp_message::DataSection<'data> }}")
+    writeln!(output, "    pub struct BorrowedReader<'context, 'data, B: capnp_message::TraversalBudget> {{ inner: capnp_message::StructReader<'context, 'data, B>, data: capnp_message::DataSection<'data>, full_data: Option<&'data [u8; {data_bytes}]> }}")
         .map_err(|_| GenerateError::Format)?;
     writeln!(output, "    impl<'context, 'data, B: capnp_message::TraversalBudget> BorrowedReader<'context, 'data, B> {{")
         .map_err(|_| GenerateError::Format)?;
-    writeln!(output, "        #[doc(hidden)]\n        pub fn from_reader(inner: capnp_message::StructReader<'context, 'data, B>) -> Result<Self, capnp_schema::DynamicError> {{ Ok(Self {{ data: inner.data_section()?, inner }}) }}")
+    writeln!(output, "        #[doc(hidden)]\n        pub fn from_reader(inner: capnp_message::StructReader<'context, 'data, B>) -> Result<Self, capnp_schema::DynamicError> {{ let data = inner.data_section()?; let full_data = data.as_bytes().get(..{data_bytes}).and_then(|bytes| bytes.try_into().ok()); Ok(Self {{ inner, data, full_data }}) }}")
         .map_err(|_| GenerateError::Format)?;
     for field in &structure.fields {
         emit_borrowed_reader_field(output, field, names)?;
@@ -1244,65 +1245,24 @@ fn emit_borrowed_reader_field(
         return Ok(());
     };
     let method = rust_snake(&field.name);
+    if matches!((ty, default_value), (Type::Void, Value::Void)) {
+        return writeln!(output, "        pub fn {method}(&self) {{}}")
+            .map_err(|_| GenerateError::Format);
+    }
+    if let Some((return_type, fallback)) =
+        borrowed_total_data_value(ty, default_value, *offset, names)?
+    {
+        let expression = borrowed_full_data_value(ty, default_value, *offset, names)?
+            .map_or(fallback.clone(), |full| {
+                format!("if let Some(data) = self.full_data {{ {full} }} else {{ {fallback} }}")
+            });
+        return writeln!(
+            output,
+            "        pub fn {method}(&self) -> {return_type} {{ {expression} }}"
+        )
+        .map_err(|_| GenerateError::Format);
+    }
     let body = match (ty, default_value) {
-        (Type::Void, Value::Void) => Some(("()".to_owned(), "Ok(())".to_owned())),
-        (Type::Bool, Value::Bool(value)) => Some((
-            "bool".to_owned(),
-            format!("Ok(self.data.read_bool({offset}, {value})?)"),
-        )),
-        (Type::Int8, Value::Int8(value)) => Some((
-            "i8".to_owned(),
-            format!("Ok(self.data.read_i8({offset}, {value})?)"),
-        )),
-        (Type::Int16, Value::Int16(value)) => Some((
-            "i16".to_owned(),
-            format!("Ok(self.data.read_i16({offset}, {value})?)"),
-        )),
-        (Type::Int32, Value::Int32(value)) => Some((
-            "i32".to_owned(),
-            format!("Ok(self.data.read_i32({offset}, {value})?)"),
-        )),
-        (Type::Int64, Value::Int64(value)) => Some((
-            "i64".to_owned(),
-            format!("Ok(self.data.read_i64({offset}, {value})?)"),
-        )),
-        (Type::UInt8, Value::UInt8(value)) => Some((
-            "u8".to_owned(),
-            format!("Ok(self.data.read_u8({offset}, {value})?)"),
-        )),
-        (Type::UInt16, Value::UInt16(value)) => Some((
-            "u16".to_owned(),
-            format!("Ok(self.data.read_u16({offset}, {value})?)"),
-        )),
-        (Type::UInt32, Value::UInt32(value)) => Some((
-            "u32".to_owned(),
-            format!("Ok(self.data.read_u32({offset}, {value})?)"),
-        )),
-        (Type::UInt64, Value::UInt64(value)) => Some((
-            "u64".to_owned(),
-            format!("Ok(self.data.read_u64({offset}, {value})?)"),
-        )),
-        (Type::Float32, Value::Float32(value)) => Some((
-            "f32".to_owned(),
-            format!(
-                "Ok(self.data.read_f32({offset}, f32::from_bits(0x{:08x}))?)",
-                value.to_bits()
-            ),
-        )),
-        (Type::Float64, Value::Float64(value)) => Some((
-            "f64".to_owned(),
-            format!(
-                "Ok(self.data.read_f64({offset}, f64::from_bits(0x{:016x}))?)",
-                value.to_bits()
-            ),
-        )),
-        (Type::Enum { type_id, .. }, Value::Enum(value)) => {
-            let name = names.reference(*type_id, true)?;
-            Some((
-                name.clone(),
-                format!("Ok({name}::from_ordinal(self.data.read_u16({offset}, {value})?))"),
-            ))
-        }
         (Type::Text, Value::Text(value)) if value.is_empty() => Some((
             "capnp_message::TextReader<'data>".to_owned(),
             format!("Ok(self.inner.read_text({offset}, None)?)"),
@@ -1318,6 +1278,177 @@ fn emit_borrowed_reader_field(
     };
     writeln!(output, "        pub fn {method}(&self) -> Result<{return_type}, capnp_schema::DynamicError> {{ {expression} }}")
         .map_err(|_| GenerateError::Format)
+}
+
+fn borrowed_total_data_value(
+    ty: &Type,
+    default_value: &capnp_schema::Value,
+    offset: u32,
+    names: &Names,
+) -> Result<Option<(String, String)>, GenerateError> {
+    use capnp_schema::Value;
+
+    let value = match (ty, default_value) {
+        (Type::Bool, Value::Bool(value)) => (
+            "bool".to_owned(),
+            format!("self.data.get_bool({offset}, {value})"),
+        )
+            .into(),
+        (Type::Int8, Value::Int8(value)) => (
+            "i8".to_owned(),
+            format!("self.data.get_i8({offset}, {value})"),
+        )
+            .into(),
+        (Type::Int16, Value::Int16(value)) => (
+            "i16".to_owned(),
+            format!("self.data.get_i16({offset}, {value})"),
+        )
+            .into(),
+        (Type::Int32, Value::Int32(value)) => (
+            "i32".to_owned(),
+            format!("self.data.get_i32({offset}, {value})"),
+        )
+            .into(),
+        (Type::Int64, Value::Int64(value)) => (
+            "i64".to_owned(),
+            format!("self.data.get_i64({offset}, {value})"),
+        )
+            .into(),
+        (Type::UInt8, Value::UInt8(value)) => (
+            "u8".to_owned(),
+            format!("self.data.get_u8({offset}, {value})"),
+        )
+            .into(),
+        (Type::UInt16, Value::UInt16(value)) => (
+            "u16".to_owned(),
+            format!("self.data.get_u16({offset}, {value})"),
+        )
+            .into(),
+        (Type::UInt32, Value::UInt32(value)) => (
+            "u32".to_owned(),
+            format!("self.data.get_u32({offset}, {value})"),
+        )
+            .into(),
+        (Type::UInt64, Value::UInt64(value)) => (
+            "u64".to_owned(),
+            format!("self.data.get_u64({offset}, {value})"),
+        )
+            .into(),
+        (Type::Float32, Value::Float32(value)) => (
+            "f32".to_owned(),
+            format!(
+                "self.data.get_f32({offset}, f32::from_bits(0x{:08x}))",
+                value.to_bits()
+            ),
+        )
+            .into(),
+        (Type::Float64, Value::Float64(value)) => (
+            "f64".to_owned(),
+            format!(
+                "self.data.get_f64({offset}, f64::from_bits(0x{:016x}))",
+                value.to_bits()
+            ),
+        )
+            .into(),
+        (Type::Enum { type_id, .. }, Value::Enum(value)) => {
+            let name = names.reference(*type_id, true)?;
+            Some((
+                name.clone(),
+                format!("{name}::from_ordinal(self.data.get_u16({offset}, {value}))"),
+            ))
+        }
+        _ => None,
+    };
+    Ok(value)
+}
+
+fn borrowed_full_data_value(
+    ty: &Type,
+    default_value: &capnp_schema::Value,
+    offset: u32,
+    names: &Names,
+) -> Result<Option<String>, GenerateError> {
+    use capnp_schema::Value;
+
+    let integer = |width: usize, default: String, has_default: bool| {
+        let start = offset as usize * width;
+        let bytes = (start..start + width)
+            .map(|index| format!("data[{index}]"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let wire = format!("from_le_bytes([{bytes}])");
+        if has_default {
+            format!("{wire} ^ {default}")
+        } else {
+            wire
+        }
+    };
+    let value = match (ty, default_value) {
+        (Type::Void, Value::Void) => None,
+        (Type::Bool, Value::Bool(default)) => {
+            let byte = offset / 8;
+            let bit = offset % 8;
+            let wire = format!("data[{byte}] & (1 << {bit}) != 0");
+            Some(if *default { format!("!({wire})") } else { wire })
+        }
+        (Type::Int8, Value::Int8(default)) => Some(format!(
+            "i8::{}",
+            integer(1, default.to_string(), *default != 0)
+        )),
+        (Type::Int16, Value::Int16(default)) => Some(format!(
+            "i16::{}",
+            integer(2, default.to_string(), *default != 0)
+        )),
+        (Type::Int32, Value::Int32(default)) => Some(format!(
+            "i32::{}",
+            integer(4, default.to_string(), *default != 0)
+        )),
+        (Type::Int64, Value::Int64(default)) => Some(format!(
+            "i64::{}",
+            integer(8, default.to_string(), *default != 0)
+        )),
+        (Type::UInt8, Value::UInt8(default)) => Some(format!(
+            "u8::{}",
+            integer(1, default.to_string(), *default != 0)
+        )),
+        (Type::UInt16, Value::UInt16(default)) => Some(format!(
+            "u16::{}",
+            integer(2, default.to_string(), *default != 0)
+        )),
+        (Type::UInt32, Value::UInt32(default)) => Some(format!(
+            "u32::{}",
+            integer(4, default.to_string(), *default != 0)
+        )),
+        (Type::UInt64, Value::UInt64(default)) => Some(format!(
+            "u64::{}",
+            integer(8, default.to_string(), *default != 0)
+        )),
+        (Type::Float32, Value::Float32(default)) => Some(format!(
+            "f32::from_bits(u32::{})",
+            integer(
+                4,
+                format!("0x{:08x}", default.to_bits()),
+                default.to_bits() != 0,
+            )
+        )),
+        (Type::Float64, Value::Float64(default)) => Some(format!(
+            "f64::from_bits(u64::{})",
+            integer(
+                8,
+                format!("0x{:016x}", default.to_bits()),
+                default.to_bits() != 0,
+            )
+        )),
+        (Type::Enum { type_id, .. }, Value::Enum(default)) => {
+            let name = names.reference(*type_id, true)?;
+            Some(format!(
+                "{name}::from_ordinal(u16::{})",
+                integer(2, default.to_string(), *default != 0)
+            ))
+        }
+        _ => None,
+    };
+    Ok(value)
 }
 
 const STREAM_RESULT_TYPE_ID: NodeId = 0x995f_9a33_77c0_b16e;
@@ -2583,7 +2714,12 @@ mod tests {
         );
         assert!(!generated.source.contains("self.inner.get(\"uint32Value\")"));
         assert!(generated.source.contains("pub struct BorrowedReader"));
-        assert!(generated.source.contains("self.data.read_u32(5, 0)"));
+        assert!(generated.source.contains("self.data.get_u32(5, 0)"));
+        assert!(
+            generated
+                .source
+                .contains("if let Some(data) = self.full_data")
+        );
         assert!(
             generated
                 .source

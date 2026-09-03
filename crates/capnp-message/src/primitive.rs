@@ -137,6 +137,80 @@ impl<'a> DataSection<'a> {
         Ok(wire ^ default)
     }
 
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn get_bool(self, bit_offset: u32, default: bool) -> bool {
+        let Some(byte_offset) = usize::try_from(bit_offset / 8).ok() else {
+            return default;
+        };
+        let bit = (bit_offset % 8) as u8;
+        self.bytes
+            .get(byte_offset)
+            .copied()
+            .is_some_and(|byte| byte & (1 << bit) != 0)
+            ^ default
+    }
+
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn get_u8(self, offset: u32, default: u8) -> u8 {
+        u8::from_le_bytes(self.wire_bytes_or_zero(offset)) ^ default
+    }
+
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn get_i8(self, offset: u32, default: i8) -> i8 {
+        self.get_u8(offset, default as u8) as i8
+    }
+
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn get_u16(self, offset: u32, default: u16) -> u16 {
+        u16::from_le_bytes(self.wire_bytes_or_zero(offset)) ^ default
+    }
+
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn get_i16(self, offset: u32, default: i16) -> i16 {
+        self.get_u16(offset, default as u16) as i16
+    }
+
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn get_u32(self, offset: u32, default: u32) -> u32 {
+        u32::from_le_bytes(self.wire_bytes_or_zero(offset)) ^ default
+    }
+
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn get_i32(self, offset: u32, default: i32) -> i32 {
+        self.get_u32(offset, default as u32) as i32
+    }
+
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn get_u64(self, offset: u32, default: u64) -> u64 {
+        u64::from_le_bytes(self.wire_bytes_or_zero(offset)) ^ default
+    }
+
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn get_i64(self, offset: u32, default: i64) -> i64 {
+        self.get_u64(offset, default as u64) as i64
+    }
+
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn get_f32(self, offset: u32, default: f32) -> f32 {
+        f32::from_bits(self.get_u32(offset, default.to_bits()))
+    }
+
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn get_f64(self, offset: u32, default: f64) -> f64 {
+        f64::from_bits(self.get_u64(offset, default.to_bits()))
+    }
+
     #[inline(always)]
     pub fn read_u8(self, offset: u32, default: u8) -> Result<u8, PrimitiveError> {
         Ok(u8::from_le_bytes(self.wire_bytes(offset)?) ^ default)
@@ -246,6 +320,24 @@ impl<'a> DataSection<'a> {
             result.copy_from_slice(bytes);
         }
         Ok(result)
+    }
+
+    #[inline(always)]
+    fn wire_bytes_or_zero<const N: usize>(self, offset: u32) -> [u8; N] {
+        let Some(start) = usize::try_from(offset)
+            .ok()
+            .and_then(|offset| offset.checked_mul(N))
+        else {
+            return [0; N];
+        };
+        let Some(end) = start.checked_add(N) else {
+            return [0; N];
+        };
+        let mut result = [0; N];
+        if let Some(bytes) = self.bytes.get(start..end) {
+            result.copy_from_slice(bytes);
+        }
+        result
     }
 }
 

@@ -160,25 +160,25 @@ fn generated_scalar_fingerprint(
 fn borrowed_scalar_fingerprint<B: capnp_message::TraversalBudget>(
     reader: &wire_fixture::BorrowedReader<'_, '_, B>,
 ) -> Result<u64, Box<dyn std::error::Error>> {
-    let mut value = u64::from(reader.bool_value()?);
-    value = value.rotate_left(5) ^ u64::from(reader.int8_value()? as u8);
-    value = value.rotate_left(7) ^ u64::from(reader.int16_value()? as u16);
-    value = value.rotate_left(11) ^ u64::from(reader.int32_value()? as u32);
-    value = value.rotate_left(13) ^ reader.int64_value()? as u64;
-    value = value.rotate_left(17) ^ u64::from(reader.uint8_value()?);
-    value = value.rotate_left(19) ^ u64::from(reader.uint16_value()?);
-    value = value.rotate_left(23) ^ u64::from(reader.uint32_value()?);
-    value = value.rotate_left(29) ^ reader.uint64_value()?;
-    value = value.rotate_left(31) ^ u64::from(reader.float32_value()?.to_bits());
-    value = value.rotate_left(37) ^ reader.float64_value()?.to_bits();
+    let mut value = u64::from(reader.bool_value());
+    value = value.rotate_left(5) ^ u64::from(reader.int8_value() as u8);
+    value = value.rotate_left(7) ^ u64::from(reader.int16_value() as u16);
+    value = value.rotate_left(11) ^ u64::from(reader.int32_value() as u32);
+    value = value.rotate_left(13) ^ reader.int64_value() as u64;
+    value = value.rotate_left(17) ^ u64::from(reader.uint8_value());
+    value = value.rotate_left(19) ^ u64::from(reader.uint16_value());
+    value = value.rotate_left(23) ^ u64::from(reader.uint32_value());
+    value = value.rotate_left(29) ^ reader.uint64_value();
+    value = value.rotate_left(31) ^ u64::from(reader.float32_value().to_bits());
+    value = value.rotate_left(37) ^ reader.float64_value().to_bits();
     value = value.rotate_left(41)
-        ^ u64::from(match reader.color()? {
+        ^ u64::from(match reader.color() {
             Color::Red => 0,
             Color::Green => 1,
             Color::Blue => 2,
             Color::Unrecognized(value) => value,
         });
-    value = value.rotate_left(43) ^ u64::from(reader.defaulted()?);
+    value = value.rotate_left(43) ^ u64::from(reader.defaulted());
     Ok(value)
 }
 
