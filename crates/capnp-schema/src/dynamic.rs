@@ -17,8 +17,9 @@ use capnp_message::{
 };
 
 use crate::{
-    AnyPointerKind, AnyPointerType, Brand, BrandBinding, CompiledSchema, Field, FieldKind, NodeId,
-    NodeKind, OpaquePointer, OpaquePointerKind, ScopeBinding, StructSchema, Type, Value,
+    AnyPointerKind, AnyPointerType, Brand, BrandBinding, BrandScope, CompiledSchema, Field,
+    FieldKind, NodeId, NodeKind, OpaquePointer, OpaquePointerKind, ScopeBinding, StructSchema,
+    Type, Value,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -834,7 +835,7 @@ impl DynamicStruct {
     }
 
     fn resolve_type(&self, ty: &Type) -> Type {
-        resolve_type_with_brand(ty, &self.brand)
+        resolve_type_with_brand(ty, &self.brand.scopes)
     }
 
     fn with_reader<R>(
@@ -1197,7 +1198,10 @@ pub enum DynamicInput<'a> {
 pub struct DynamicStructBuilder<'schema, 'arena> {
     schema: &'schema CompiledSchema,
     type_id: NodeId,
-    brand: Brand,
+    // Empty brands are the common generated-code case. A boxed slice keeps
+    // that case pointer-sized while reusing the allocation already owned by a
+    // non-empty Brand instead of boxing the Vec header separately.
+    brand: Option<Box<[BrandScope]>>,
     builder: StructBuilder<'arena>,
 }
 
@@ -1238,7 +1242,7 @@ impl<'schema, 'arena> DynamicStructBuilder<'schema, 'arena> {
         Ok(Self {
             schema,
             type_id,
-            brand,
+            brand: compact_builder_brand(brand),
             builder,
         })
     }
@@ -1291,7 +1295,7 @@ impl<'schema, 'arena> DynamicStructBuilder<'schema, 'arena> {
         Ok(DynamicStructBuilder {
             schema: self.schema,
             type_id,
-            brand: Brand::default(),
+            brand: None,
             builder: self.builder.init_struct(
                 u16_offset(offset)?,
                 data_word_count,
@@ -1306,7 +1310,7 @@ impl<'schema, 'arena> DynamicStructBuilder<'schema, 'arena> {
         let FieldKind::Slot { ty, .. } = field.kind else {
             return Err(type_mismatch("slot field"));
         };
-        Ok(resolve_type_with_brand(&ty, &self.brand))
+        Ok(resolve_type_with_optional_brand(&ty, self.brand.as_deref()))
     }
 
     pub fn set(&mut self, name: &str, value: DynamicInput<'_>) -> Result<(), DynamicError> {
@@ -1321,7 +1325,7 @@ impl<'schema, 'arena> DynamicStructBuilder<'schema, 'arena> {
         else {
             return Err(type_mismatch("slot field"));
         };
-        let resolved_type = resolve_type_with_brand(ty, &self.brand);
+        let resolved_type = resolve_type_with_optional_brand(ty, self.brand.as_deref());
         match (&resolved_type, value) {
             (Type::Void, DynamicInput::Void) => {}
             (Type::Bool, DynamicInput::Bool(value)) => {
@@ -1431,14 +1435,16 @@ impl<'schema, 'arena> DynamicStructBuilder<'schema, 'arena> {
         let FieldKind::Slot { offset, ty, .. } = field.kind else {
             return Err(type_mismatch("struct field"));
         };
-        let Type::Struct { type_id, brand } = resolve_type_with_brand(&ty, &self.brand) else {
+        let Type::Struct { type_id, brand } =
+            resolve_type_with_optional_brand(&ty, self.brand.as_deref())
+        else {
             return Err(type_mismatch("struct field"));
         };
         let structure = require_struct(self.schema, type_id)?;
         Ok(DynamicStructBuilder {
             schema: self.schema,
             type_id,
-            brand,
+            brand: compact_builder_brand(brand),
             builder: self.builder.init_struct(
                 u16_offset(offset)?,
                 structure.data_word_count,
@@ -1457,7 +1463,8 @@ impl<'schema, 'arena> DynamicStructBuilder<'schema, 'arena> {
         let FieldKind::Slot { offset, ty, .. } = field.kind else {
             return Err(type_mismatch("list field"));
         };
-        let Type::List(element) = resolve_type_with_brand(&ty, &self.brand) else {
+        let Type::List(element) = resolve_type_with_optional_brand(&ty, self.brand.as_deref())
+        else {
             return Err(type_mismatch("list field"));
         };
         DynamicListBuilder::from_struct_field(
@@ -1742,7 +1749,7 @@ impl<'schema, 'arena> DynamicListBuilder<'schema, 'arena> {
         Ok(DynamicStructBuilder {
             schema,
             type_id: *type_id,
-            brand: brand.clone(),
+            brand: compact_builder_brand(brand.clone()),
             builder: builder.get(index)?,
         })
     }
@@ -1920,7 +1927,15 @@ default_value!(f32_default, Float32, f32);
 default_value!(f64_default, Float64, f64);
 default_value!(enum_default, Enum, u16);
 
-fn resolve_type_with_brand(ty: &Type, environment: &Brand) -> Type {
+fn compact_builder_brand(brand: Brand) -> Option<Box<[BrandScope]>> {
+    (!brand.scopes.is_empty()).then(|| brand.scopes.into_boxed_slice())
+}
+
+fn resolve_type_with_optional_brand(ty: &Type, environment: Option<&[BrandScope]>) -> Type {
+    environment.map_or_else(|| ty.clone(), |scopes| resolve_type_with_brand(ty, scopes))
+}
+
+fn resolve_type_with_brand(ty: &Type, environment: &[BrandScope]) -> Type {
     match ty {
         Type::List(element) => Type::List(Box::new(resolve_type_with_brand(element, environment))),
         Type::Enum { type_id, brand } => Type::Enum {
@@ -1936,7 +1951,6 @@ fn resolve_type_with_brand(ty: &Type, environment: &Brand) -> Type {
             brand: resolve_brand_with_brand(brand, environment),
         },
         Type::AnyPointer(AnyPointerType::Parameter { scope_id, index }) => environment
-            .scopes
             .iter()
             .find(|scope| scope.scope_id == *scope_id)
             .and_then(|scope| match &scope.binding {
@@ -1952,7 +1966,7 @@ fn resolve_type_with_brand(ty: &Type, environment: &Brand) -> Type {
     }
 }
 
-fn resolve_brand_with_brand(brand: &Brand, environment: &Brand) -> Brand {
+fn resolve_brand_with_brand(brand: &Brand, environment: &[BrandScope]) -> Brand {
     Brand {
         scopes: brand
             .scopes

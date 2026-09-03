@@ -1155,7 +1155,7 @@ fn emit_struct(
             .map_err(|_| GenerateError::Format)?;
     }
     writeln!(output, "        }}").map_err(|_| GenerateError::Format)?;
-    writeln!(output, "        #[doc(hidden)]\n        pub fn from_dynamic(inner: capnp_schema::DynamicStructBuilder<'schema, 'arena>) -> Self {{ Self {{ inner, marker: PhantomData }} }}")
+    writeln!(output, "        #[doc(hidden)]\n        #[inline(always)]\n        pub fn from_dynamic(inner: capnp_schema::DynamicStructBuilder<'schema, 'arena>) -> Self {{ Self {{ inner, marker: PhantomData }} }}")
         .map_err(|_| GenerateError::Format)?;
     for field in &structure.fields {
         emit_builder_field(output, schema, field, names, &parameters)?;
