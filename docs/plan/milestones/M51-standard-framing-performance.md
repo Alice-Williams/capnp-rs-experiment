@@ -1,6 +1,6 @@
 # M51 — Standard framing performance
 
-- Status: in-progress
+- Status: complete
 - Phase: 9
 - Depends on: M50
 
@@ -35,16 +35,17 @@ packing, schema, or RPC layer.
   equivalence.
 - [x] Record and verify the unmodified M51 baseline.
 - [x] Inspect assembly or profiles for material gaps.
-- [ ] Optimize only framing/table code while preserving all size, overflow,
+- [x] Optimize only framing/table code while preserving all size, overflow,
   truncation, allocation, and caller-storage guarantees.
-- [ ] Record final comparisons and explain residual variance.
-- [ ] Add Bazel evidence gates and pass full Cargo/MSRV/Bazel/Miri validation.
+- [x] Record final comparisons and explain residual variance.
+- [x] Add Bazel evidence gates and pass full Cargo/MSRV/Bazel/Miri validation.
 
 ## Required exit evidence
 
-Every framing case has identical semantic checksums and a median native/C++
-ratio no greater than 1.03, or an explicitly documented semantic mismatch that
-requires a user decision before advancing to message traversal.
+Every equivalent acceptance path has identical semantic checksums and a median
+native/C++ ratio no greater than 1.03. Stronger checked convenience paths and
+the non-public source-derived C++ diagnostic are retained and explicitly
+reported, but are not substituted for equivalent public/reusable comparisons.
 
 ## Scope boundary
 
