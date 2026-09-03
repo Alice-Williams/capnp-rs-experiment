@@ -82,3 +82,37 @@ call. The 3.976 and 1.472 direct ratios therefore describe the retained Rust
 model, not the lower-level borrowed reader previously qualified in M52. M55
 must measure a new lifetime-bound borrowed generated reader separately rather
 than silently compare unlike ownership semantics.
+
+## Borrowed-reader scalar and blob checkpoint
+
+Evidence:
+[`benchmarks/results/2026-09-03-m55-generated-reader-borrowed-g-drive-docker`](../../benchmarks/results/2026-09-03-m55-generated-reader-borrowed-g-drive-docker)
+at native commit `d61d4a6d72727edd4a85e533922914193f2203cb`.
+The paired run adds a generated `BorrowedReader` whose lifetime is tied to a
+validated `BorrowedMessage`. It caches the root data slice and retains the
+checked root reader for pointer fields. The representation performs no
+allocation or copy and contains no raw pointer or unsafe self-reference.
+
+| Operation | C++ ns/op | Native ns/op | Native / C++ |
+| --- | ---: | ---: | ---: |
+| borrowed generated scalars | 3.6763 | 5.2064 | 1.416 |
+| borrowed generated text/data | 18.0554 | 12.9000 | 0.714 |
+| retained generated scalars | 3.9763 | 67.6683 | 17.018 |
+| retained generated text/data | 17.2203 | 244.5270 | 14.200 |
+
+The C++ `generated-*` and `borrowed-*` rows intentionally invoke the same
+generated reader. Their timing spread is therefore an internal noise check,
+not a second C++ implementation. The native borrowed blob path is already
+about 1.40x faster than this pinned C++ reader while returning exact borrowed
+slices without copying. This paired run confirms the lead but does not by
+itself attribute it; generated assembly and phase-isolated pointer/blob reads
+must confirm the mechanism before M55 treats it as a durable advantage. The
+borrowed scalar sequence remains about 1.42x slower. Its remaining hot work is
+the per-field checked `DataSection` read and `Result` propagation; that is the
+next scalar floor to isolate before adding lists and nested pointers.
+
+The retained API remains deliberately separate. It owns schema and message
+backing and can outlive the caller's read context, which costs additional
+indirection and prevents accessor-returned blob borrows. It is useful when
+ownership is required, while the generated borrowed API now matches the C++
+reader's lifetime and memory model for hot synchronous traversal.
