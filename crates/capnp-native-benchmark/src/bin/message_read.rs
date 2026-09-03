@@ -70,7 +70,7 @@ fn read_scalar_only(
     let mut checksum = SEED;
     let started = Instant::now();
     for _ in 0..passes {
-        checksum = checksum.rotate_left(9) ^ scalar_fingerprint(data)?;
+        checksum = checksum.rotate_left(9) ^ scalar_fingerprint(black_box(data))?;
     }
     Ok((started.elapsed(), black_box(checksum)))
 }

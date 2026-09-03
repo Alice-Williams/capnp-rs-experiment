@@ -60,10 +60,18 @@ uint64_t scalarFingerprint(kj::ArrayPtr<const capnp::byte> data) {
   return fingerprint;
 }
 
+kj::ArrayPtr<const capnp::byte> blackBoxData(
+    kj::ArrayPtr<const capnp::byte> data) {
+  auto pointer = data.begin();
+  auto size = data.size();
+  asm volatile("" : "+r"(pointer), "+r"(size) : : "memory");
+  return kj::arrayPtr(pointer, size);
+}
+
 uint64_t readScalarOnly(kj::ArrayPtr<const capnp::byte> data, size_t passes) {
   uint64_t checksum = SEED;
   for (size_t pass = 0; pass < passes; ++pass) {
-    checksum = std::rotl(checksum, 9) ^ scalarFingerprint(data);
+    checksum = std::rotl(checksum, 9) ^ scalarFingerprint(blackBoxData(data));
   }
   return checksum;
 }
