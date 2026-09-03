@@ -1172,7 +1172,7 @@ fn emit_struct(
     writeln!(output, "    }}").map_err(|_| GenerateError::Format)?;
 
     let builder_inner = if parameters.is_empty() {
-        "capnp_schema::GeneratedStructBuilder<'schema, 'arena>"
+        "capnp_schema::GeneratedStructBuilder<'schema, 'arena, { TYPE_ID }>"
     } else {
         "capnp_schema::DynamicStructBuilder<'schema, 'arena>"
     };
@@ -1207,7 +1207,7 @@ fn emit_struct(
             .map_err(|_| GenerateError::Format)?;
     }
     if generated_bounds.is_empty() {
-        writeln!(output, "            Ok(Self {{ inner: capnp_schema::GeneratedStructBuilder::root(schema, arena, TYPE_ID)?, marker: PhantomData }})")
+        writeln!(output, "            Ok(Self {{ inner: capnp_schema::GeneratedStructBuilder::root(schema, arena)?, marker: PhantomData }})")
             .map_err(|_| GenerateError::Format)?;
     } else {
         writeln!(output, "            Ok(Self {{ inner: capnp_schema::DynamicStructBuilder::root_branded(schema, arena, TYPE_ID, {brand})?, marker: PhantomData }})")
@@ -1217,7 +1217,7 @@ fn emit_struct(
     if parameters.is_empty() {
         writeln!(output, "        #[doc(hidden)]\n        #[inline(always)]\n        pub fn from_dynamic(inner: capnp_schema::DynamicStructBuilder<'schema, 'arena>) -> Self {{ Self {{ inner: capnp_schema::GeneratedStructBuilder::from_dynamic(inner), marker: PhantomData }} }}")
             .map_err(|_| GenerateError::Format)?;
-        writeln!(output, "        #[doc(hidden)]\n        #[inline(always)]\n        pub fn from_generated(inner: capnp_schema::GeneratedStructBuilder<'schema, 'arena>) -> Self {{ Self {{ inner, marker: PhantomData }} }}")
+        writeln!(output, "        #[doc(hidden)]\n        #[inline(always)]\n        pub fn from_generated(inner: capnp_schema::GeneratedStructBuilder<'schema, 'arena, {{ TYPE_ID }}>) -> Self {{ Self {{ inner, marker: PhantomData }} }}")
             .map_err(|_| GenerateError::Format)?;
     } else {
         writeln!(output, "        #[doc(hidden)]\n        #[inline(always)]\n        pub fn from_dynamic(inner: capnp_schema::DynamicStructBuilder<'schema, 'arena>) -> Self {{ Self {{ inner, marker: PhantomData }} }}")
@@ -1240,7 +1240,7 @@ fn emit_struct(
         .map_err(|_| GenerateError::Format)?;
         writeln!(output, "        #[inline(always)]\n        fn from_builder<'schema, 'arena>(schema: &'schema capnp_schema::CompiledSchema, builder: capnp_message::StructBuilder<'arena>) -> Self::Builder<'schema, 'arena> {{")
             .map_err(|_| GenerateError::Format)?;
-        writeln!(output, "            Builder::from_generated(capnp_schema::GeneratedStructBuilder::from_struct_list_element(schema, TYPE_ID, builder))")
+        writeln!(output, "            Builder::from_generated(capnp_schema::GeneratedStructBuilder::<TYPE_ID>::from_struct_list_element(schema, builder))")
             .map_err(|_| GenerateError::Format)?;
         writeln!(output, "        }}\n    }}").map_err(|_| GenerateError::Format)?;
     }

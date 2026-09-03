@@ -1228,22 +1228,19 @@ macro_rules! generated_slot_setters {
 /// state. Generated direct-slot operations therefore do not execute drop glue
 /// when a short-lived list element builder leaves scope.
 #[doc(hidden)]
-pub struct GeneratedStructBuilder<'schema, 'arena> {
+pub struct GeneratedStructBuilder<'schema, 'arena, const TYPE_ID: NodeId> {
     schema: &'schema CompiledSchema,
-    type_id: NodeId,
     builder: StructBuilder<'arena>,
 }
 
-impl<'schema, 'arena> GeneratedStructBuilder<'schema, 'arena> {
+impl<'schema, 'arena, const TYPE_ID: NodeId> GeneratedStructBuilder<'schema, 'arena, TYPE_ID> {
     pub fn root(
         schema: &'schema CompiledSchema,
         arena: &'arena mut ExclusiveArena,
-        type_id: NodeId,
     ) -> Result<Self, DynamicError> {
-        let structure = require_struct(schema, type_id)?;
+        let structure = require_struct(schema, TYPE_ID)?;
         Ok(Self {
             schema,
-            type_id,
             builder: arena.init_root_struct(structure.data_word_count, structure.pointer_count)?,
         })
     }
@@ -1251,29 +1248,17 @@ impl<'schema, 'arena> GeneratedStructBuilder<'schema, 'arena> {
     #[inline(always)]
     pub fn from_dynamic(value: DynamicStructBuilder<'schema, 'arena>) -> Self {
         let DynamicStructBuilder {
-            schema,
-            type_id,
-            builder,
-            ..
+            schema, builder, ..
         } = value;
-        Self {
-            schema,
-            type_id,
-            builder,
-        }
+        Self { schema, builder }
     }
 
     #[inline(always)]
     pub const fn from_struct_list_element(
         schema: &'schema CompiledSchema,
-        type_id: NodeId,
         builder: StructBuilder<'arena>,
     ) -> Self {
-        Self {
-            schema,
-            type_id,
-            builder,
-        }
+        Self { schema, builder }
     }
 
     #[doc(hidden)]
@@ -1368,7 +1353,7 @@ impl<'schema, 'arena> GeneratedStructBuilder<'schema, 'arena> {
     pub fn set(&mut self, name: &str, value: DynamicInput<'_>) -> Result<(), DynamicError> {
         let mut dynamic = DynamicStructBuilder {
             schema: self.schema,
-            type_id: self.type_id,
+            type_id: TYPE_ID,
             brand: None,
             builder: self.builder.group(),
         };
@@ -1378,7 +1363,7 @@ impl<'schema, 'arena> GeneratedStructBuilder<'schema, 'arena> {
     pub fn activate(&mut self, name: &str) -> Result<(), DynamicError> {
         let mut dynamic = DynamicStructBuilder {
             schema: self.schema,
-            type_id: self.type_id,
+            type_id: TYPE_ID,
             brand: None,
             builder: self.builder.group(),
         };
@@ -1447,11 +1432,11 @@ impl<'schema, 'arena> GeneratedStructBuilder<'schema, 'arena> {
     }
 
     fn field_owned(&self, name: &str) -> Result<(Field, u32), DynamicError> {
-        let structure = require_struct(self.schema, self.type_id)?;
+        let structure = require_struct(self.schema, TYPE_ID)?;
         let field = structure
             .field(name)
             .ok_or_else(|| DynamicError::UnknownField {
-                type_id: self.type_id,
+                type_id: TYPE_ID,
                 name: name.to_owned(),
             })?
             .clone();
