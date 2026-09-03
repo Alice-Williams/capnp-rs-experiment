@@ -73,3 +73,27 @@ inlines its small header-defined operations around the builder library calls. Na
 also allocates its segment-descriptor `Vec` separately from the segment bytes.
 The first implementation experiment therefore exports the small hot builder
 chain for cross-crate inlining before changing storage representation.
+
+## Cross-crate inlining result
+
+Evidence: `benchmarks/results/2026-09-03-m53-build-inline-g-drive-docker`
+
+Adding ordinary `#[inline]` hints to the small public construction chain and
+its private checked helpers removes the indirect cross-crate calls without
+changing the arena representation or any safety check:
+
+| Case | Shape | C++ ns/message | Rust ns/message | Rust / C++ |
+| --- | --- | ---: | ---: | ---: |
+| fresh arena | direct `[3]` | 46.5355 | 45.1542 | 0.970 |
+| fresh arena | far `[1,3]` | 161.0687 | 127.6302 | 0.792 |
+
+Paired fresh-minus-prepared construction is 0.940 of C++ for the direct shape
+and 0.787 for the single-far shape. This clears the 1.03 incremental gate for
+the first two construction shapes without adding `unsafe` or changing storage.
+
+The tiny prepared cases report 1.062 and 1.080 ratios, but the absolute gaps
+are only 0.1738 and 0.2368 ns/message and the workload is dominated by a single
+iteration call and timer sensitivity. M50's longer isolated word/pointer tests
+already demonstrate parity. Before the final M53 gate, the prepared case will
+batch enough word operations per observation to make its cumulative ratio
+statistically meaningful rather than weakening the ceiling.
