@@ -23,8 +23,14 @@ cpp_root="$oracle_root/capnproto-$cpp_commit"
 bash "$repo_root/tools/build-cpp-oracle.sh" >/dev/null
 cpp_build="$cpp_root/message-build-benchmark"
 mkdir -p -- "$cpp_build"
+"$cpp_root/install/bin/capnp" compile \
+    -o"$cpp_root/install/bin/capnpc-c++":"$cpp_build" \
+    --src-prefix="$repo_root/benchmarks/message-build" \
+    "$repo_root/benchmarks/message-build/message_build.capnp"
 clang++ -std=c++23 -O3 -DNDEBUG -pthread \
-    -I"$cpp_root/install/include" "$repo_root/benchmarks/message-build/cpp/main.c++" \
+    -I"$cpp_root/install/include" -I"$cpp_build" \
+    "$repo_root/benchmarks/message-build/cpp/main.c++" \
+    "$cpp_build/message_build.capnp.c++" \
     -L"$cpp_root/install/lib" -lcapnp -lkj -o "$cpp_build/cpp-message-build"
 cargo build --locked --manifest-path "$repo_root/Cargo.toml" \
     --package capnp-native-benchmark --bin message_build --release >/dev/null
@@ -49,12 +55,19 @@ mkdir -p -- "$output"
     printf 'cpp_binary_sha256=%s\n' "$(sha256sum "$cpp_benchmark" | cut -d ' ' -f1)"
     printf 'native_binary_sha256=%s\n' "$(sha256sum "$native_benchmark" | cut -d ' ' -f1)"
     printf 'warmups=%s\nrecorded_runs=%s\npasses=%s\n' "$warmups" "$runs" "$passes"
-    printf 'shapes=direct:[3] words,far:[1,3] words\n'
+    printf 'shapes=direct:[3] words,far:[1,3] words,double-far:[1,2,2] words\n'
     printf 'timer=steady monotonic clock inside each binary\n'
 } > "$output/metadata.txt"
 
 printf 'implementation\tcase\tshape\tpasses\trun\telapsed_ns\tsemantic_checksum\twire_checksum\n' > "$output/results.tsv"
-workloads=('prepared direct' 'fresh direct' 'prepared far' 'fresh far')
+workloads=(
+    'prepared direct'
+    'fresh direct'
+    'prepared far'
+    'fresh far'
+    'prepared double-far'
+    'fresh double-far'
+)
 
 run_workload() {
     local implementation=$1 case_name=$2 shape=$3 run=$4

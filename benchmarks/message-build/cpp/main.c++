@@ -12,6 +12,8 @@
 #include <stdexcept>
 #include <string_view>
 
+#include "message_build.capnp.h"
+
 namespace {
 
 constexpr uint64_t SEED = 0x4d595df4d0f33173ull;
@@ -43,7 +45,7 @@ __attribute__((always_inline)) inline uint64_t readWord(
 }
 
 __attribute__((always_inline)) inline uint64_t hashPrepared(
-    const std::array<capnp::word, 4>& words, size_t wordCount,
+    const std::array<capnp::word, 5>& words, size_t wordCount,
     size_t segmentCount) {
   uint64_t hash = SEED ^ std::rotl(uint64_t{segmentCount}, 17)
       ^ std::rotl(uint64_t{wordCount}, 31);
@@ -69,10 +71,19 @@ __attribute__((always_inline)) inline uint64_t hashSegments(
 }
 
 __attribute__((noinline)) uint64_t preparedIteration(
-    bool far, uint64_t first, uint64_t second) {
-  std::array<capnp::word, 4> words{};
+    unsigned int shape, uint64_t first, uint64_t second) {
+  std::array<capnp::word, 5> words{};
   auto bytes = reinterpret_cast<capnp::byte*>(words.data());
-  if (far) {
+  if (shape == 2) {
+    // Three conceptual segments [1, 2, 2] with a double-far root.
+    setWord(bytes, 0, (uint64_t{2} << 32) | 6);
+    setWord(bytes, 1, first);
+    setWord(bytes, 2, second);
+    setWord(bytes, 3, (uint64_t{1} << 32) | 2);
+    setWord(bytes, 4, uint64_t{2} << 32);
+    return hashPrepared(words, 5, 3);
+  }
+  if (shape == 1) {
     // A matched prepared-storage lower case: four observable wire words split
     // conceptually as [1, 3], without arena allocation or object placement.
     setWord(bytes, 0, (uint64_t{1} << 32) | 2);
@@ -88,9 +99,17 @@ __attribute__((noinline)) uint64_t preparedIteration(
 }
 
 __attribute__((noinline)) uint64_t freshIteration(
-    bool far, uint64_t first, uint64_t second) {
+    unsigned int shape, uint64_t first, uint64_t second) {
   capnp::MallocMessageBuilder message(
-      far ? 1 : 3, capnp::AllocationStrategy::FIXED_SIZE);
+      shape == 0 ? 3 : 1, capnp::AllocationStrategy::FIXED_SIZE);
+  if (shape == 2) {
+    auto orphan = message.getOrphanage().newOrphan<BuildRoot>();
+    auto root = orphan.get();
+    root.setFirst(first);
+    root.setSecond(second);
+    message.adoptRoot(kj::mv(orphan));
+    return hashSegments(message.getSegmentsForOutput());
+  }
   auto root = message.getRoot<capnp::AnyPointer>().initAsAnyStruct(2, 0);
   auto data = root.getDataSection();
   setWord(data.begin(), 0, first);
@@ -102,19 +121,19 @@ __attribute__((noinline)) uint64_t freshIteration(
 
 int main(int argc, char** argv) {
   if (argc != 4) {
-    std::cerr << "usage: cpp-message-build prepared|fresh direct|far PASSES\n";
+    std::cerr << "usage: cpp-message-build prepared|fresh direct|far|double-far PASSES\n";
     return 2;
   }
   auto mode = std::string_view(argv[1]);
   auto shape = std::string_view(argv[2]);
   auto passes = parseSize(argv[3]);
   if ((mode != "prepared" && mode != "fresh")
-      || (shape != "direct" && shape != "far")) {
+      || (shape != "direct" && shape != "far" && shape != "double-far")) {
     std::cerr << "unknown benchmark mode or shape\n";
     return 2;
   }
 
-  auto far = shape == "far";
+  auto shapeId = shape == "direct" ? 0u : shape == "far" ? 1u : 2u;
   uint64_t semantic = SEED;
   uint64_t wire = SEED;
   auto started = std::chrono::steady_clock::now();
@@ -122,8 +141,8 @@ int main(int argc, char** argv) {
     auto first = VALUE ^ uint64_t{pass};
     auto second = std::rotl(first, 23);
     auto fingerprint = mode == "prepared"
-        ? preparedIteration(far, first, second)
-        : freshIteration(far, first, second);
+        ? preparedIteration(shapeId, first, second)
+        : freshIteration(shapeId, first, second);
     semantic = std::rotl(semantic, 9) ^ first ^ std::rotl(second, 13);
     wire = std::rotl(wire, 11) ^ fingerprint;
   }
