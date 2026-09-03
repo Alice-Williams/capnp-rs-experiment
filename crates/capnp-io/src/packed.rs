@@ -417,14 +417,15 @@ pub fn pack(input: &[u8], max_output_bytes: usize) -> Result<Vec<u8>, PackedErro
         if tag == 0 {
             check_output_limit(output.len(), 2, max_output_bytes)?;
             let mut additional_words = 0;
-            let mut next = offset + WORD_BYTES;
-            while additional_words < MAX_RUN_WORDS
-                && next < complete_bytes
-                && word_is_zero(&input[next..next + WORD_BYTES])
-            {
-                additional_words += 1;
-                next += WORD_BYTES;
+            let mut following_words =
+                input[offset + WORD_BYTES..complete_bytes].chunks_exact(WORD_BYTES);
+            while additional_words < MAX_RUN_WORDS {
+                match following_words.next() {
+                    Some(next_word) if word_is_zero(next_word) => additional_words += 1,
+                    _ => break,
+                }
             }
+            let next = offset + (additional_words + 1) * WORD_BYTES;
             output.reserve(2);
             output.extend_from_slice(&[
                 0,
@@ -453,18 +454,14 @@ pub fn pack(input: &[u8], max_output_bytes: usize) -> Result<Vec<u8>, PackedErro
             output.extend_from_slice(&input[run_start..next]);
             offset = next;
         } else {
-            let output_len = 1 + tag.count_ones() as usize;
-            check_output_limit(output.len(), output_len, max_output_bytes)?;
-            let mut encoded = [0_u8; 1 + WORD_BYTES];
-            encoded[0] = tag;
-            let mut encoded_len = 1;
+            let encoded_len = 1 + tag.count_ones() as usize;
+            check_output_limit(output.len(), encoded_len, max_output_bytes)?;
+            output.push(tag);
             for byte in word {
                 if *byte != 0 {
-                    encoded[encoded_len] = *byte;
-                    encoded_len += 1;
+                    output.push(*byte);
                 }
             }
-            output.extend_from_slice(&encoded[..encoded_len]);
             offset += WORD_BYTES;
         }
     }
