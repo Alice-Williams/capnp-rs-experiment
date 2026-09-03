@@ -1918,8 +1918,11 @@ impl StructBuilder<'_> {
         let discriminant_byte = self.data_element_offset(discriminant_offset, 2)?;
         let value_byte = self.data_element_offset(value_offset, 8)?;
         let segment = self.arena.segment_mut(self.reference.content.segment_id)?;
-        write_u16_le(segment, discriminant_byte, discriminant_value)?;
-        write_u64_le(segment, value_byte, value ^ default)?;
+        // The offset checks above prove both writes fit the allocated struct;
+        // the arena invariant keeps that complete allocation in this segment.
+        segment[discriminant_byte..discriminant_byte + 2]
+            .copy_from_slice(&discriminant_value.to_le_bytes());
+        segment[value_byte..value_byte + 8].copy_from_slice(&(value ^ default).to_le_bytes());
         Ok(())
     }
 
