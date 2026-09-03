@@ -577,18 +577,21 @@ fn word_tag(word: &[u8; WORD_BYTES]) -> u8 {
 }
 
 fn word_tag_slice(word: &[u8]) -> u8 {
-    u8::from(word[0] != 0)
-        | (u8::from(word[1] != 0) << 1)
-        | (u8::from(word[2] != 0) << 2)
-        | (u8::from(word[3] != 0) << 3)
-        | (u8::from(word[4] != 0) << 4)
-        | (u8::from(word[5] != 0) << 5)
-        | (u8::from(word[6] != 0) << 6)
-        | (u8::from(word[7] != 0) << 7)
+    const LOW_SEVEN_BITS: u64 = 0x7f7f_7f7f_7f7f_7f7f;
+    const HIGH_BITS: u64 = 0x8080_8080_8080_8080;
+    const PACK_BYTE_LSBS: u64 = 0x0102_0408_1020_4080;
+
+    let value = u64::from_le_bytes(
+        word.try_into()
+            .expect("packing only computes tags for complete words"),
+    );
+    let nonzero_high_bits =
+        ((value & LOW_SEVEN_BITS).wrapping_add(LOW_SEVEN_BITS) | value) & HIGH_BITS;
+    ((nonzero_high_bits >> 7).wrapping_mul(PACK_BYTE_LSBS) >> 56) as u8
 }
 
 fn word_is_zero(word: &[u8]) -> bool {
-    word == [0; WORD_BYTES]
+    u64::from_le_bytes(word.try_into().expect("packing only checks complete words")) == 0
 }
 
 fn zero_byte_count(word: &[u8; WORD_BYTES]) -> usize {
@@ -596,7 +599,7 @@ fn zero_byte_count(word: &[u8; WORD_BYTES]) -> usize {
 }
 
 fn zero_byte_count_slice(word: &[u8]) -> usize {
-    word.iter().filter(|byte| **byte == 0).count()
+    WORD_BYTES - word_tag_slice(word).count_ones() as usize
 }
 
 fn check_output_limit(current: usize, additional: usize, limit: usize) -> Result<(), PackedError> {
@@ -816,6 +819,26 @@ mod tests {
                     .try_for_each(|chunk| decoder.push(chunk))
                     .and_then(|()| decoder.finish());
                 assert_eq!(unpack(&packed, limit), streaming);
+            }
+        }
+    }
+
+    #[test]
+    fn parallel_byte_tag_matches_every_tag_and_nonzero_byte_class() {
+        for expected in 0_u8..=u8::MAX {
+            let mut word = [0_u8; WORD_BYTES];
+            for (lane, byte) in word.iter_mut().enumerate() {
+                if expected & (1 << lane) != 0 {
+                    *byte = lane as u8 + 1;
+                }
+            }
+            assert_eq!(word_tag_slice(&word), expected);
+        }
+        for value in [1, 0x7f, 0x80, u8::MAX] {
+            for lane in 0..WORD_BYTES {
+                let mut word = [0_u8; WORD_BYTES];
+                word[lane] = value;
+                assert_eq!(word_tag_slice(&word), 1 << lane);
             }
         }
     }
