@@ -153,3 +153,31 @@ root step.
 
 Evidence:
 `benchmarks/results/2026-09-03-m52-root-final-cached-g-drive-docker/`.
+
+## Final root result
+
+The explicit `read_root_struct()` API now keeps the complete checked direct-root
+path available for guaranteed cross-crate inlining. `StructReader` also offers
+a direct checked word accessor, avoiding construction and reslicing of an
+intermediate data-section view for generated scalar accessors. The general
+coordinate reader and `DataSection` APIs remain available.
+
+One million operations per sample produced:
+
+| Case | Segments | C++ ns/message | Rust ns/message | Rust / C++ | Ceiling |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| framing | 1 | 13.3078 | 4.0907 | 0.307 | — |
+| root | 1 | 42.1029 | 9.3457 | 0.222 | 0.331 |
+| framing | 2 | 35.5842 | 5.6812 | 0.160 | — |
+| root | 2 | 161.5577 | 25.0177 | 0.155 | 0.172 |
+| framing | 64 | 404.8284 | 150.2039 | 0.371 | — |
+| root | 64 | 530.7771 | 167.3190 | 0.315 | 0.349 |
+
+All cumulative gates pass with headroom. Paired incremental ratios are 0.182,
+0.153, and 0.136. The independent isolated-root ratios are 0.112, 0.149, and
+0.143, so the subtraction result is corroborated for every shape. This closes
+the root-read substep; primitive-field breadth, borrowed blobs, and retained
+reads remain open M52 work.
+
+Evidence:
+`benchmarks/results/2026-09-03-m52-root-final-inlined-g-drive-docker/`.
