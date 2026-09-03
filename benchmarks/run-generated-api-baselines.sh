@@ -98,6 +98,8 @@ workloads=(
     generated-builder-scalars
     direct-builder-blobs
     generated-builder-blobs
+    direct-builder-struct
+    generated-builder-struct
 )
 
 run_workload() {
