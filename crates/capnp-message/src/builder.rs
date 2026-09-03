@@ -1166,21 +1166,20 @@ impl ExclusiveArena {
         let source_end = source_start
             .checked_add(len)
             .ok_or(ArenaError::AllocationOverflow)?;
-        let copied = source_segment
-            .get(source_start..source_end)
-            .ok_or(ValidationError::ObjectOutOfBounds {
+        let source_bytes = source_segment.get(source_start..source_end).ok_or(
+            ValidationError::ObjectOutOfBounds {
                 location: source_location,
                 words,
                 segment_words: u64::try_from(source_segment.len() / 8)
                     .map_err(|_| ArenaError::AllocationOverflow)?,
-            })?
-            .to_vec();
+            },
+        )?;
         let destination_start = byte_offset(destination)?;
         let destination_end = destination_start
             .checked_add(len)
             .ok_or(ArenaError::AllocationOverflow)?;
         self.segment_mut(destination.segment_id)?[destination_start..destination_end]
-            .copy_from_slice(&copied);
+            .copy_from_slice(source_bytes);
         Ok(())
     }
 
