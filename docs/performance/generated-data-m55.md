@@ -123,3 +123,51 @@ backing and can outlive the caller's read context, which costs additional
 indirection and prevents accessor-returned blob borrows. It is useful when
 ownership is required, while the generated borrowed API now matches the C++
 reader's lifetime and memory model for hot synchronous traversal.
+
+## Corrected borrowed controls and scalar attribution
+
+The corrected eight-case evidence first recorded a distinct borrowed direct
+runtime control at
+[`benchmarks/results/2026-09-03-m55-generated-reader-borrowed-paired-g-drive-docker`](../../benchmarks/results/2026-09-03-m55-generated-reader-borrowed-paired-g-drive-docker).
+Disassembly of that build showed that neither compiler hoisted the fingerprint
+out of the loop. The native direct path retained the root reader's data-word
+count, allowing LLVM to combine short-section checks, while the generated
+cached byte slice emitted independent bounds/default branches. The generated
+typed enum also constructed `Color` and immediately converted it back to its
+ordinal; C++'s generated enum read is an unvalidated underlying ordinal.
+
+The safe fix has two parts:
+
+- `BorrowedReader` caches an optional reference to the schema's complete fixed
+  data prefix. Complete current-schema messages use constant array indexes;
+  short older messages use total checked reads and the same XOR defaults.
+- Enum fields expose an additional `{field}_ordinal()` getter. The typed getter
+  remains available and preserves `Unrecognized(u16)`, while code that needs
+  the wire ordinal no longer constructs and deconstructs the richer Rust enum.
+
+The prefix reference adds one pointer (eight bytes on this x86-64 target) to a
+borrowed generated reader. It does not copy data or allocate. This is a
+deliberate memory-for-codegen trade: current-schema scalar reads avoid repeated
+bounds branches, while schema-evolution behavior remains intact and tested.
+
+Final scalar/ordinal checkpoint evidence:
+[`benchmarks/results/2026-09-03-m55-generated-reader-ordinal-g-drive-docker`](../../benchmarks/results/2026-09-03-m55-generated-reader-ordinal-g-drive-docker)
+at native commit `ceba5d3`, using one million operations per sample:
+
+| Operation | C++ ns/op | Native ns/op | Native / C++ |
+| --- | ---: | ---: | ---: |
+| borrowed direct scalars | 4.5690 | 3.7981 | 0.831 |
+| borrowed generated scalars/ordinal | 3.6324 | 3.2443 | 0.893 |
+| borrowed direct text/data | 17.2404 | 8.9550 | 0.519 |
+| borrowed generated text/data | 20.5815 | 13.3336 | 0.648 |
+
+The generated scalar sequence is 10.7% faster than pinned C++ and 14.6%
+faster than native direct access. It does not yet satisfy the literal inherited
+0.831 direct ratio plus tolerance, although both languages' generated sequence
+is faster than its direct control and both subtracted increments are below
+resolution. Isolated scalar and enum accessors must resolve that gate.
+
+The borrowed blob operation remains 35.2% faster end to end, but its generated
+pointer/blob increment is about 4.06 ns versus 1.18 ns in C++. That incremental
+gate remains open; the next reader work isolates pointer following, text NUL
+adjustment, and data view construction before moving to lists and structs.
