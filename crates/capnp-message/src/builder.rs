@@ -25,6 +25,7 @@ use capnp_wire::{
     write_i32_le, write_i64_le, write_u8, write_u16_le, write_u32_le, write_u64_le,
 };
 
+use crate::validation::FastByteList;
 use crate::{
     ListRef, MessageSegments, NestingLimit, ResolvedPointer, TraversalBudget, TraversalError,
     ValidationError, WireLocation,
@@ -816,7 +817,30 @@ impl ExclusiveArena {
         budget: &B,
     ) -> Result<(), GraphError> {
         while let Some(task) = tasks.pop() {
-            let bounded = source.validate_pointer_with_limits(task.source, budget, task.nesting)?;
+            if task.source != WireLocation::ROOT {
+                match source.try_read_byte_list_fast(task.source, budget, task.nesting) {
+                    FastByteList::Null => {}
+                    FastByteList::Bytes(bytes) => {
+                        let count = u32::try_from(bytes.len())
+                            .map_err(|_| ArenaError::AllocationOverflow)?;
+                        let target = self.allocate_data_list(ElementSize::Byte, count)?;
+                        self.emit_list(task.destination, target)?;
+                        let start = byte_offset(target.content)?;
+                        let end = start
+                            .checked_add(bytes.len())
+                            .ok_or(ArenaError::AllocationOverflow)?;
+                        self.segment_mut(target.content.segment_id)?[start..end]
+                            .copy_from_slice(bytes);
+                        continue;
+                    }
+                    FastByteList::Slow => {}
+                }
+            }
+            let bounded = if task.source == WireLocation::ROOT {
+                source.validate_root_struct_pointer_with_limits(budget, task.nesting)?
+            } else {
+                source.validate_pointer_with_limits(task.source, budget, task.nesting)?
+            };
             match bounded.pointer {
                 ResolvedPointer::Null => self.write_pointer(task.destination, WirePointer::NULL)?,
                 ResolvedPointer::Capability(capability) => self.write_pointer(
