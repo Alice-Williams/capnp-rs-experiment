@@ -97,6 +97,62 @@ pub struct StructReader<'context, 'data, B> {
     nesting: NestingLimit,
 }
 
+/// A precomputed view of a struct's pointer slots.
+#[derive(Debug)]
+pub struct PointerSection<'context, 'data, B> {
+    segments: &'context MessageSegments<'data>,
+    budget: &'context B,
+    base: WireLocation,
+    pointer_count: u16,
+    nesting: NestingLimit,
+}
+
+impl<'context, 'data, B> Clone for PointerSection<'context, 'data, B> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<'context, 'data, B> Copy for PointerSection<'context, 'data, B> {}
+
+impl<'context, 'data, B: TraversalBudget> PointerSection<'context, 'data, B> {
+    #[inline(always)]
+    fn location(self, index: u16) -> Result<Option<WireLocation>, StructReadError> {
+        if index >= self.pointer_count {
+            return Ok(None);
+        }
+        let word_offset = self
+            .base
+            .word_offset
+            .checked_add(u32::from(index))
+            .ok_or(StructReadError::RangeOverflow)?;
+        Ok(Some(WireLocation {
+            segment_id: self.base.segment_id,
+            word_offset,
+        }))
+    }
+
+    #[inline(always)]
+    pub fn read_text(self, index: u16) -> Result<TextReader<'data>, StructReadError> {
+        match self.location(index)? {
+            Some(location) => Ok(self
+                .segments
+                .read_text(location, self.budget, self.nesting)?),
+            None => Ok(TextReader::empty()),
+        }
+    }
+
+    #[inline(always)]
+    pub fn read_data(self, index: u16) -> Result<DataReader<'data>, StructReadError> {
+        match self.location(index)? {
+            Some(location) => Ok(self
+                .segments
+                .read_data(location, self.budget, self.nesting)?),
+            None => Ok(DataReader::empty()),
+        }
+    }
+}
+
 impl<'context, 'data, B> Clone for StructReader<'context, 'data, B> {
     fn clone(&self) -> Self {
         *self
@@ -315,6 +371,34 @@ impl<'context, 'data, B: TraversalBudget> StructReader<'context, 'data, B> {
                 segment_bytes: segment.len(),
             })?;
         Ok(DataSection::from_validated_bytes(data))
+    }
+
+    #[inline(always)]
+    pub fn pointer_section(self) -> Result<PointerSection<'context, 'data, B>, StructReadError> {
+        let (base, pointer_count) = match self.reference {
+            Some(reference) => {
+                let word_offset = reference
+                    .content
+                    .word_offset
+                    .checked_add(u32::from(reference.data_words))
+                    .ok_or(StructReadError::RangeOverflow)?;
+                (
+                    WireLocation {
+                        segment_id: reference.content.segment_id,
+                        word_offset,
+                    },
+                    reference.pointer_count,
+                )
+            }
+            None => (WireLocation::ROOT, 0),
+        };
+        Ok(PointerSection {
+            segments: self.segments,
+            budget: self.budget,
+            base,
+            pointer_count,
+            nesting: self.nesting,
+        })
     }
 
     #[inline(always)]

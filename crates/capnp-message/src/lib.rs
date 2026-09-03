@@ -61,8 +61,8 @@ pub use parallel_builder::{
 };
 pub use primitive::{DataSection, EnumValue, PrimitiveError, PrimitiveType, PrimitiveValue};
 pub use structure::{
-    PointerDefault, ResolvedPointerField, StructReadError, StructReader, UnionDiscriminant,
-    UnionValue,
+    PointerDefault, PointerSection, ResolvedPointerField, StructReadError, StructReader,
+    UnionDiscriminant, UnionValue,
 };
 pub use validation::{
     BoundedPointer, CapabilityRef, ListRef, MessageSegments, ResolvedPointer, StructRef,

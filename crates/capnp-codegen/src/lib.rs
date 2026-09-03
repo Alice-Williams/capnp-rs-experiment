@@ -1177,11 +1177,11 @@ fn emit_borrowed_reader(
         "    #[allow(dead_code)]\n    #[derive(Clone, Copy, Debug)]"
     )
     .map_err(|_| GenerateError::Format)?;
-    writeln!(output, "    pub struct BorrowedReader<'context, 'data, B: capnp_message::TraversalBudget> {{ inner: capnp_message::StructReader<'context, 'data, B>, data: capnp_message::DataSection<'data>, full_data: Option<&'data [u8; {data_bytes}]> }}")
+    writeln!(output, "    pub struct BorrowedReader<'context, 'data, B: capnp_message::TraversalBudget> {{ pointers: capnp_message::PointerSection<'context, 'data, B>, data: capnp_message::DataSection<'data>, full_data: Option<&'data [u8; {data_bytes}]> }}")
         .map_err(|_| GenerateError::Format)?;
     writeln!(output, "    impl<'context, 'data, B: capnp_message::TraversalBudget> BorrowedReader<'context, 'data, B> {{")
         .map_err(|_| GenerateError::Format)?;
-    writeln!(output, "        #[doc(hidden)]\n        pub fn from_reader(inner: capnp_message::StructReader<'context, 'data, B>) -> Result<Self, capnp_schema::DynamicError> {{ let data = inner.data_section()?; let full_data = data.as_bytes().get(..{data_bytes}).and_then(|bytes| bytes.try_into().ok()); Ok(Self {{ inner, data, full_data }}) }}")
+    writeln!(output, "        #[doc(hidden)]\n        pub fn from_reader(inner: capnp_message::StructReader<'context, 'data, B>) -> Result<Self, capnp_schema::DynamicError> {{ let data = inner.data_section()?; let full_data = data.as_bytes().get(..{data_bytes}).and_then(|bytes| bytes.try_into().ok()); Ok(Self {{ pointers: inner.pointer_section()?, data, full_data }}) }}")
         .map_err(|_| GenerateError::Format)?;
     for field in &structure.fields {
         emit_borrowed_reader_field(output, field, names)?;
@@ -1286,18 +1286,18 @@ fn emit_borrowed_reader_field(
     let body = match (ty, default_value) {
         (Type::Text, Value::Text(value)) if value.is_empty() => Some((
             "capnp_message::TextReader<'data>".to_owned(),
-            format!("Ok(self.inner.read_text({offset}, None)?)"),
+            format!("self.pointers.read_text({offset})"),
         )),
         (Type::Data, Value::Data(value)) if value.is_empty() => Some((
             "capnp_message::DataReader<'data>".to_owned(),
-            format!("Ok(self.inner.read_data({offset}, None)?)"),
+            format!("self.pointers.read_data({offset})"),
         )),
         _ => None,
     };
     let Some((return_type, expression)) = body else {
         return Ok(());
     };
-    writeln!(output, "        pub fn {method}(&self) -> Result<{return_type}, capnp_schema::DynamicError> {{ {expression} }}")
+    writeln!(output, "        pub fn {method}(&self) -> Result<{return_type}, capnp_message::StructReadError> {{ {expression} }}")
         .map_err(|_| GenerateError::Format)
 }
 
