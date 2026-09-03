@@ -4,6 +4,7 @@ set -euo pipefail
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 result_dir=${1:-"$repo_root/benchmarks/results/2026-09-03-m52-root-baseline-g-drive-docker"}
 expected_passes=${2:-100000}
+gate_mode=${3:-structural}
 workload_count=$(tail -n +2 "$result_dir/results.tsv" | cut -f2,3 | sort -u | wc -l)
 expected_results=$((1 + workload_count * 2 * 11))
 expected_summary=$((1 + workload_count * 2))
@@ -27,7 +28,7 @@ awk -F '\t' -v expected="$expected_results" -v passes="$expected_passes" '
   NR == 1 { if ($0 != "implementation\tcase\tsegments\tpasses\trun\telapsed_ns\tchecksum") exit 1; next }
   NF != 7 || $4 != passes || $6 <= 0 || $7 < 0 { exit 1 }
   $1 != "cpp" && $1 != "native" { exit 1 }
-  $2 != "framing" && $2 != "root" && $2 != "isolated-root" && $2 != "scalars" && $2 != "isolated-scalars" && $2 != "scalar-only" && $2 != "blobs" && $2 != "isolated-blobs" && $2 != "blob-only" { exit 1 }
+  $2 != "framing" && $2 != "root" && $2 != "isolated-root" && $2 != "scalars" && $2 != "isolated-scalars" && $2 != "scalar-only" && $2 != "blobs" && $2 != "isolated-blobs" && $2 != "blob-only" && $2 != "retained-root" { exit 1 }
   $3 != 1 && $3 != 2 && $3 != 64 { exit 1 }
   !($2 FS $3 in checksum) { checksum[$2 FS $3] = $7; next }
   $7 != checksum[$2 FS $3] { exit 1 }
@@ -39,4 +40,28 @@ awk -F '\t' 'NR == 1 { next } NF != 6 || $2 <= 0 || $3 <= 0 || $4 <= 0 || $5 <= 
 if test -e "$result_dir/scalar-incremental.tsv"; then
     test "$(wc -l < "$result_dir/scalar-incremental.tsv")" -eq 4
     awk -F '\t' 'NR == 1 { next } NF != 7 || $2 <= 0 || $3 <= 0 || $4 <= 0 || $5 <= 0 { exit 1 } END { if (NR != 4) exit 1 }' "$result_dir/scalar-incremental.tsv"
+fi
+
+if [[ "$gate_mode" == final ]]; then
+    test "$workload_count" -eq 30
+    awk -F '\t' '
+      function ceiling(segments) {
+        if (segments == 1) return 0.331
+        if (segments == 2) return 0.172
+        if (segments == 64) return 0.349
+        exit 1
+      }
+      NR == 1 { next }
+      $1 == "root" || $1 == "scalars" || $1 == "blobs" {
+        cumulative += 1
+        if ($5 > ceiling($2)) exit 1
+      }
+      $1 == "scalar-only" || $1 == "blob-only" || $1 == "retained-root" {
+        component += 1
+        if ($5 > 1.03) exit 1
+      }
+      END { if (cumulative != 9 || component != 9) exit 1 }
+    ' "$result_dir/comparison.tsv"
+    awk -F '\t' 'NR == 1 { next } $4 > 1.03 { exit 1 } END { if (NR != 4) exit 1 }' \
+        "$result_dir/incremental.tsv"
 fi
