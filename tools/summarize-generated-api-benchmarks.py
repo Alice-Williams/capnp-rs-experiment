@@ -98,6 +98,7 @@ def main() -> None:
                 "list",
                 "struct-list",
                 "struct-list-hot",
+                "pointer-list",
             ):
                 direct_case = f"direct-builder-{shape}"
                 generated_case = f"generated-builder-{shape}"

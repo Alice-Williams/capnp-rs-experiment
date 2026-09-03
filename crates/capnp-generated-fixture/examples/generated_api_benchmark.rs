@@ -8,7 +8,7 @@ use capnp_io::{FrameLimits, FrameRead, parse_frame};
 use capnp_message::{
     BorrowedMessage, ExclusiveArena, OwnedMessage, ReaderLimits, StructBuilder, StructReadError,
 };
-use capnp_schema::{CompiledSchema, LoadLimits, NodeKind};
+use capnp_schema::{CompiledSchema, DynamicInput, LoadLimits, NodeKind};
 
 const SEED: u64 = 0x4d59_5df4_d0f3_3173;
 const REQUEST: &[u8] = include_bytes!(concat!(
@@ -34,7 +34,7 @@ const EMPTY_FRAME: &[u8] = &[0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let mode = args.next().ok_or(
-        "usage: generated_api_benchmark direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups|borrowed-direct-lists|borrowed-lists|borrowed-direct-nested|borrowed-nested|borrowed-direct-struct-lists|borrowed-struct-lists|borrowed-direct-evolution|borrowed-evolution|borrowed-direct-defaults|borrowed-defaults|direct-builder-scalars|generated-builder-scalars|direct-builder-blobs|generated-builder-blobs|direct-builder-struct|generated-builder-struct|direct-builder-list|generated-builder-list|direct-builder-struct-list|generated-builder-struct-list|direct-builder-struct-list-hot|generated-builder-struct-list-hot PASSES",
+        "usage: generated_api_benchmark direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups|borrowed-direct-lists|borrowed-lists|borrowed-direct-nested|borrowed-nested|borrowed-direct-struct-lists|borrowed-struct-lists|borrowed-direct-evolution|borrowed-evolution|borrowed-direct-defaults|borrowed-defaults|direct-builder-scalars|generated-builder-scalars|direct-builder-blobs|generated-builder-blobs|direct-builder-struct|generated-builder-struct|direct-builder-list|generated-builder-list|direct-builder-struct-list|generated-builder-struct-list|direct-builder-struct-list-hot|generated-builder-struct-list-hot|direct-builder-pointer-list|generated-builder-pointer-list PASSES",
     )?;
     let passes = args.next().ok_or("missing passes")?.parse::<usize>()?;
     if args.next().is_some()
@@ -73,6 +73,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 | "generated-builder-struct-list"
                 | "direct-builder-struct-list-hot"
                 | "generated-builder-struct-list-hot"
+                | "direct-builder-pointer-list"
+                | "generated-builder-pointer-list"
         )
     {
         return Err("expected a known mode and positive PASSES".into());
@@ -175,16 +177,19 @@ fn run_builder_benchmark(
     passes: usize,
     schema: &CompiledSchema,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let words_per_pass = if mode.ends_with("builder-struct-list") {
-        5
-    } else if mode.ends_with("builder-blobs")
-        || mode.ends_with("builder-struct")
-        || mode.ends_with("builder-list")
-    {
-        2
-    } else {
-        0
-    };
+    let words_per_pass =
+        if mode.ends_with("builder-pointer-list") {
+            6
+        } else if mode.ends_with("builder-struct-list") {
+            5
+        } else if mode.ends_with("builder-blobs")
+            || mode.ends_with("builder-struct")
+            || mode.ends_with("builder-list")
+        {
+            2
+        } else {
+            0
+        };
     let max_words = if words_per_pass == 0 {
         1_024
     } else {
@@ -296,6 +301,31 @@ fn run_builder_benchmark(
             &mut builder,
             write_generated_list,
             list_builder_fingerprint,
+        )?
+    } else if mode == "direct-builder-pointer-list" {
+        let node = schema
+            .node(wire_fixture::TYPE_ID)
+            .ok_or("WireFixture schema is missing")?;
+        let NodeKind::Struct(structure) = &node.kind else {
+            return Err("WireFixture is not a struct".into());
+        };
+        let mut builder =
+            arena.init_root_struct(structure.data_word_count, structure.pointer_count)?;
+        started = Instant::now();
+        measure_builder(
+            passes,
+            &mut builder,
+            write_direct_pointer_list,
+            pointer_list_builder_fingerprint,
+        )?
+    } else if mode == "generated-builder-pointer-list" {
+        let mut builder = wire_fixture::Builder::init_root(schema, &mut arena)?;
+        started = Instant::now();
+        measure_builder(
+            passes,
+            &mut builder,
+            write_generated_pointer_list,
+            pointer_list_builder_fingerprint,
         )?
     } else if mode == "direct-builder-struct-list-hot" {
         let node = schema
@@ -503,6 +533,41 @@ fn write_generated_struct_list(
 fn struct_list_builder_fingerprint(pass: usize) -> u64 {
     let values = struct_list_builder_values(pass);
     u64::from(values[0]).rotate_left(17) ^ u64::from(values[1]).rotate_left(41)
+}
+
+const POINTER_LIST_TEXT: [[&str; 2]; 2] =
+    [["capnp-list-a", "pointer-a"], ["capnp-list-b", "pointer-b"]];
+
+fn write_direct_pointer_list(
+    builder: &mut StructBuilder<'_>,
+    pass: usize,
+) -> Result<(), capnp_message::ArenaError> {
+    let values = POINTER_LIST_TEXT[pass & 1];
+    let mut list = builder.init_pointer_list(15, 2)?;
+    list.set_text(0, values[0])?;
+    list.set_text(1, values[1])
+}
+
+fn write_generated_pointer_list(
+    builder: &mut wire_fixture::Builder<'_, '_>,
+    pass: usize,
+) -> Result<(), capnp_schema::DynamicError> {
+    let values = POINTER_LIST_TEXT[pass & 1];
+    let mut list = builder.init_texts(2)?;
+    list.set(0, DynamicInput::Text(values[0]))?;
+    list.set(1, DynamicInput::Text(values[1]))
+}
+
+fn pointer_list_builder_fingerprint(pass: usize) -> u64 {
+    let values = POINTER_LIST_TEXT[pass & 1];
+    let first = values[0].as_bytes();
+    let second = values[1].as_bytes();
+    let mut value = (first.len() as u64).rotate_left(11) ^ (second.len() as u64).rotate_left(23);
+    value ^=
+        u64::from(first[0]).rotate_left(31) ^ u64::from(first[first.len() - 1]).rotate_left(37);
+    value
+        ^ u64::from(second[0]).rotate_left(43)
+        ^ u64::from(second[second.len() - 1]).rotate_left(47)
 }
 
 fn write_direct_scalars(
