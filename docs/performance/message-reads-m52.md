@@ -115,3 +115,27 @@ root-read benchmark must corroborate it before this layer is final.
 
 Evidence:
 `benchmarks/results/2026-09-03-m52-shared-descriptors-g-drive-docker/`.
+
+## Isolated-root evidence
+
+An additional `isolated-root` case constructs a reader over prevalidated
+segment descriptors and performs the same charged root/data/value read without
+standard-frame parsing. It uses C++ `SegmentArrayMessageReader` and Rust
+`MessageSegments::from_descriptors`, so neither side receives framing work.
+
+| Segments | C++ ns/read | Rust ns/read | Rust / C++ |
+| ---: | ---: | ---: | ---: |
+| 1 | 33.2673 | 17.0007 | 0.511 |
+| 2 | 146.5764 | 26.0796 | 0.178 |
+| 64 | 166.4644 | 24.1414 | 0.145 |
+
+This independently confirms that the root component is faster for every
+shape, including the noisy 64-segment subtraction. In the same run the
+two- and 64-segment cumulative ratios remained within their ceilings at 0.166
+and 0.340. The one-segment cumulative ratio varied to 0.378, above its 0.331
+ceiling, despite its component remaining 1.96x faster. Because the lower-layer
+advantage must hold across repeated runs rather than one favorable checkpoint,
+segment-zero lookup remains an optimization target.
+
+Evidence:
+`benchmarks/results/2026-09-03-m52-root-isolated-g-drive-docker/`.
