@@ -80,6 +80,8 @@ workloads=(
     borrowed-lists
     borrowed-direct-nested
     borrowed-nested
+    borrowed-direct-struct-lists
+    borrowed-struct-lists
 )
 
 run_workload() {

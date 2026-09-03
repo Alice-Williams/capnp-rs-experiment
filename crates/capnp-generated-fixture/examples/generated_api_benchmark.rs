@@ -24,7 +24,7 @@ const FRAME: &[u8] = include_bytes!(concat!(
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let mode = args.next().ok_or(
-        "usage: generated_api_benchmark direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups|borrowed-direct-lists|borrowed-lists|borrowed-direct-nested|borrowed-nested PASSES",
+        "usage: generated_api_benchmark direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups|borrowed-direct-lists|borrowed-lists|borrowed-direct-nested|borrowed-nested|borrowed-direct-struct-lists|borrowed-struct-lists PASSES",
     )?;
     let passes = args.next().ok_or("missing passes")?.parse::<usize>()?;
     if args.next().is_some()
@@ -45,6 +45,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 | "borrowed-lists"
                 | "borrowed-direct-nested"
                 | "borrowed-nested"
+                | "borrowed-direct-struct-lists"
+                | "borrowed-struct-lists"
         )
     {
         return Err("expected a known mode and positive PASSES".into());
@@ -112,6 +114,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })?,
         "borrowed-nested" => measure(passes, || {
             borrowed_nested_fingerprint(&borrowed).map_err(Into::into)
+        })?,
+        "borrowed-direct-struct-lists" => measure(passes, || {
+            direct_struct_list_fingerprint(borrowed_direct).map_err(Into::into)
+        })?,
+        "borrowed-struct-lists" => measure(passes, || {
+            borrowed_struct_list_fingerprint(&borrowed).map_err(Into::into)
         })?,
         _ => unreachable!(),
     };
@@ -335,6 +343,25 @@ fn borrowed_nested_fingerprint<B: capnp_message::TraversalBudget>(
 ) -> Result<u64, StructReadError> {
     let reader = black_box(reader);
     Ok(u64::from(reader.node()?.value()))
+}
+
+fn direct_struct_list_fingerprint<B: capnp_message::TraversalBudget>(
+    reader: capnp_message::StructReader<'_, '_, B>,
+) -> Result<u64, Box<dyn std::error::Error>> {
+    let reader = black_box(reader);
+    let node = reader
+        .pointer_section()?
+        .read_list(17)?
+        .as_structs()?
+        .get(1)?;
+    Ok(u64::from(node.data_section()?.get_u32(0, 0)))
+}
+
+fn borrowed_struct_list_fingerprint<B: capnp_message::TraversalBudget>(
+    reader: &wire_fixture::BorrowedReader<'_, '_, B>,
+) -> Result<u64, Box<dyn std::error::Error>> {
+    let reader = black_box(reader);
+    Ok(u64::from(reader.structs()?.get(1)?.value()))
 }
 
 fn owned_frame() -> Result<Arc<OwnedMessage>, Box<dyn std::error::Error>> {

@@ -193,6 +193,15 @@ uint64_t generatedNestedFingerprint(WireFixture::Reader root) {
   return root.getNode().getValue();
 }
 
+uint64_t directStructListFingerprint(capnp::AnyStruct::Reader root) {
+  auto nodes = root.getPointerSection()[17].getAs<capnp::List<capnp::AnyStruct>>();
+  return readData<uint32_t>(nodes[1].getDataSection(), 0);
+}
+
+uint64_t generatedStructListFingerprint(WireFixture::Reader root) {
+  return root.getStructs()[1].getValue();
+}
+
 template <typename Root, typename Fingerprint>
 uint64_t measure(Root root, Fingerprint fingerprint, size_t passes) {
   uint64_t checksum = SEED;
@@ -208,7 +217,7 @@ uint64_t measure(Root root, Fingerprint fingerprint, size_t passes) {
 
 int main(int argc, char** argv) {
   if (argc != 4) {
-    std::cerr << "usage: cpp-generated-api direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups|borrowed-direct-lists|borrowed-lists|borrowed-direct-nested|borrowed-nested PASSES FIXTURE\n";
+    std::cerr << "usage: cpp-generated-api direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups|borrowed-direct-lists|borrowed-lists|borrowed-direct-nested|borrowed-nested|borrowed-direct-struct-lists|borrowed-struct-lists PASSES FIXTURE\n";
     return 2;
   }
   auto mode = std::string_view(argv[1]);
@@ -240,6 +249,10 @@ int main(int argc, char** argv) {
     checksum = measure(message.getRoot<capnp::AnyStruct>(), directNestedFingerprint, passes);
   } else if (mode == "borrowed-nested") {
     checksum = measure(message.getRoot<WireFixture>(), generatedNestedFingerprint, passes);
+  } else if (mode == "borrowed-direct-struct-lists") {
+    checksum = measure(message.getRoot<capnp::AnyStruct>(), directStructListFingerprint, passes);
+  } else if (mode == "borrowed-struct-lists") {
+    checksum = measure(message.getRoot<WireFixture>(), generatedStructListFingerprint, passes);
   } else {
     std::cerr << "unknown benchmark mode\n";
     return 2;
