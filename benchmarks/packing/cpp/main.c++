@@ -104,7 +104,7 @@ std::vector<uint8_t> unpackOnce(
 size_t streamChunkWords(std::string_view shape) {
   if (shape == "zero" || shape == "raw") return 256;
   if (shape == "mixed") return 8;
-  if (shape == "realistic") return 100;
+  if (shape == "realistic") return 400;
   throw std::invalid_argument("unknown shape");
 }
 

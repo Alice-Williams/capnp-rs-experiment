@@ -82,7 +82,7 @@ fn stream_chunk_words(shape: &str) -> usize {
     match shape {
         "zero" | "raw" => 256,
         "mixed" => 8,
-        "realistic" => 100,
+        "realistic" => 400,
         _ => unreachable!("validated by make_input"),
     }
 }
