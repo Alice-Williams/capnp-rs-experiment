@@ -698,3 +698,33 @@ control. Generated reflection adds about 106 ns and discards that advantage.
 The next change emits a constant-slot typed Text-list initializer and setter,
 while preserving the dynamic list builder for reflection, nested generic
 lists, unions, and other runtime-selected element types.
+
+## Pointer-list builder gate
+
+Generated initializers for ordinary, non-union `List(Text)` and `List(Data)`
+fields now embed their pointer slot and enter the checked wire builder directly.
+They return typed list builders whose setters accept `&str` and `&[u8]`, so the
+hot path no longer performs field-name lookup, clones list metadata, resolves a
+runtime brand, constructs dynamic storage, or wraps each value in
+`DynamicInput`. Reflection, unions, nested generic lists, and runtime-selected
+element types retain the dynamic path.
+
+Generated-source tests require the `texts` initializer to contain constant
+pointer slot 15 and reject dynamic `init_list("texts")` dispatch. Fixture tests
+round-trip typed Text and Data lists through the checked reader. Allocation,
+payload copying, bounds checks, output limits, and pointer emission remain in
+the existing safe runtime primitives.
+
+Final five-million-operation evidence at native commit `e4510e0` is in
+[`benchmarks/results/2026-09-03-m55-pointer-list-typed-5m`](../../benchmarks/results/2026-09-03-m55-pointer-list-typed-5m).
+
+| Operation | C++ ns/op | Native ns/op | Native / C++ |
+| --- | ---: | ---: | ---: |
+| direct two-element Text-list construction | 102.4746 | 82.8371 | 0.808 |
+| generated two-element Text-list construction | 108.1263 | 83.8602 | 0.776 |
+
+Generated Rust is 22.4% faster than generated C++ and improves on the paired
+direct-runtime ratio. Native generated-minus-direct is negative, while the
+C++ difference is only 0.0233 ns, so the incremental comparison is below timer
+resolution. The ordinary Text/Data pointer-list builder gate is closed;
+unions, defaults, and evolution builders remain open.
