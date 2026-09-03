@@ -2641,14 +2641,32 @@ fn emit_builder_field(
                 Type::Struct { type_id, brand } => {
                     let target =
                         struct_builder_type(schema, *type_id, Some(brand), names, context)?;
-                    writeln!(output, "        pub fn init_{method}(&mut self) -> Result<{target}, capnp_schema::DynamicError> {{")
-                    .map_err(|_| GenerateError::Format)?;
-                    writeln!(
-                        output,
-                        "            Ok(<{target}>::from_dynamic(self.inner.init_struct({:?})?))",
-                        field.name
-                    )
-                    .map_err(|_| GenerateError::Format)?;
+                    if field.discriminant_value.is_none() && brand.scopes.is_empty() {
+                        let child = schema
+                            .node(*type_id)
+                            .ok_or(GenerateError::UnknownType(*type_id))?;
+                        let NodeKind::Struct(child_structure) = &child.kind else {
+                            return Err(GenerateError::UnknownType(*type_id));
+                        };
+                        writeln!(output, "        #[inline(always)]\n        pub fn init_{method}(&mut self) -> Result<{target}, capnp_schema::DynamicError> {{")
+                            .map_err(|_| GenerateError::Format)?;
+                        writeln!(
+                            output,
+                            "            Ok(<{target}>::from_dynamic(self.inner.init_struct_slot({offset}, 0x{type_id:016x}, {}, {})?))",
+                            child_structure.data_word_count,
+                            child_structure.pointer_count,
+                        )
+                        .map_err(|_| GenerateError::Format)?;
+                    } else {
+                        writeln!(output, "        pub fn init_{method}(&mut self) -> Result<{target}, capnp_schema::DynamicError> {{")
+                            .map_err(|_| GenerateError::Format)?;
+                        writeln!(
+                            output,
+                            "            Ok(<{target}>::from_dynamic(self.inner.init_struct({:?})?))",
+                            field.name
+                        )
+                        .map_err(|_| GenerateError::Format)?;
+                    }
                     writeln!(output, "        }}").map_err(|_| GenerateError::Format)?;
                 }
                 Type::List(_) => {
@@ -3134,6 +3152,16 @@ mod tests {
             !generated
                 .source
                 .contains("self.inner.set(\"data\", capnp_schema::DynamicInput::Data(value))")
+        );
+        assert!(
+            generated
+                .source
+                .contains("self.inner.init_struct_slot(22, 0xae37c0cc5acf02c6, 1, 1)")
+        );
+        assert!(
+            !generated
+                .source
+                .contains("self.inner.init_struct(\"node\")")
         );
         assert!(
             generated

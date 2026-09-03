@@ -1273,6 +1273,33 @@ impl<'schema, 'arena> DynamicStructBuilder<'schema, 'arena> {
         Ok(self.builder.set_data(u16_offset(offset)?, value)?)
     }
 
+    /// Initializes a statically generated, unbranded struct field without
+    /// repeating dynamic field and schema lookup.
+    ///
+    /// The code generator supplies layout constants from the same compiled
+    /// schema used to construct this builder. Allocation and offset handling
+    /// remain checked by the underlying message builder.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn init_struct_slot(
+        &mut self,
+        offset: u32,
+        type_id: NodeId,
+        data_word_count: u16,
+        pointer_count: u16,
+    ) -> Result<DynamicStructBuilder<'schema, '_>, DynamicError> {
+        Ok(DynamicStructBuilder {
+            schema: self.schema,
+            type_id,
+            brand: Brand::default(),
+            builder: self.builder.init_struct(
+                u16_offset(offset)?,
+                data_word_count,
+                pointer_count,
+            )?,
+        })
+    }
+
     /// Resolves a field's runtime type through this builder's current brand.
     pub fn field_type(&self, name: &str) -> Result<Type, DynamicError> {
         let (field, _) = self.field_owned(name)?;
