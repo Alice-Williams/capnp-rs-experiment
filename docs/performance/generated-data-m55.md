@@ -728,3 +728,28 @@ direct-runtime ratio. Native generated-minus-direct is negative, while the
 C++ difference is only 0.0233 ns, so the incremental comparison is below timer
 resolution. The ordinary Text/Data pointer-list builder gate is closed;
 unions, defaults, and evolution builders remain open.
+
+## Union builder baseline
+
+The paired union workload selects the scalar `choice.number` arm and writes a
+pass-dependent `UInt64`. Both direct controls write discriminant offset 19 and
+payload offset 6. Generated C++ uses `getChoice().setNumber()`, while generated
+Rust currently obtains the group through dynamic field lookup and then sets
+`number` through a second lookup, field clone, type dispatch, and union
+activation.
+
+Alternating 100,000-operation baseline evidence at native commit `395e942` is
+in
+[`benchmarks/results/2026-09-03-m55-generated-builder-union-baseline-100k-g-drive-docker`](../../benchmarks/results/2026-09-03-m55-generated-builder-union-baseline-100k-g-drive-docker).
+
+| Operation | C++ ns/op | Native ns/op | Native / C++ |
+| --- | ---: | ---: | ---: |
+| direct scalar-union selection and write | 0.7140 | 2.2691 | 3.178 |
+| generated scalar-union selection and write | 0.7140 | 148.2940 | 207.686 |
+
+The generated Rust path adds about 145 ns per write. The lower-level operation
+is smaller than a few clock cycles in C++, so its absolute ratio is not a
+stable acceptance signal by itself; the final gate needs a longer run and an
+isolated generated/direct comparison. The next change emits constant-layout
+group access plus a union-aware scalar setter that writes the payload and tag
+through checked primitives without reflection.
