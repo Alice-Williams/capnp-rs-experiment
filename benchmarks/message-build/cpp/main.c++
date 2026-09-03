@@ -166,17 +166,30 @@ __attribute__((noinline)) uint64_t copyIteration(capnp::AnyPointer::Reader sourc
   return hashSegments(message.getSegmentsForOutput());
 }
 
+__attribute__((noinline)) uint64_t copyReuseIteration(
+    std::array<capnp::word, 11>& scratch, capnp::AnyPointer::Reader source) {
+  uint64_t fingerprint;
+  {
+    capnp::MallocMessageBuilder message(
+        kj::arrayPtr(scratch.data(), scratch.size()),
+        capnp::AllocationStrategy::FIXED_SIZE);
+    message.setRoot(source);
+    fingerprint = hashSegments(message.getSegmentsForOutput());
+  }
+  return fingerprint;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
   if (argc != 4) {
-    std::cerr << "usage: cpp-message-build prepared|fresh|reuse|copy-prepared|copy direct|far|double-far|graph PASSES\n";
+    std::cerr << "usage: cpp-message-build prepared|fresh|reuse|copy-prepared|copy|copy-reuse direct|far|double-far|graph PASSES\n";
     return 2;
   }
   auto mode = std::string_view(argv[1]);
   auto shape = std::string_view(argv[2]);
   auto passes = parseSize(argv[3]);
-  auto copyMode = mode == "copy-prepared" || mode == "copy";
+  auto copyMode = mode == "copy-prepared" || mode == "copy" || mode == "copy-reuse";
   if ((mode != "prepared" && mode != "fresh" && mode != "reuse" && !copyMode)
       || (shape != "direct" && shape != "far" && shape != "double-far"
           && shape != "graph")
@@ -190,6 +203,7 @@ int main(int argc, char** argv) {
   uint64_t semantic = SEED;
   uint64_t wire = SEED;
   std::array<capnp::word, 3> scratch{};
+  std::array<capnp::word, 11> copyScratch{};
   auto graph = makeGraph();
   auto graphView = kj::arrayPtr(
       static_cast<const capnp::word*>(graph.begin()), graph.size());
@@ -210,6 +224,8 @@ int main(int argc, char** argv) {
       fingerprint = copyPreparedIteration(graphView);
     } else if (mode == "copy") {
       fingerprint = copyIteration(graphRoot);
+    } else if (mode == "copy-reuse") {
+      fingerprint = copyReuseIteration(copyScratch, graphRoot);
     } else {
       fingerprint = freshIteration(shapeId, first, second);
     }
@@ -224,6 +240,15 @@ int main(int argc, char** argv) {
         || readWord(bytes, 2) != 0) {
       std::cerr << "scratch storage was not cleared\n";
       return 1;
+    }
+  }
+  if (mode == "copy-reuse") {
+    auto bytes = reinterpret_cast<const capnp::byte*>(copyScratch.data());
+    for (size_t index = 0; index < copyScratch.size(); ++index) {
+      if (readWord(bytes, index) != 0) {
+        std::cerr << "copy scratch storage was not cleared\n";
+        return 1;
+      }
     }
   }
   asm volatile("" : "+r"(semantic), "+r"(wire) : : "memory");

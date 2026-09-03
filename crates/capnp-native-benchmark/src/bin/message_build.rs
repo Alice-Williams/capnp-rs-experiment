@@ -13,15 +13,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mode = args
         .next()
         .ok_or(
-            "usage: message_build prepared|fresh|reuse|copy-prepared|copy direct|far|double-far|graph PASSES",
+            "usage: message_build prepared|fresh|reuse|copy-prepared|copy|copy-reuse direct|far|double-far|graph PASSES",
         )?;
     let shape = args.next().ok_or("missing shape")?;
     let passes = args.next().ok_or("missing pass count")?.parse::<usize>()?;
-    let copy_mode = matches!(mode.as_str(), "copy-prepared" | "copy");
+    let copy_mode = matches!(mode.as_str(), "copy-prepared" | "copy" | "copy-reuse");
     if args.next().is_some()
         || !matches!(
             mode.as_str(),
-            "prepared" | "fresh" | "reuse" | "copy-prepared" | "copy"
+            "prepared" | "fresh" | "reuse" | "copy-prepared" | "copy" | "copy-reuse"
         )
         || !matches!(shape.as_str(), "direct" | "far" | "double-far" | "graph")
         || (mode == "reuse" && shape != "direct")
@@ -40,10 +40,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let mut semantic = SEED;
     let mut wire = SEED;
-    let mut reuse_arena = if mode == "reuse" {
-        Some(ExclusiveArena::new(3, 3)?)
-    } else {
-        None
+    let mut reuse_arena = match mode.as_str() {
+        "reuse" => Some(ExclusiveArena::new(3, 3)?),
+        "copy-reuse" => Some(ExclusiveArena::new(11, 11)?),
+        _ => None,
     };
     let source_bytes = graph_fixture();
     let source_views = [source_bytes.as_slice()];
@@ -61,6 +61,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             )?,
             "copy-prepared" => copy_prepared_iteration(&source_bytes),
             "copy" => copy_iteration(&source)?,
+            "copy-reuse" => copy_reuse_iteration(
+                reuse_arena
+                    .as_mut()
+                    .expect("copy-reuse mode creates its arena"),
+                &source,
+            )?,
             _ => fresh_iteration(shape, first, second)?,
         };
         semantic = semantic.rotate_left(9) ^ first ^ second.rotate_left(13);
@@ -150,6 +156,19 @@ fn copy_iteration(source: &MessageSegments<'_>) -> Result<u64, capnp_message::Gr
     let budget = LocalTraversalBudget::new(16);
     arena.copy_root(source, WireLocation::ROOT, &budget, NestingLimit::new(8))?;
     Ok(hash_segments(&arena))
+}
+
+#[inline(never)]
+fn copy_reuse_iteration(
+    arena: &mut ExclusiveArena,
+    source: &MessageSegments<'_>,
+) -> Result<u64, capnp_message::GraphError> {
+    let budget = LocalTraversalBudget::new(16);
+    arena.copy_root(source, WireLocation::ROOT, &budget, NestingLimit::new(8))?;
+    let fingerprint = hash_segments(arena);
+    arena.reset()?;
+    debug_assert_eq!(arena.as_segment(), &[0; 8]);
+    Ok(fingerprint)
 }
 
 fn graph_fixture() -> [u8; 88] {

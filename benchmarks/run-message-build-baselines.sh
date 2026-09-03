@@ -70,6 +70,7 @@ workloads=(
     'reuse direct'
     'copy-prepared graph'
     'copy graph'
+    'copy-reuse graph'
 )
 
 run_workload() {
