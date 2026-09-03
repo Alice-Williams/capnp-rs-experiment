@@ -115,12 +115,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "borrowed-nested" => measure(passes, || {
             borrowed_nested_fingerprint(&borrowed).map_err(Into::into)
         })?,
-        "borrowed-direct-struct-lists" => measure(passes, || {
-            direct_struct_list_fingerprint(borrowed_direct).map_err(Into::into)
-        })?,
-        "borrowed-struct-lists" => measure(passes, || {
-            borrowed_struct_list_fingerprint(&borrowed).map_err(Into::into)
-        })?,
+        "borrowed-direct-struct-lists" => {
+            measure(passes, || direct_struct_list_fingerprint(borrowed_direct))?
+        }
+        "borrowed-struct-lists" => measure(passes, || borrowed_struct_list_fingerprint(&borrowed))?,
         _ => unreachable!(),
     };
     println!("{}\t{}", started.elapsed().as_nanos(), checksum);
