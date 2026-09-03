@@ -24,3 +24,24 @@ checksums, and isolated phase or profile evidence.
 
 An isolated native speedup does not advance a layer unless the matched C++
 scenario, correctness fixture, and relevant safety limits remain intact.
+
+## Inherited performance floor
+
+A completed lower layer's speedup is not a budget that a higher layer may
+spend. For every workload shape, each milestone records the closest lower-layer
+measurement and carries its native/C++ ratio forward as the cumulative ceiling
+for the next layer (allowing only the stated measurement-noise tolerance). If a
+framing path is 2x faster than C++, the corresponding framing-plus-message-read
+path must remain at least 2x faster before the program advances.
+
+Each higher-layer benchmark also reports the incremental cost after subtracting
+the paired lower-layer time from both implementations. That incremental
+native/C++ ratio must be no greater than 1.03. Both gates are required: the
+cumulative ceiling prevents later work from consuming an existing advantage,
+while the incremental comparison prevents a fast foundation from hiding a slow
+new component.
+
+When subtraction would amplify timer noise, the milestone must add an isolated
+benchmark for the new component and cross-check it against the cumulative
+scenario. Different safety or ownership semantics are reported separately and
+never substituted silently for a matched comparison.
