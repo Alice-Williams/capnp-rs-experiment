@@ -47,7 +47,7 @@ pub use list::{
 #[cfg(target_has_atomic = "64")]
 pub use owned::{
     BorrowedMessage, ListObject, ObjectKind, ObjectRef, OwnedMessage, OwnedPointerRef,
-    OwnedReadError, ReaderLimits, StructElementRef, StructObject, TypedMessage,
+    OwnedReadError, PreparedStructRef, ReaderLimits, StructElementRef, StructObject, TypedMessage,
 };
 #[cfg(all(feature = "std", target_has_atomic = "64"))]
 pub use parallel::{

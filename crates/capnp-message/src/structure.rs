@@ -180,6 +180,20 @@ impl<'data> MessageSegments<'data> {
 }
 
 impl<'context, 'data, B: TraversalBudget> StructReader<'context, 'data, B> {
+    pub(crate) const fn from_prevalidated(
+        segments: &'context MessageSegments<'data>,
+        budget: &'context B,
+        reference: Option<StructRef>,
+        nesting: NestingLimit,
+    ) -> Self {
+        Self {
+            segments,
+            budget,
+            reference,
+            nesting,
+        }
+    }
+
     pub(crate) const fn empty_from_context(
         segments: &'context MessageSegments<'data>,
         budget: &'context B,

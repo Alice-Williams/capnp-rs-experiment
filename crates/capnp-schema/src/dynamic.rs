@@ -12,8 +12,8 @@ use std::sync::Arc;
 use capnp_message::{
     ArenaError, DataListBuilder, DataSection, ExclusiveArena, GraphError, ListObject,
     ListReadError, ObjectRef, OwnedMessage, OwnedPointerRef, OwnedReadError, PointerListBuilder,
-    PrimitiveError, ReaderLimits, SharedTraversalBudget, StructBuilder, StructElementReader,
-    StructListBuilder, StructObject, StructReadError, StructReader,
+    PreparedStructRef, PrimitiveError, ReaderLimits, SharedTraversalBudget, StructBuilder,
+    StructElementReader, StructListBuilder, StructObject, StructReadError, StructReader,
 };
 
 use crate::{
@@ -117,7 +117,154 @@ pub trait FromDynamicStruct: Sized {
     fn from_dynamic(value: DynamicStruct) -> Result<Self, DynamicError>;
 }
 
+/// Constant-layout generated access over a reflection-capable struct value.
+///
+/// Root and retained struct pointers are resolved and traversal-charged once.
+/// Scalar generated accessors then borrow their validated data section directly;
+/// unsupported element-backed shapes continue through the dynamic fallback.
+#[derive(Clone, Debug)]
+pub struct GeneratedStructReader {
+    dynamic: DynamicStruct,
+    prepared: Option<PreparedStructRef>,
+}
+
+impl GeneratedStructReader {
+    #[doc(hidden)]
+    pub fn new(dynamic: DynamicStruct) -> Self {
+        let prepared = dynamic.prepared_reader().ok().flatten();
+        Self { dynamic, prepared }
+    }
+
+    pub fn dynamic(&self) -> &DynamicStruct {
+        &self.dynamic
+    }
+
+    #[doc(hidden)]
+    pub fn get(&self, name: &str) -> Result<DynamicValue, DynamicError> {
+        self.dynamic.get(name)
+    }
+
+    #[doc(hidden)]
+    pub fn union_discriminant(&self) -> Result<Option<u16>, DynamicError> {
+        self.dynamic.union_discriminant()
+    }
+
+    fn data_section(&self) -> Result<Option<DataSection<'_>>, DynamicError> {
+        self.prepared
+            .as_ref()
+            .map(PreparedStructRef::data_section)
+            .transpose()
+            .map_err(Into::into)
+    }
+
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn read_bool_slot(&self, offset: u32, default: bool) -> Result<bool, DynamicError> {
+        match self.data_section()? {
+            Some(data) => Ok(data.read_bool(offset, default)?),
+            None => self.dynamic.read_bool_slot(offset, default),
+        }
+    }
+
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn read_i8_slot(&self, offset: u32, default: i8) -> Result<i8, DynamicError> {
+        match self.data_section()? {
+            Some(data) => Ok(data.read_i8(offset, default)?),
+            None => self.dynamic.read_i8_slot(offset, default),
+        }
+    }
+
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn read_i16_slot(&self, offset: u32, default: i16) -> Result<i16, DynamicError> {
+        match self.data_section()? {
+            Some(data) => Ok(data.read_i16(offset, default)?),
+            None => self.dynamic.read_i16_slot(offset, default),
+        }
+    }
+
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn read_i32_slot(&self, offset: u32, default: i32) -> Result<i32, DynamicError> {
+        match self.data_section()? {
+            Some(data) => Ok(data.read_i32(offset, default)?),
+            None => self.dynamic.read_i32_slot(offset, default),
+        }
+    }
+
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn read_i64_slot(&self, offset: u32, default: i64) -> Result<i64, DynamicError> {
+        match self.data_section()? {
+            Some(data) => Ok(data.read_i64(offset, default)?),
+            None => self.dynamic.read_i64_slot(offset, default),
+        }
+    }
+
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn read_u8_slot(&self, offset: u32, default: u8) -> Result<u8, DynamicError> {
+        match self.data_section()? {
+            Some(data) => Ok(data.read_u8(offset, default)?),
+            None => self.dynamic.read_u8_slot(offset, default),
+        }
+    }
+
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn read_u16_slot(&self, offset: u32, default: u16) -> Result<u16, DynamicError> {
+        match self.data_section()? {
+            Some(data) => Ok(data.read_u16(offset, default)?),
+            None => self.dynamic.read_u16_slot(offset, default),
+        }
+    }
+
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn read_u32_slot(&self, offset: u32, default: u32) -> Result<u32, DynamicError> {
+        match self.data_section()? {
+            Some(data) => Ok(data.read_u32(offset, default)?),
+            None => self.dynamic.read_u32_slot(offset, default),
+        }
+    }
+
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn read_u64_slot(&self, offset: u32, default: u64) -> Result<u64, DynamicError> {
+        match self.data_section()? {
+            Some(data) => Ok(data.read_u64(offset, default)?),
+            None => self.dynamic.read_u64_slot(offset, default),
+        }
+    }
+
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn read_f32_slot(&self, offset: u32, default: f32) -> Result<f32, DynamicError> {
+        match self.data_section()? {
+            Some(data) => Ok(data.read_f32(offset, default)?),
+            None => self.dynamic.read_f32_slot(offset, default),
+        }
+    }
+
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn read_f64_slot(&self, offset: u32, default: f64) -> Result<f64, DynamicError> {
+        match self.data_section()? {
+            Some(data) => Ok(data.read_f64(offset, default)?),
+            None => self.dynamic.read_f64_slot(offset, default),
+        }
+    }
+}
+
 impl DynamicStruct {
+    fn prepared_reader(&self) -> Result<Option<PreparedStructRef>, DynamicError> {
+        match &self.backing {
+            StructBacking::Pointer(value) => Ok(Some(value.prepare_reader()?)),
+            StructBacking::Element(_) => Ok(None),
+        }
+    }
+
     pub fn root(
         schema: Arc<CompiledSchema>,
         message: Arc<OwnedMessage>,

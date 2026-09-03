@@ -943,7 +943,7 @@ fn emit_struct(
     writeln!(output, "    #[derive(Clone, Debug)]").map_err(|_| GenerateError::Format)?;
     writeln!(
         output,
-        "    pub struct Reader{declaration} {{ inner: capnp_schema::DynamicStruct, marker: PhantomData<fn() -> {marker}> }}"
+        "    pub struct Reader{declaration} {{ inner: capnp_schema::GeneratedStructReader, marker: PhantomData<fn() -> {marker}> }}"
     )
     .map_err(|_| GenerateError::Format)?;
     writeln!(
@@ -952,7 +952,7 @@ fn emit_struct(
     )
     .map_err(|_| GenerateError::Format)?;
     writeln!(output, "        const TYPE_ID: u64 = TYPE_ID;").map_err(|_| GenerateError::Format)?;
-    writeln!(output, "        fn from_dynamic(value: capnp_schema::DynamicStruct) -> Result<Self, capnp_schema::DynamicError> {{ Ok(Self {{ inner: value, marker: PhantomData }}) }}")
+    writeln!(output, "        fn from_dynamic(value: capnp_schema::DynamicStruct) -> Result<Self, capnp_schema::DynamicError> {{ Ok(Self {{ inner: capnp_schema::GeneratedStructReader::new(value), marker: PhantomData }}) }}")
         .map_err(|_| GenerateError::Format)?;
     writeln!(output, "    }}").map_err(|_| GenerateError::Format)?;
     writeln!(output, "    impl{implementation} Reader{arguments} {{")
@@ -973,11 +973,11 @@ fn emit_struct(
             .map_err(|_| GenerateError::Format)?;
     }
     writeln!(output, "        }}").map_err(|_| GenerateError::Format)?;
-    writeln!(output, "        #[doc(hidden)]\n        pub fn from_dynamic_struct(value: capnp_schema::DynamicStruct) -> Self {{ Self {{ inner: value, marker: PhantomData }} }}")
+    writeln!(output, "        #[doc(hidden)]\n        pub fn from_dynamic_struct(value: capnp_schema::DynamicStruct) -> Self {{ Self {{ inner: capnp_schema::GeneratedStructReader::new(value), marker: PhantomData }} }}")
         .map_err(|_| GenerateError::Format)?;
     writeln!(
         output,
-        "        pub fn dynamic(&self) -> &capnp_schema::DynamicStruct {{ &self.inner }}"
+        "        pub fn dynamic(&self) -> &capnp_schema::DynamicStruct {{ self.inner.dynamic() }}"
     )
     .map_err(|_| GenerateError::Format)?;
 

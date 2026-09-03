@@ -396,6 +396,21 @@ impl<T: ObjectKind> ObjectRef<T> {
 }
 
 impl ObjectRef<StructObject> {
+    /// Resolves and charges this struct once for repeated field access.
+    ///
+    /// The prepared view stores only immutable ownership and validated wire
+    /// coordinates. It does not cache native pointers, and every pointer-valued
+    /// child read still performs its own validation and traversal charge.
+    pub fn prepare_reader(&self) -> Result<PreparedStructRef, OwnedReadError> {
+        let (reference, nesting) =
+            self.with_reader(|reader| (reader.reference(), reader.nesting_limit()))?;
+        Ok(PreparedStructRef {
+            message: Arc::clone(&self.message),
+            reference,
+            nesting,
+        })
+    }
+
     /// Opens a reader only for the duration of `use_reader`.
     ///
     /// ```compile_fail
@@ -469,6 +484,62 @@ impl ObjectRef<StructObject> {
             return Ok(OwnedPointerRef::Null);
         };
         retained_pointer(&self.message, location, nesting)
+    }
+}
+
+/// An owned struct view whose root or parent pointer was validated and charged once.
+#[derive(Clone, Debug)]
+pub struct PreparedStructRef {
+    message: Arc<OwnedMessage>,
+    reference: Option<crate::StructRef>,
+    nesting: NestingLimit,
+}
+
+impl PreparedStructRef {
+    /// Borrows the validated data section directly from immutable message storage.
+    #[inline(always)]
+    pub fn data_section(&self) -> Result<crate::DataSection<'_>, StructReadError> {
+        let Some(reference) = self.reference else {
+            return Ok(crate::DataSection::from_validated_bytes(&[]));
+        };
+        let segment = self.message.segment(reference.content.segment_id).ok_or(
+            StructReadError::UnknownSegment {
+                segment_id: reference.content.segment_id,
+            },
+        )?;
+        let start = usize::try_from(reference.content.word_offset)
+            .map_err(|_| StructReadError::RangeOverflow)?
+            .checked_mul(8)
+            .ok_or(StructReadError::RangeOverflow)?;
+        let bytes = usize::from(reference.data_words)
+            .checked_mul(8)
+            .ok_or(StructReadError::RangeOverflow)?;
+        let end = start
+            .checked_add(bytes)
+            .ok_or(StructReadError::RangeOverflow)?;
+        let data = segment
+            .get(start..end)
+            .ok_or(StructReadError::DataOutOfBounds {
+                location: reference.content,
+                data_words: reference.data_words,
+                segment_bytes: segment.len(),
+            })?;
+        Ok(crate::DataSection::from_validated_bytes(data))
+    }
+
+    /// Opens a short-lived general reader without resolving or charging the
+    /// already prepared struct pointer again.
+    pub fn with_reader<R>(
+        &self,
+        use_reader: impl for<'reader> FnOnce(StructReader<'reader, 'reader, SharedTraversalBudget>) -> R,
+    ) -> R {
+        let segments = self.message.borrowed_segments();
+        use_reader(StructReader::from_prevalidated(
+            &segments,
+            &self.message.budget,
+            self.reference,
+            self.nesting,
+        ))
     }
 }
 
@@ -770,7 +841,36 @@ mod tests {
         assert_send_sync::<OwnedMessage>();
         assert_send_sync::<ObjectRef<StructObject>>();
         assert_send_sync::<ObjectRef<ListObject>>();
+        assert_send_sync::<PreparedStructRef>();
         assert_send_sync::<TypedMessage<StructObject>>();
+    }
+
+    #[test]
+    fn prepared_struct_charges_once_and_reuses_validated_coordinates() {
+        let message = nested_struct_message(ReaderLimits {
+            traversal_words: 2,
+            nesting_levels: 4,
+        });
+        let root = message.root_struct().expect("root validates").into_root();
+        let prepared = root.prepare_reader().expect("root precharges");
+        assert_eq!(message.remaining_traversal_words(), 0);
+        assert_eq!(
+            prepared
+                .data_section()
+                .expect("prepared data section")
+                .read_u64(0, 0)
+                .expect("first prepared read"),
+            42
+        );
+        assert_eq!(
+            prepared
+                .data_section()
+                .expect("prepared data section repeats")
+                .read_u64(0, 0)
+                .expect("second prepared read"),
+            42
+        );
+        assert_eq!(message.remaining_traversal_words(), 0);
     }
 
     #[test]
