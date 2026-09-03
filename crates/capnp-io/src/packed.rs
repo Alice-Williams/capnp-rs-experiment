@@ -599,7 +599,7 @@ fn zero_byte_count(word: &[u8; WORD_BYTES]) -> usize {
 }
 
 fn zero_byte_count_slice(word: &[u8]) -> usize {
-    WORD_BYTES - word_tag_slice(word).count_ones() as usize
+    word.iter().filter(|byte| **byte == 0).count()
 }
 
 fn check_output_limit(current: usize, additional: usize, limit: usize) -> Result<(), PackedError> {
