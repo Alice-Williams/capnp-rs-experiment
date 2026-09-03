@@ -895,15 +895,18 @@ mod tests {
                 .into_iter()
                 .map(|mut lane| {
                     let completed = LoomArc::clone(&completed);
-                    loom_thread::spawn(move || {
-                        let index = lane.range().start;
-                        lane.build_fragment(index, 4, |arena| {
-                            let mut root = arena.init_root_struct(1, 0)?;
-                            root.set_u64(0, u64::from(index) + 7, 0)
+                    loom_thread::Builder::new()
+                        .stack_size(64 * 1024)
+                        .spawn(move || {
+                            let index = lane.range().start;
+                            lane.build_fragment(index, 4, |arena| {
+                                let mut root = arena.init_root_struct(1, 0)?;
+                                root.set_u64(0, u64::from(index) + 7, 0)
+                            })
+                            .expect("fragment");
+                            completed.lock().expect("lock").push(lane.seal());
                         })
-                        .expect("fragment");
-                        completed.lock().expect("lock").push(lane.seal());
-                    })
+                        .expect("worker spawns")
                 })
                 .collect::<Vec<_>>();
             for handle in handles {
