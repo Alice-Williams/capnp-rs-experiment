@@ -16,7 +16,7 @@
 namespace {
 
 constexpr uint64_t SEED = 0x4d595df4d0f33173ull;
-constexpr size_t STREAM_DECODE_CHUNK_BYTES = 257;
+constexpr size_t STREAM_DECODE_CHUNK_BYTES = 1025;
 
 size_t parseSize(const char* text) {
   size_t result = 0;

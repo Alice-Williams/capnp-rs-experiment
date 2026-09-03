@@ -59,7 +59,7 @@ mkdir -p -- "$output"
         "$warmups" "$runs" "$words" "$passes"
     printf 'cases=24\n'
     printf 'shapes=long zero runs, long raw runs, deterministic mixed sparse words, repeated pinned C++ wire fixture\n'
-    printf 'stream_chunks=zero/raw 256 words; mixed 8 words; realistic 100 words; decode input feed 257 bytes\n'
+    printf 'stream_chunks=zero/raw 256 words; mixed 8 words; realistic 100 words; decode input feed 1025 bytes\n'
     printf 'allocation=fresh output per pass; C++ packed VectorOutputStream starts at 8 bytes\n'
     printf 'order=alternating C++/native first for every sample\n'
     printf 'timer=steady monotonic clock inside each binary around complete operation loop\n'
