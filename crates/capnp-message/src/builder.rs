@@ -203,6 +203,7 @@ impl From<ValidationError> for GraphError {
 #[derive(Debug)]
 struct SegmentStorage {
     bytes: Vec<u8>,
+    used_bytes: usize,
     word_limit: u32,
 }
 
@@ -215,11 +216,9 @@ impl<'a> Iterator for ArenaSegments<'a> {
     type Item = &'a [u8];
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.first.take().or_else(|| {
-            self.additional
-                .next()
-                .map(|segment| segment.bytes.as_slice())
-        })
+        self.first
+            .take()
+            .or_else(|| self.additional.next().map(SegmentStorage::used))
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -231,6 +230,18 @@ impl<'a> Iterator for ArenaSegments<'a> {
 impl ExactSizeIterator for ArenaSegments<'_> {
     fn len(&self) -> usize {
         usize::from(self.first.is_some()) + self.additional.len()
+    }
+}
+
+impl SegmentStorage {
+    #[inline]
+    fn used(&self) -> &[u8] {
+        &self.bytes[..self.used_bytes]
+    }
+
+    #[inline]
+    fn used_mut(&mut self) -> &mut [u8] {
+        &mut self.bytes[..self.used_bytes]
     }
 }
 
@@ -310,6 +321,7 @@ impl ExclusiveArena {
             arena_id,
             first_segment: SegmentStorage {
                 bytes,
+                used_bytes: 8,
                 word_limit: first_word_limit,
             },
             additional_segments: Vec::new(),
@@ -324,7 +336,7 @@ impl ExclusiveArena {
     pub fn word_len(&self) -> u64 {
         core::iter::once(&self.first_segment)
             .chain(self.additional_segments.iter())
-            .map(|segment| (segment.bytes.len() / 8) as u64)
+            .map(|segment| (segment.used_bytes / 8) as u64)
             .sum()
     }
 
@@ -340,18 +352,18 @@ impl ExclusiveArena {
     #[inline]
     pub fn segment(&self, id: u32) -> Option<&[u8]> {
         if id == 0 {
-            return Some(self.first_segment.bytes.as_slice());
+            return Some(self.first_segment.used());
         }
         usize::try_from(id - 1)
             .ok()
             .and_then(|index| self.additional_segments.get(index))
-            .map(|segment| segment.bytes.as_slice())
+            .map(SegmentStorage::used)
     }
 
     #[inline]
     pub fn segments(&self) -> impl ExactSizeIterator<Item = &[u8]> {
         ArenaSegments {
-            first: Some(self.first_segment.bytes.as_slice()),
+            first: Some(self.first_segment.used()),
             additional: self.additional_segments.iter(),
         }
     }
@@ -368,11 +380,11 @@ impl ExclusiveArena {
         if arena_id == u64::MAX {
             return Err(ArenaError::AllocationOverflow);
         }
-        self.first_segment.bytes.fill(0);
+        self.first_segment.used_mut().fill(0);
         for segment in &mut self.additional_segments {
-            segment.bytes.fill(0);
+            segment.used_mut().fill(0);
         }
-        self.first_segment.bytes.truncate(8);
+        self.first_segment.used_bytes = 8;
         self.additional_segments.clear();
         self.arena_id = arena_id;
         self.root_initialized = false;
@@ -383,21 +395,26 @@ impl ExclusiveArena {
         self.segment(0).expect("an arena always has segment zero")
     }
 
-    pub fn into_segment(self) -> Result<Box<[u8]>, ArenaError> {
+    pub fn into_segment(mut self) -> Result<Box<[u8]>, ArenaError> {
         if !self.additional_segments.is_empty() {
             return Err(ArenaError::MultipleSegments);
         }
+        self.first_segment
+            .bytes
+            .truncate(self.first_segment.used_bytes);
         Ok(self.first_segment.bytes.into_boxed_slice())
     }
 
-    pub fn into_segments(self) -> Vec<Box<[u8]>> {
+    pub fn into_segments(mut self) -> Vec<Box<[u8]>> {
         let mut output = Vec::with_capacity(self.additional_segments.len() + 1);
+        self.first_segment
+            .bytes
+            .truncate(self.first_segment.used_bytes);
         output.push(self.first_segment.bytes.into_boxed_slice());
-        output.extend(
-            self.additional_segments
-                .into_iter()
-                .map(|segment| segment.bytes.into_boxed_slice()),
-        );
+        output.extend(self.additional_segments.into_iter().map(|mut segment| {
+            segment.bytes.truncate(segment.used_bytes);
+            segment.bytes.into_boxed_slice()
+        }));
         output
     }
 
@@ -534,7 +551,7 @@ impl ExclusiveArena {
                 .ok_or(ArenaError::AllocationOverflow)?
         };
         let current =
-            u32::try_from(segment.bytes.len() / 8).map_err(|_| ArenaError::AllocationOverflow)?;
+            u32::try_from(segment.used_bytes / 8).map_err(|_| ArenaError::AllocationOverflow)?;
         let end = current
             .checked_add(words)
             .ok_or(ArenaError::AllocationOverflow)?;
@@ -550,11 +567,14 @@ impl ExclusiveArena {
                 .get_mut(index - 1)
                 .ok_or(ArenaError::AllocationOverflow)?
         };
-        segment
-            .bytes
-            .try_reserve_exact(new_len.saturating_sub(segment.bytes.len()))
-            .map_err(|_| ArenaError::AllocationFailed)?;
-        segment.bytes.resize(new_len, 0);
+        if new_len > segment.bytes.len() {
+            segment
+                .bytes
+                .try_reserve_exact(new_len - segment.bytes.len())
+                .map_err(|_| ArenaError::AllocationFailed)?;
+            segment.bytes.resize(new_len, 0);
+        }
+        segment.used_bytes = new_len;
         Ok(Some(WordOffset {
             segment_id,
             word_offset: current,
@@ -583,8 +603,11 @@ impl ExclusiveArena {
         bytes.resize(word_bytes(words)?, 0);
         let segment_id = u32::try_from(self.additional_segments.len() + 1)
             .map_err(|_| ArenaError::AllocationOverflow)?;
-        self.additional_segments
-            .push(SegmentStorage { bytes, word_limit });
+        self.additional_segments.push(SegmentStorage {
+            bytes,
+            used_bytes: word_bytes(words)?,
+            word_limit,
+        });
         Ok(WordOffset {
             segment_id,
             word_offset: 0,
@@ -1358,25 +1381,25 @@ impl ExclusiveArena {
 
     fn checkpoint(&self) -> ArenaCheckpoint {
         ArenaCheckpoint {
-            first_length: self.first_segment.bytes.len(),
+            first_length: self.first_segment.used_bytes,
             additional_lengths: self
                 .additional_segments
                 .iter()
-                .map(|segment| segment.bytes.len())
+                .map(|segment| segment.used_bytes)
                 .collect(),
         }
     }
 
     fn rollback(&mut self, checkpoint: ArenaCheckpoint) {
-        self.first_segment.bytes[checkpoint.first_length..].fill(0);
-        self.first_segment.bytes.truncate(checkpoint.first_length);
+        self.first_segment.bytes[checkpoint.first_length..self.first_segment.used_bytes].fill(0);
+        self.first_segment.used_bytes = checkpoint.first_length;
         for (index, segment) in self.additional_segments.iter_mut().enumerate() {
             let Some(length) = checkpoint.additional_lengths.get(index).copied() else {
-                segment.bytes.fill(0);
+                segment.used_mut().fill(0);
                 continue;
             };
-            segment.bytes[length..].fill(0);
-            segment.bytes.truncate(length);
+            segment.bytes[length..segment.used_bytes].fill(0);
+            segment.used_bytes = length;
         }
         self.additional_segments
             .truncate(checkpoint.additional_lengths.len());
@@ -1385,12 +1408,12 @@ impl ExclusiveArena {
     #[inline]
     fn segment_mut(&mut self, segment_id: u32) -> Result<&mut [u8], ArenaError> {
         if segment_id == 0 {
-            return Ok(self.first_segment.bytes.as_mut_slice());
+            return Ok(self.first_segment.used_mut());
         }
         usize::try_from(segment_id - 1)
             .ok()
             .and_then(|index| self.additional_segments.get_mut(index))
-            .map(|segment| segment.bytes.as_mut_slice())
+            .map(SegmentStorage::used_mut)
             .ok_or(ArenaError::AllocationOverflow)
     }
 
@@ -2888,6 +2911,25 @@ mod tests {
             .expect("a new root initializes after reset")
             .offset();
         assert_ne!(old.arena_id, new.arena_id);
+
+        let mut retained = ExclusiveArena::new(8, 8).expect("retained arena initializes");
+        retained
+            .init_root_struct(7, 0)
+            .expect("first root uses the complete segment")
+            .set_u64(6, u64::MAX, 0)
+            .expect("last word is writable");
+        retained.reset().expect("retained arena resets");
+        retained
+            .init_root_struct(1, 0)
+            .expect("smaller root reuses initialized storage")
+            .set_u64(0, 42, 0)
+            .expect("reused word is writable");
+        assert_eq!(retained.word_len(), 2);
+        assert_eq!(retained.as_segment().len(), 16);
+        assert_eq!(
+            retained.into_segment().expect("one segment remains").len(),
+            16
+        );
     }
 
     #[test]
