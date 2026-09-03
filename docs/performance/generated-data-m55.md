@@ -602,3 +602,34 @@ generated wrapping adds 0.41 ns while the paired C++ delta is negative, so the
 incremental comparison is below timer resolution. The ordinary primitive-list
 builder gate is closed; pointer/struct lists, unions, defaults, and evolution
 builder gates remain open.
+
+## Struct-list builder baseline
+
+The paired struct-list workload initializes two inline-composite `Node`
+elements in the root's `structs` field and writes one varying `UInt32` value to
+each element on every iteration. Both implementations use fixed-capacity
+one-segment arenas. Allocation, inline-composite tag emission, zeroing, element
+selection, and the two scalar writes are timed; root construction remains
+outside the timed region.
+
+The direct controls embed pointer slot 17 and the `Node` layout of one data word
+and one pointer. C++ initializes `List(AnyStruct)` with that layout, while Rust
+uses the corresponding checked `StructListBuilder`. The generated C++ path uses
+`initStructs()` and typed `Node` builders. The current generated Rust path still
+performs field-name lookup, clones and resolves list/brand metadata, constructs
+a dynamic list enum, and repeats dynamic struct-field lookup for both elements.
+
+Alternating 100,000-operation baseline evidence at native commit `fee6649` is
+in
+[`benchmarks/results/2026-09-03-m55-generated-builder-struct-list-baseline-100k-g-drive-docker`](../../benchmarks/results/2026-09-03-m55-generated-builder-struct-list-baseline-100k-g-drive-docker).
+
+| Operation | C++ ns/op | Native ns/op | Native / C++ |
+| --- | ---: | ---: | ---: |
+| direct two-element struct-list construction | 56.2011 | 40.3760 | 0.718 |
+| generated two-element struct-list construction | 54.5440 | 339.6351 | 6.227 |
+
+The checked lower-level Rust path is already 28.2% faster than the direct C++
+control, but generated dispatch adds roughly 299 ns and loses that advantage.
+The next change generates a constant-layout typed struct-list initializer and
+typed element wrapper, retaining dynamic list construction only for reflection,
+unions, and branded element types.
