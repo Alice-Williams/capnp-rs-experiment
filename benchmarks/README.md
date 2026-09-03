@@ -187,6 +187,25 @@ The checked-in qualification run is
 `results/2026-08-31-m31-g-drive-docker`. New configurations use the
 `M31_BENCH_*` variables and a fresh output directory.
 
+## M55 generated-data API comparison
+
+`run-generated-api-baselines.sh` begins the generated API comparison with hot
+scalar and text/data reads from the pinned C++ `wire-fixture.capnp` message.
+Each generated case is paired with an already-opened, direct checked runtime
+reader over the same bytes, operation order, and checksum. This exposes the
+incremental typed-API cost without hiding it behind framing or root opening.
+
+Run it inside the Linux development container from a committed worktree:
+
+```sh
+benchmarks/run-generated-api-baselines.sh \
+  benchmarks/results/DATE-m55-generated-api-baseline-g-drive-docker
+```
+
+The initial reader checkpoint is intentionally narrower than the completed M55
+gate. Builder, list, struct/group, union/default, and evolution cases join this
+same runner before the milestone advances.
+
 ## M54 low-level packing comparison
 
 `run-packing-baselines.sh` compares fresh-output `pack` and `unpack` operations
