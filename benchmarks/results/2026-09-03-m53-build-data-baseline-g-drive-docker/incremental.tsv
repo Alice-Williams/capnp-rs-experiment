@@ -1,0 +1,5 @@
+shape	cpp_fresh_minus_prepared_ns	native_fresh_minus_prepared_ns	incremental_native_over_cpp	prepared_native_over_cpp	fresh_native_over_cpp
+data	131.1421	151.1505	1.153	0.872	1.079
+direct	110.3866	83.3034	0.755	0.724	0.764
+double-far	611.4436	317.3995	0.519	0.792	0.537
+far	453.3127	278.5887	0.615	1.349	0.623

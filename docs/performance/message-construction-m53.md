@@ -231,6 +231,9 @@ exports to native byte-list allocation, pointer-slot validation, pointer emissio
 and `set_data()`/`set_text()` removes those calls without removing a bounds,
 overflow, allocation, or pointer check.
 
+Baseline evidence:
+`benchmarks/results/2026-09-03-m53-build-data-baseline-g-drive-docker`
+
 | Case | C++ ns/message | Rust ns/message | Rust / C++ |
 | --- | ---: | ---: | ---: |
 | prepared scalar + Data words | 11.6239 | 9.3700 | 0.806 |
