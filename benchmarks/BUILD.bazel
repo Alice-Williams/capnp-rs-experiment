@@ -98,6 +98,12 @@ sh_test(
 )
 
 sh_test(
+    name = "packing_runner_syntax_test",
+    srcs = ["run-packing-baselines.sh"],
+    args = ["--syntax-check-only"],
+)
+
+sh_test(
     name = "message_build_baseline_results_test",
     srcs = ["verify-message-build-results.sh"],
     data = glob(["results/2026-09-03-m53-build-baseline-g-drive-docker/**"]),
