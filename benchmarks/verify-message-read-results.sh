@@ -4,11 +4,7 @@ set -euo pipefail
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 result_dir=${1:-"$repo_root/benchmarks/results/2026-09-03-m52-root-baseline-g-drive-docker"}
 expected_passes=${2:-100000}
-if grep -q $'\tisolated-root\t' "$result_dir/results.tsv"; then
-    workload_count=9
-else
-    workload_count=6
-fi
+workload_count=$(tail -n +2 "$result_dir/results.tsv" | cut -f2,3 | sort -u | wc -l)
 expected_results=$((1 + workload_count * 2 * 11))
 expected_summary=$((1 + workload_count * 2))
 expected_comparison=$((1 + workload_count))
@@ -31,7 +27,7 @@ awk -F '\t' -v expected="$expected_results" -v passes="$expected_passes" '
   NR == 1 { if ($0 != "implementation\tcase\tsegments\tpasses\trun\telapsed_ns\tchecksum") exit 1; next }
   NF != 7 || $4 != passes || $6 <= 0 || $7 < 0 { exit 1 }
   $1 != "cpp" && $1 != "native" { exit 1 }
-  $2 != "framing" && $2 != "root" && $2 != "isolated-root" { exit 1 }
+  $2 != "framing" && $2 != "root" && $2 != "isolated-root" && $2 != "scalars" && $2 != "isolated-scalars" { exit 1 }
   $3 != 1 && $3 != 2 && $3 != 64 { exit 1 }
   !($2 FS $3 in checksum) { checksum[$2 FS $3] = $7; next }
   $7 != checksum[$2 FS $3] { exit 1 }

@@ -26,6 +26,40 @@ size_t parseSize(const char* text) {
   return result;
 }
 
+template <typename T>
+T readData(kj::ArrayPtr<const capnp::byte> data, size_t index, T defaultValue) {
+  auto offset = index * sizeof(T);
+  T wire = 0;
+  if (offset + sizeof(T) <= data.size()) {
+    capnp::_::WireValue<T> encoded;
+    std::memcpy(&encoded, data.begin() + offset, sizeof(encoded));
+    wire = encoded.get();
+  }
+  return wire ^ defaultValue;
+}
+
+uint64_t scalarFingerprint(kj::ArrayPtr<const capnp::byte> data) {
+  auto wireBool = data.size() > 0 && (data[0] & 1) != 0;
+  uint64_t fingerprint = static_cast<uint64_t>(wireBool ^ true);
+  fingerprint = std::rotl(fingerprint, 7)
+      ^ readData<uint8_t>(data, 0, 0x5a);
+  fingerprint = std::rotl(fingerprint, 11)
+      ^ readData<uint16_t>(data, 0, 0xa55a);
+  fingerprint = std::rotl(fingerprint, 13)
+      ^ readData<uint32_t>(data, 0, 0x13579bdf);
+  fingerprint = std::rotl(fingerprint, 17)
+      ^ readData<uint64_t>(data, 0, 0xfedcba9876543210ull);
+  fingerprint = std::rotl(fingerprint, 19)
+      ^ uint64_t{readData<uint32_t>(data, 0, uint32_t(-123456))};
+  fingerprint = std::rotl(fingerprint, 23)
+      ^ uint64_t{readData<uint32_t>(data, 0, std::bit_cast<uint32_t>(1.25f))};
+  fingerprint = std::rotl(fingerprint, 29)
+      ^ readData<uint64_t>(data, 0, std::bit_cast<uint64_t>(-3.5));
+  fingerprint = std::rotl(fingerprint, 31)
+      ^ readData<uint16_t>(data, 0, 7);
+  return fingerprint;
+}
+
 void setWord(kj::Array<capnp::word>& segment, size_t index, uint64_t value) {
   auto wire = reinterpret_cast<capnp::_::WireValue<uint64_t>*>(segment.begin());
   wire[index].set(value);
@@ -71,6 +105,7 @@ uint64_t readMany(
     kj::ArrayPtr<const capnp::word> encoded,
     size_t segmentCount,
     bool readRoot,
+    bool readScalars,
     size_t passes) {
   uint64_t checksum = SEED;
   for (size_t pass = 0; pass < passes; ++pass) {
@@ -91,14 +126,18 @@ uint64_t readMany(
     if (readRoot) {
       auto root = reader.getRoot<capnp::AnyStruct>();
       auto data = root.getDataSection();
-      uint64_t value = 0;
-      if (data.size() >= sizeof(value)) {
-        capnp::_::WireValue<uint64_t> wire;
-        std::memcpy(&wire, data.begin(), sizeof(wire));
-        value = wire.get();
+      if (readScalars) {
+        fingerprint ^= scalarFingerprint(data);
+      } else {
+        uint64_t value = 0;
+        if (data.size() >= sizeof(value)) {
+          capnp::_::WireValue<uint64_t> wire;
+          std::memcpy(&wire, data.begin(), sizeof(wire));
+          value = wire.get();
+        }
+        fingerprint ^= std::rotl(uint64_t{data.size()}, 17)
+            ^ std::rotl(value, 37);
       }
-      fingerprint ^= std::rotl(uint64_t{data.size()}, 17)
-          ^ std::rotl(value, 37);
     }
     checksum = std::rotl(checksum, 9) ^ fingerprint;
   }
@@ -107,21 +146,27 @@ uint64_t readMany(
 
 uint64_t readIsolatedRoots(
     kj::ArrayPtr<const kj::ArrayPtr<const capnp::word>> segments,
+    bool readScalars,
     size_t passes) {
   uint64_t checksum = SEED;
   for (size_t pass = 0; pass < passes; ++pass) {
     capnp::SegmentArrayMessageReader reader(segments);
     auto root = reader.getRoot<capnp::AnyStruct>();
     auto data = root.getDataSection();
-    uint64_t value = 0;
-    if (data.size() >= sizeof(value)) {
-      capnp::_::WireValue<uint64_t> wire;
-      std::memcpy(&wire, data.begin(), sizeof(wire));
-      value = wire.get();
+    uint64_t fingerprint;
+    if (readScalars) {
+      fingerprint = uint64_t{segments.size()} ^ scalarFingerprint(data);
+    } else {
+      uint64_t value = 0;
+      if (data.size() >= sizeof(value)) {
+        capnp::_::WireValue<uint64_t> wire;
+        std::memcpy(&wire, data.begin(), sizeof(wire));
+        value = wire.get();
+      }
+      fingerprint = uint64_t{segments.size()}
+          ^ std::rotl(uint64_t{data.size()}, 17)
+          ^ std::rotl(value, 37);
     }
-    auto fingerprint = uint64_t{segments.size()}
-        ^ std::rotl(uint64_t{data.size()}, 17)
-        ^ std::rotl(value, 37);
     checksum = std::rotl(checksum, 9) ^ fingerprint;
   }
   return checksum;
@@ -131,13 +176,14 @@ uint64_t readIsolatedRoots(
 
 int main(int argc, char** argv) {
   if (argc != 4) {
-    std::cerr << "usage: cpp-message-read framing|root|isolated-root SEGMENTS PASSES\n";
+    std::cerr << "usage: cpp-message-read framing|root|scalars|isolated-root|isolated-scalars SEGMENTS PASSES\n";
     return 2;
   }
   auto mode = std::string_view(argv[1]);
   auto segmentCount = parseSize(argv[2]);
   auto passes = parseSize(argv[3]);
-  if (mode != "framing" && mode != "root" && mode != "isolated-root") {
+  if (mode != "framing" && mode != "root" && mode != "scalars"
+      && mode != "isolated-root" && mode != "isolated-scalars") {
     std::cerr << "unknown benchmark mode\n";
     return 2;
   }
@@ -146,9 +192,11 @@ int main(int argc, char** argv) {
   auto views = segmentViews(segments);
   auto encoded = capnp::messageToFlatArray(kj::arrayPtr(views.data(), views.size()));
   auto started = std::chrono::steady_clock::now();
-  auto checksum = mode == "isolated-root"
-      ? readIsolatedRoots(kj::arrayPtr(views.data(), views.size()), passes)
-      : readMany(encoded.asPtr(), segmentCount, mode == "root", passes);
+  auto isolated = mode == "isolated-root" || mode == "isolated-scalars";
+  auto scalars = mode == "scalars" || mode == "isolated-scalars";
+  auto checksum = isolated
+      ? readIsolatedRoots(kj::arrayPtr(views.data(), views.size()), scalars, passes)
+      : readMany(encoded.asPtr(), segmentCount, mode != "framing", scalars, passes);
   auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
       std::chrono::steady_clock::now() - started);
   std::cout << elapsed.count() << '\t' << checksum << '\n';

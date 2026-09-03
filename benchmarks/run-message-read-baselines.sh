@@ -64,6 +64,12 @@ workloads=(
     'isolated-root 1'
     'isolated-root 2'
     'isolated-root 64'
+    'scalars 1'
+    'scalars 2'
+    'scalars 64'
+    'isolated-scalars 1'
+    'isolated-scalars 2'
+    'isolated-scalars 64'
 )
 
 run_workload() {

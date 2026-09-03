@@ -2,28 +2,33 @@ use std::hint::black_box;
 use std::time::Instant;
 
 use capnp_io::{BorrowedFrameRead, FrameLimits, Segment, encode_frame, parse_frame_into};
-use capnp_message::{LocalTraversalBudget, MessageSegments, NestingLimit};
+use capnp_message::{
+    DataSection, LocalTraversalBudget, MessageSegments, NestingLimit, PrimitiveError,
+};
 
 const SEED: u64 = 0x4d59_5df4_d0f3_3173;
 const VALUE: u64 = 0x0123_4567_89ab_cdef;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
-    let mode = args
-        .next()
-        .ok_or("usage: message_read framing|root|isolated-root SEGMENTS PASSES")?;
+    let mode = args.next().ok_or(
+        "usage: message_read framing|root|scalars|isolated-root|isolated-scalars SEGMENTS PASSES",
+    )?;
     let segment_count = args
         .next()
         .ok_or("missing segment count")?
         .parse::<usize>()?;
     let passes = args.next().ok_or("missing pass count")?.parse::<usize>()?;
     if args.next().is_some()
-        || !matches!(mode.as_str(), "framing" | "root" | "isolated-root")
+        || !matches!(
+            mode.as_str(),
+            "framing" | "root" | "scalars" | "isolated-root" | "isolated-scalars"
+        )
         || !matches!(segment_count, 1 | 2 | 64)
         || passes == 0
     {
         return Err(
-            "expected framing|root|isolated-root, SEGMENTS in {1,2,64}, and positive PASSES".into(),
+            "expected framing|root|scalars|isolated-root|isolated-scalars, SEGMENTS in {1,2,64}, and positive PASSES".into(),
         );
     }
 
@@ -35,10 +40,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|bytes| Segment::from_bytes(bytes).expect("fixture segments are word-aligned"))
         .collect();
     let started = Instant::now();
-    let checksum = if mode == "isolated-root" {
-        read_isolated_roots(&descriptors, passes)?
+    let checksum = if matches!(mode.as_str(), "isolated-root" | "isolated-scalars") {
+        read_isolated_roots(&descriptors, mode == "isolated-scalars", passes)?
     } else {
-        read_many(&encoded, mode == "root", passes)?
+        read_many(
+            &encoded,
+            matches!(mode.as_str(), "root" | "scalars"),
+            mode == "scalars",
+            passes,
+        )?
     };
     println!("{}\t{}", started.elapsed().as_nanos(), checksum);
     Ok(())
@@ -46,6 +56,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn read_isolated_roots(
     segments: &[Segment<'_>],
+    read_scalars: bool,
     passes: usize,
 ) -> Result<u64, Box<dyn std::error::Error>> {
     let mut checksum = SEED;
@@ -53,13 +64,29 @@ fn read_isolated_roots(
         let message = MessageSegments::from_descriptors(segments)?;
         let budget = LocalTraversalBudget::new(16);
         let root = message.read_root_struct(&budget, NestingLimit::new(8))?;
-        let data_len = root.data_byte_len();
-        let value = root.read_u64(0, 0)?;
-        let fingerprint =
-            segments.len() as u64 ^ (data_len as u64).rotate_left(17) ^ value.rotate_left(37);
+        let fingerprint = if read_scalars {
+            segments.len() as u64 ^ scalar_fingerprint(root.data_section()?)?
+        } else {
+            segments.len() as u64
+                ^ (root.data_byte_len() as u64).rotate_left(17)
+                ^ root.read_u64(0, 0)?.rotate_left(37)
+        };
         checksum = checksum.rotate_left(9) ^ fingerprint;
     }
     Ok(black_box(checksum))
+}
+
+fn scalar_fingerprint(data: DataSection<'_>) -> Result<u64, PrimitiveError> {
+    let mut fingerprint = u64::from(data.read_bool(0, true)?);
+    fingerprint = fingerprint.rotate_left(7) ^ u64::from(data.read_u8(0, 0x5a)?);
+    fingerprint = fingerprint.rotate_left(11) ^ u64::from(data.read_u16(0, 0xa55a)?);
+    fingerprint = fingerprint.rotate_left(13) ^ u64::from(data.read_u32(0, 0x1357_9bdf)?);
+    fingerprint = fingerprint.rotate_left(17) ^ data.read_u64(0, 0xfedc_ba98_7654_3210)?;
+    fingerprint = fingerprint.rotate_left(19) ^ u64::from(data.read_i32(0, -123_456)? as u32);
+    fingerprint = fingerprint.rotate_left(23) ^ u64::from(data.read_f32(0, 1.25)?.to_bits());
+    fingerprint = fingerprint.rotate_left(29) ^ data.read_f64(0, -3.5)?.to_bits();
+    fingerprint = fingerprint.rotate_left(31) ^ u64::from(data.read_u16(0, 7)?);
+    Ok(fingerprint)
 }
 
 fn fixture_segments(count: usize) -> Vec<Vec<u8>> {
@@ -97,6 +124,7 @@ fn write_word(segment: &mut [u8], index: usize, value: u64) {
 fn read_many(
     encoded: &[u8],
     read_root: bool,
+    read_scalars: bool,
     passes: usize,
 ) -> Result<u64, Box<dyn std::error::Error>> {
     let limits = FrameLimits::default();
@@ -126,9 +154,11 @@ fn read_many(
             let message = MessageSegments::from_descriptors(segments)?;
             let budget = LocalTraversalBudget::new(16);
             let root = message.read_root_struct(&budget, NestingLimit::new(8))?;
-            let data_len = root.data_byte_len();
-            let value = root.read_u64(0, 0)?;
-            fingerprint ^= (data_len as u64).rotate_left(17) ^ value.rotate_left(37);
+            fingerprint ^= if read_scalars {
+                scalar_fingerprint(root.data_section()?)?
+            } else {
+                (root.data_byte_len() as u64).rotate_left(17) ^ root.read_u64(0, 0)?.rotate_left(37)
+            };
         }
         checksum = checksum.rotate_left(9) ^ fingerprint;
     }
