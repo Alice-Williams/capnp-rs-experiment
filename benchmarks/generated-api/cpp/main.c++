@@ -149,6 +149,41 @@ uint64_t generatedGroupFingerprint(WireFixture::Reader root) {
       metadata.getCreated(), metadata.getValid());
 }
 
+uint64_t listFingerprint(
+    uint16_t integer, uint16_t color,
+    kj::ArrayPtr<const capnp::byte> text,
+    kj::ArrayPtr<const capnp::byte> data,
+    uint16_t nested) {
+  uint64_t value = integer;
+  value = std::rotl(value, 11) ^ color;
+  value = std::rotl(value, 17) ^ uint64_t{text.size()};
+  value = std::rotl(value, 23)
+      ^ static_cast<uint64_t>(text.size() == 0 ? 0 : text[text.size() - 1]);
+  value = std::rotl(value, 29) ^ uint64_t{data.size()};
+  value = std::rotl(value, 31)
+      ^ static_cast<uint64_t>(data.size() == 0 ? 0 : data[data.size() - 1]);
+  return std::rotl(value, 37) ^ nested;
+}
+
+uint64_t directListFingerprint(capnp::AnyStruct::Reader root) {
+  auto pointers = root.getPointerSection();
+  auto integers = pointers[9].getAs<capnp::List<uint16_t>>();
+  auto colors = pointers[14].getAs<capnp::List<uint16_t>>();
+  auto texts = pointers[15].getAs<capnp::List<capnp::Text>>();
+  auto blobs = pointers[16].getAs<capnp::List<capnp::Data>>();
+  auto nested = pointers[18].getAs<capnp::List<capnp::List<uint16_t>>>();
+  return listFingerprint(
+      integers[2], colors[2], texts[2].asBytes(), blobs[1], nested[0][2]);
+}
+
+uint64_t generatedListFingerprint(WireFixture::Reader root) {
+  auto text = root.getTexts()[2];
+  auto data = root.getDataBlobs()[1];
+  return listFingerprint(
+      root.getUint16s()[2], static_cast<uint16_t>(root.getColors()[2]),
+      text.asBytes(), data, root.getNestedLists()[0][2]);
+}
+
 template <typename Root, typename Fingerprint>
 uint64_t measure(Root root, Fingerprint fingerprint, size_t passes) {
   uint64_t checksum = SEED;
@@ -164,7 +199,7 @@ uint64_t measure(Root root, Fingerprint fingerprint, size_t passes) {
 
 int main(int argc, char** argv) {
   if (argc != 4) {
-    std::cerr << "usage: cpp-generated-api direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups PASSES FIXTURE\n";
+    std::cerr << "usage: cpp-generated-api direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups|borrowed-direct-lists|borrowed-lists PASSES FIXTURE\n";
     return 2;
   }
   auto mode = std::string_view(argv[1]);
@@ -188,6 +223,10 @@ int main(int argc, char** argv) {
     checksum = measure(message.getRoot<capnp::AnyStruct>(), directGroupFingerprint, passes);
   } else if (mode == "borrowed-groups") {
     checksum = measure(message.getRoot<WireFixture>(), generatedGroupFingerprint, passes);
+  } else if (mode == "borrowed-direct-lists") {
+    checksum = measure(message.getRoot<capnp::AnyStruct>(), directListFingerprint, passes);
+  } else if (mode == "borrowed-lists") {
+    checksum = measure(message.getRoot<WireFixture>(), generatedListFingerprint, passes);
   } else {
     std::cerr << "unknown benchmark mode\n";
     return 2;

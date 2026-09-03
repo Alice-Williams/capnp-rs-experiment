@@ -24,7 +24,7 @@ const FRAME: &[u8] = include_bytes!(concat!(
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let mode = args.next().ok_or(
-        "usage: generated_api_benchmark direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups PASSES",
+        "usage: generated_api_benchmark direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups|borrowed-direct-lists|borrowed-lists PASSES",
     )?;
     let passes = args.next().ok_or("missing passes")?.parse::<usize>()?;
     if args.next().is_some()
@@ -41,6 +41,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 | "borrowed-blobs"
                 | "borrowed-direct-groups"
                 | "borrowed-groups"
+                | "borrowed-direct-lists"
+                | "borrowed-lists"
         )
     {
         return Err("expected a known mode and positive PASSES".into());
@@ -101,6 +103,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             direct_group_fingerprint(borrowed_direct).map_err(Into::into)
         })?,
         "borrowed-groups" => measure(passes, || Ok(borrowed_group_fingerprint(&borrowed)))?,
+        "borrowed-direct-lists" => measure(passes, || direct_list_fingerprint(borrowed_direct))?,
+        "borrowed-lists" => measure(passes, || borrowed_list_fingerprint(&borrowed))?,
         _ => unreachable!(),
     };
     println!("{}\t{}", started.elapsed().as_nanos(), checksum);
@@ -256,6 +260,58 @@ fn group_fingerprint(tag: u16, number: u64, created: u64, valid: bool) -> u64 {
     value = value.rotate_left(17) ^ number;
     value = value.rotate_left(23) ^ created;
     value.rotate_left(29) ^ u64::from(valid)
+}
+
+fn direct_list_fingerprint<B: capnp_message::TraversalBudget>(
+    reader: capnp_message::StructReader<'_, '_, B>,
+) -> Result<u64, Box<dyn std::error::Error>> {
+    let reader = black_box(reader);
+    let pointers = reader.pointer_section()?;
+    let integer = pointers.read_list(9)?.as_primitive::<u16>()?.get(2)?;
+    let color = pointers.read_list(14)?.as_primitive::<u16>()?.get(2)?;
+    let text = pointers.read_list(15)?.as_pointers()?.read_text(2)?;
+    let data = pointers.read_list(16)?.as_pointers()?.read_data(1)?;
+    let nested = pointers
+        .read_list(18)?
+        .as_pointers()?
+        .get_list(0)?
+        .as_primitive::<u16>()?
+        .get(2)?;
+    Ok(list_fingerprint(
+        integer,
+        color,
+        text.as_bytes(),
+        data.as_bytes(),
+        nested,
+    ))
+}
+
+fn borrowed_list_fingerprint<B: capnp_message::TraversalBudget>(
+    reader: &wire_fixture::BorrowedReader<'_, '_, B>,
+) -> Result<u64, Box<dyn std::error::Error>> {
+    let reader = black_box(reader);
+    let integer = reader.uint16s()?.get(2)?;
+    let color = reader.colors()?.get(2)?.ordinal();
+    let text = reader.texts()?.get(2)?;
+    let data = reader.data_blobs()?.get(1)?;
+    let nested = reader.nested_lists()?.get(0)?.get(2)?;
+    Ok(list_fingerprint(
+        integer,
+        color,
+        text.as_bytes(),
+        data.as_bytes(),
+        nested,
+    ))
+}
+
+fn list_fingerprint(integer: u16, color: u16, text: &[u8], data: &[u8], nested: u16) -> u64 {
+    let mut value = u64::from(integer);
+    value = value.rotate_left(11) ^ u64::from(color);
+    value = value.rotate_left(17) ^ text.len() as u64;
+    value = value.rotate_left(23) ^ u64::from(text.last().copied().unwrap_or_default());
+    value = value.rotate_left(29) ^ data.len() as u64;
+    value = value.rotate_left(31) ^ u64::from(data.last().copied().unwrap_or_default());
+    value.rotate_left(37) ^ u64::from(nested)
 }
 
 fn owned_frame() -> Result<Arc<OwnedMessage>, Box<dyn std::error::Error>> {
