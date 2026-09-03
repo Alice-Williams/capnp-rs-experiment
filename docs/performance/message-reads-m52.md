@@ -335,3 +335,38 @@ descriptor ownership is not required for safety.
 
 Evidence:
 `benchmarks/results/2026-09-03-m52-retained-baseline-g-drive-docker/`.
+
+## Final retained-root and milestone performance result
+
+`MessageSegments` can now borrow the immutable `Arc<[u8]>` table already owned
+and validated by `OwnedMessage`. Reopening an `ObjectRef` therefore constructs
+only a small coordinate context: it performs no allocation, descriptor copy,
+or payload copy. Segment bytes remain owned by the retained message, readers
+still store stable coordinates rather than cached native pointers, and the
+shared traversal budget remains exact and atomic.
+
+| Segments | C++ ns/reopen | Rust ns/reopen | Rust / C++ |
+| ---: | ---: | ---: | ---: |
+| 1 | 20.5138 | 20.3803 | 0.993 |
+| 2 | 43.5915 | 28.2594 | 0.648 |
+| 64 | 43.3433 | 27.2666 | 0.629 |
+
+The same two-warmup, nine-run, one-million-operation evidence set closes every
+M52 performance gate simultaneously:
+
+| Workload | 1 segment | 2 segments | 64 segments |
+| --- | ---: | ---: | ---: |
+| root cumulative Rust / C++ | 0.229 | 0.119 | 0.318 |
+| scalar cumulative Rust / C++ | 0.265 | 0.129 | 0.327 |
+| blob cumulative Rust / C++ | 0.298 | 0.154 | 0.326 |
+| scalar-only Rust / C++ | 0.990 | 1.007 | 0.748 |
+| blob-only Rust / C++ | 0.670 | 0.775 | 0.647 |
+| retained-root Rust / C++ | 0.993 | 0.648 | 0.629 |
+
+All cumulative rows remain below the inherited 0.331, 0.172, and 0.349
+ceilings. Every isolated component is at or below the 1.03 parity limit. The
+paired root-minus-framing ratios are 0.194, 0.100, and 0.070, and the isolated
+root ratios independently remain far below parity.
+
+Evidence:
+`benchmarks/results/2026-09-03-m52-retained-final-g-drive-docker/`.
