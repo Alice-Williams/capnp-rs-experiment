@@ -105,3 +105,9 @@ complete zero-stream unpack measured 0.894. The transform itself is faster
 (`0.901` incremental), but the cumulative result does not preserve that
 sub-microbenchmark's unusually low ratio. A longer final run must resolve the
 short-output allocation noise or the zero decoder must improve further.
+
+That candidate also exposed a lower-case modeling error: unpack had been paired
+with copying its compressed input rather than materializing its unpacked
+output. The final summarizer corrects unpack and unpack-stream to use the exact
+unpacked-output copy floor. The candidate files remain immutable evidence of
+the earlier analysis and are not used by the final ratio gate.

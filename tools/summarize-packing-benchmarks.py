@@ -64,8 +64,8 @@ def main() -> None:
         transforms = (
             ("pack", "copy-unpacked"),
             ("pack-stream", "copy-unpacked"),
-            ("unpack", "copy-packed"),
-            ("unpack-stream", "copy-packed"),
+            ("unpack", "copy-unpacked"),
+            ("unpack-stream", "copy-unpacked"),
         )
         for case, lower_case in transforms:
             for shape in sorted({key[2] for key in medians if key[1] == case}):

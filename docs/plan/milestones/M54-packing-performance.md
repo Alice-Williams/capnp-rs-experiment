@@ -27,6 +27,11 @@ One-shot and chunked-streaming results are separate gates. A result for one
 input distribution, direction, chunking model, or allocation model cannot
 substitute for another.
 
+Encoding inherits the unpacked-input copy/emission floor established below the
+packing layer. Decoding inherits materialization of its exact unpacked output;
+copying only the compressed input would omit the allocation and byte writes
+that both decoders necessarily perform and is not a valid lower-layer case.
+
 ## Comparison contract
 
 - Pin C++ to `e7c9cd96f1505b5ae486db7821006c2f5dce5b5b`
