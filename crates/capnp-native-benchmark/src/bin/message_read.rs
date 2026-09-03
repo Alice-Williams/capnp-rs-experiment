@@ -2,7 +2,7 @@ use std::hint::black_box;
 use std::time::Instant;
 
 use capnp_io::{BorrowedFrameRead, FrameLimits, Segment, encode_frame, parse_frame_into};
-use capnp_message::{LocalTraversalBudget, MessageSegments, NestingLimit, WireLocation};
+use capnp_message::{LocalTraversalBudget, MessageSegments, NestingLimit};
 
 const SEED: u64 = 0x4d59_5df4_d0f3_3173;
 const VALUE: u64 = 0x0123_4567_89ab_cdef;
@@ -52,19 +52,11 @@ fn read_isolated_roots(
     for _ in 0..passes {
         let message = MessageSegments::from_descriptors(segments)?;
         let budget = LocalTraversalBudget::new(16);
-        let root = message.read_struct(
-            WireLocation {
-                segment_id: 0,
-                word_offset: 0,
-            },
-            &budget,
-            NestingLimit::new(8),
-        )?;
-        let data = root.data_section()?;
-        let value = data.read_u64(0, 0)?;
-        let fingerprint = segments.len() as u64
-            ^ (data.as_bytes().len() as u64).rotate_left(17)
-            ^ value.rotate_left(37);
+        let root = message.read_root_struct(&budget, NestingLimit::new(8))?;
+        let data_len = root.data_byte_len();
+        let value = root.read_u64(0, 0)?;
+        let fingerprint =
+            segments.len() as u64 ^ (data_len as u64).rotate_left(17) ^ value.rotate_left(37);
         checksum = checksum.rotate_left(9) ^ fingerprint;
     }
     Ok(black_box(checksum))
@@ -133,17 +125,10 @@ fn read_many(
         if read_root {
             let message = MessageSegments::from_descriptors(segments)?;
             let budget = LocalTraversalBudget::new(16);
-            let root = message.read_struct(
-                WireLocation {
-                    segment_id: 0,
-                    word_offset: 0,
-                },
-                &budget,
-                NestingLimit::new(8),
-            )?;
-            let data = root.data_section()?;
-            let value = data.read_u64(0, 0)?;
-            fingerprint ^= (data.as_bytes().len() as u64).rotate_left(17) ^ value.rotate_left(37);
+            let root = message.read_root_struct(&budget, NestingLimit::new(8))?;
+            let data_len = root.data_byte_len();
+            let value = root.read_u64(0, 0)?;
+            fingerprint ^= (data_len as u64).rotate_left(17) ^ value.rotate_left(37);
         }
         checksum = checksum.rotate_left(9) ^ fingerprint;
     }

@@ -12,6 +12,13 @@ pub struct WireLocation {
     pub word_offset: u32,
 }
 
+impl WireLocation {
+    pub const ROOT: Self = Self {
+        segment_id: 0,
+        word_offset: 0,
+    };
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StructRef {
     pub content: WireLocation,
@@ -204,7 +211,7 @@ impl<'a> MessageSegments<'a> {
     }
 
     /// Borrows descriptors whose word alignment was already validated.
-    #[inline]
+    #[inline(always)]
     pub fn from_descriptors(segments: &'a [Segment<'a>]) -> Result<Self, ValidationError> {
         if segments.is_empty() {
             return Err(ValidationError::NoSegments);
@@ -229,7 +236,7 @@ impl<'a> MessageSegments<'a> {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn segment(&self, id: u32) -> Option<&'a [u8]> {
         if id == 0 {
             return Some(self.first);
@@ -338,6 +345,56 @@ impl<'a> MessageSegments<'a> {
         }
 
         let pointer = self.validate_wire_pointer(location, wire_pointer)?;
+        let child_nesting = match pointer {
+            ResolvedPointer::Struct(_) | ResolvedPointer::List(_) => nesting.descend()?,
+            ResolvedPointer::Null | ResolvedPointer::Capability(_) => nesting,
+        };
+        let charged_words = traversal_charge(wire_pointer, pointer)?;
+        budget.try_charge(charged_words)?;
+        Ok(BoundedPointer {
+            pointer,
+            child_nesting,
+            charged_words,
+        })
+    }
+
+    #[inline(always)]
+    pub(crate) fn validate_root_struct_pointer_with_limits<B: TraversalBudget>(
+        &self,
+        budget: &B,
+        nesting: NestingLimit,
+    ) -> Result<BoundedPointer, TraversalError> {
+        let bytes = self
+            .first
+            .first_chunk::<8>()
+            .ok_or(ValidationError::ObjectOutOfBounds {
+                location: WireLocation::ROOT,
+                words: 1,
+                segment_words: u64::try_from(self.first.len() / 8)
+                    .map_err(|_| ValidationError::TargetWordOverflow)?,
+            })?;
+        let wire_pointer = WirePointer::from_le_bytes(*bytes);
+        if !wire_pointer.is_null() && wire_pointer.kind() == PointerKind::Struct {
+            let fields = wire_pointer
+                .struct_fields()
+                .expect("struct discriminator was checked");
+            let content = positional_target(WireLocation::ROOT, fields.offset)?;
+            let charged_words = u64::from(fields.data_words) + u64::from(fields.pointer_count);
+            check_range_in_segment(content, charged_words, self.first)?;
+            let child_nesting = nesting.descend()?;
+            budget.try_charge(charged_words)?;
+            return Ok(BoundedPointer {
+                pointer: ResolvedPointer::Struct(StructRef {
+                    content,
+                    data_words: fields.data_words,
+                    pointer_count: fields.pointer_count,
+                }),
+                child_nesting,
+                charged_words,
+            });
+        }
+
+        let pointer = self.validate_wire_pointer(WireLocation::ROOT, wire_pointer)?;
         let child_nesting = match pointer {
             ResolvedPointer::Struct(_) | ResolvedPointer::List(_) => nesting.descend()?,
             ResolvedPointer::Null | ResolvedPointer::Capability(_) => nesting,

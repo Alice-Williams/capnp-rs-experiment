@@ -106,6 +106,27 @@ impl<'context, 'data, B> Clone for StructReader<'context, 'data, B> {
 impl<'context, 'data, B> Copy for StructReader<'context, 'data, B> {}
 
 impl<'data> MessageSegments<'data> {
+    /// Opens the charged root struct reader at segment zero, word zero.
+    ///
+    /// ```
+    /// use capnp_message::{LocalTraversalBudget, MessageSegments, NestingLimit};
+    /// let null = [0u8; 8];
+    /// let message = MessageSegments::new(&[&null])?;
+    /// let budget = LocalTraversalBudget::new(0);
+    /// let root = message.read_root_struct(&budget, NestingLimit::new(0))?;
+    /// assert!(root.reference().is_none());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[inline(always)]
+    pub fn read_root_struct<'context, B: TraversalBudget>(
+        &'context self,
+        budget: &'context B,
+        nesting: NestingLimit,
+    ) -> Result<StructReader<'context, 'data, B>, StructReadError> {
+        let bounded = self.validate_root_struct_pointer_with_limits(budget, nesting)?;
+        self.struct_reader_from_bounded(bounded, budget)
+    }
+
     /// Opens a charged struct reader at a pointer location.
     ///
     /// ```
@@ -129,6 +150,15 @@ impl<'data> MessageSegments<'data> {
         nesting: NestingLimit,
     ) -> Result<StructReader<'context, 'data, B>, StructReadError> {
         let bounded = self.validate_struct_pointer_with_limits(location, budget, nesting)?;
+        self.struct_reader_from_bounded(bounded, budget)
+    }
+
+    #[inline(always)]
+    fn struct_reader_from_bounded<'context, B: TraversalBudget>(
+        &'context self,
+        bounded: BoundedPointer,
+        budget: &'context B,
+    ) -> Result<StructReader<'context, 'data, B>, StructReadError> {
         match bounded.pointer {
             ResolvedPointer::Null => Ok(StructReader {
                 segments: self,
@@ -186,6 +216,52 @@ impl<'context, 'data, B: TraversalBudget> StructReader<'context, 'data, B> {
     /// Returns another schema view over the same bytes without charging or descending.
     pub const fn group(self) -> Self {
         self
+    }
+
+    #[inline(always)]
+    pub const fn data_byte_len(self) -> usize {
+        match self.reference {
+            Some(reference) => reference.data_words as usize * 8,
+            None => 0,
+        }
+    }
+
+    /// Reads one data word directly from this struct, applying its schema default.
+    #[inline(always)]
+    pub fn read_u64(self, offset: u32, default: u64) -> Result<u64, StructReadError> {
+        let Some(reference) = self.reference else {
+            return Ok(default);
+        };
+        if offset >= u32::from(reference.data_words) {
+            return Ok(default);
+        }
+        let word_offset = reference
+            .content
+            .word_offset
+            .checked_add(offset)
+            .ok_or(StructReadError::RangeOverflow)?;
+        let segment = self.segments.segment(reference.content.segment_id).ok_or(
+            StructReadError::UnknownSegment {
+                segment_id: reference.content.segment_id,
+            },
+        )?;
+        let start = usize::try_from(word_offset)
+            .map_err(|_| StructReadError::RangeOverflow)?
+            .checked_mul(8)
+            .ok_or(StructReadError::RangeOverflow)?;
+        let end = start.checked_add(8).ok_or(StructReadError::RangeOverflow)?;
+        let bytes = segment
+            .get(start..end)
+            .ok_or(StructReadError::DataOutOfBounds {
+                location: reference.content,
+                data_words: reference.data_words,
+                segment_bytes: segment.len(),
+            })?;
+        Ok(u64::from_le_bytes(
+            bytes
+                .try_into()
+                .expect("a checked data-word range is exactly eight bytes"),
+        ) ^ default)
     }
 
     #[inline]
@@ -400,6 +476,26 @@ mod tests {
         );
         assert_eq!(reader.pointer_location(0), Ok(None));
         assert_eq!(reader.group().reference(), reader.reference());
+        assert_eq!(reader.data_byte_len(), 0);
+        assert_eq!(reader.read_u64(0, 7), Ok(7));
+    }
+
+    #[test]
+    fn direct_data_word_read_preserves_defaults_and_bounds() {
+        let mut bytes = [0u8; 16];
+        WirePointer::new_struct(0, 1, 0)
+            .expect("root shape fits")
+            .write_to(&mut bytes, 0)
+            .expect("root pointer fits");
+        bytes[8..].copy_from_slice(&0x0123_4567_89ab_cdef_u64.to_le_bytes());
+        let segments = MessageSegments::new(&[&bytes]).expect("segment is aligned");
+        let budget = LocalTraversalBudget::new(1);
+        let reader = segments
+            .read_root_struct(&budget, NestingLimit::new(1))
+            .expect("root struct is valid");
+        assert_eq!(reader.data_byte_len(), 8);
+        assert_eq!(reader.read_u64(0, 0), Ok(0x0123_4567_89ab_cdef));
+        assert_eq!(reader.read_u64(1, 7), Ok(7));
     }
 
     #[test]

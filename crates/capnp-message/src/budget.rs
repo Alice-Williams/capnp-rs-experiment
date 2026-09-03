@@ -83,7 +83,7 @@ impl LocalTraversalBudget {
 impl sealed::Sealed for LocalTraversalBudget {}
 
 impl TraversalBudget for LocalTraversalBudget {
-    #[inline]
+    #[inline(always)]
     fn try_charge(&self, words: u64) -> Result<(), BudgetExhausted> {
         let remaining = self.remaining.get();
         match remaining.checked_sub(words) {
