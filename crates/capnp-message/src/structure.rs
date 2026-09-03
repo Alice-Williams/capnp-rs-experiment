@@ -168,7 +168,7 @@ impl<'context, 'data, B: TraversalBudget> PointerSection<'context, 'data, B> {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn read_struct(
         self,
         index: u16,
@@ -239,7 +239,7 @@ impl<'data> MessageSegments<'data> {
     /// assert!(root.reference().is_none());
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    #[inline]
+    #[inline(always)]
     pub fn read_struct<'context, B: TraversalBudget>(
         &'context self,
         location: WireLocation,

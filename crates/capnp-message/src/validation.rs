@@ -407,7 +407,7 @@ impl<'a> MessageSegments<'a> {
         })
     }
 
-    #[inline]
+    #[inline(always)]
     pub(crate) fn validate_struct_pointer_with_limits<B: TraversalBudget>(
         &self,
         location: WireLocation,
