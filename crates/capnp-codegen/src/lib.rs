@@ -19,6 +19,8 @@ use capnp_schema::{
     NodeId, NodeKind, ScopeBinding, Type,
 };
 
+const RETAINED_DATA_CACHE_LIMIT: usize = 128;
+
 /// A generated Rust module and its stable source text.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GeneratedFile {
@@ -930,6 +932,8 @@ fn emit_struct(
     let marker = marker_type(&parameters);
     let brand = generated_brand_expression(&parameters);
     let data_bytes = usize::from(structure.data_word_count) * 8;
+    let cache_retained_data = data_bytes <= RETAINED_DATA_CACHE_LIMIT;
+    let retained_data_bytes = if cache_retained_data { data_bytes } else { 0 };
     let generated_bounds = parameters
         .iter()
         .map(|parameter| format!("{}: GeneratedType", parameter.name))
@@ -948,7 +952,7 @@ fn emit_struct(
     .map_err(|_| GenerateError::Format)?;
     writeln!(
         output,
-        "    pub struct Reader{declaration} {{ inner: capnp_schema::GeneratedStructReader, full_data: Option<[u8; {data_bytes}]>, marker: PhantomData<fn() -> {marker}> }}"
+        "    pub struct Reader{declaration} {{ inner: capnp_schema::GeneratedStructReader, full_data: Option<[u8; {retained_data_bytes}]>, marker: PhantomData<fn() -> {marker}> }}"
     )
     .map_err(|_| GenerateError::Format)?;
     writeln!(
@@ -988,7 +992,14 @@ fn emit_struct(
 
     for (index, field) in structure.fields.iter().enumerate() {
         emit_field_docs(output, schema, node.id, index, field)?;
-        emit_reader_field(output, schema, field, names, &parameters)?;
+        emit_reader_field(
+            output,
+            schema,
+            field,
+            names,
+            &parameters,
+            cache_retained_data,
+        )?;
     }
     if structure.discriminant_count > 0 {
         writeln!(
@@ -2342,6 +2353,7 @@ fn emit_reader_field(
     field: &Field,
     names: &Names,
     context: &[GenericParameter],
+    cache_retained_data: bool,
 ) -> Result<(), GenerateError> {
     let method = rust_snake(&field.name);
     match &field.kind {
@@ -2369,7 +2381,15 @@ fn emit_reader_field(
             default_value,
             ..
         } => {
-            if !emit_direct_scalar_getter(output, &method, *offset, ty, default_value, names)? {
+            if !emit_direct_scalar_getter(
+                output,
+                &method,
+                *offset,
+                ty,
+                default_value,
+                names,
+                cache_retained_data,
+            )? {
                 emit_typed_getter(output, schema, &method, &field.name, ty, names, context)?;
             }
         }
@@ -2384,6 +2404,7 @@ fn emit_direct_scalar_getter(
     ty: &Type,
     default: &capnp_schema::Value,
     names: &Names,
+    cache_retained_data: bool,
 ) -> Result<bool, GenerateError> {
     use capnp_schema::Value;
 
@@ -2451,10 +2472,13 @@ fn emit_direct_scalar_getter(
     let Some((rust_type, fallback)) = direct else {
         return Ok(false);
     };
-    let expression =
+    let expression = if cache_retained_data {
         borrowed_full_data_value(ty, default, offset, names)?.map_or(fallback.clone(), |full| {
             format!("if let Some(data) = &self.full_data {{ Ok({full}) }} else {{ {fallback} }}")
-        });
+        })
+    } else {
+        fallback
+    };
     writeln!(
         output,
         "        #[inline(always)]\n        pub fn {method}(&self) -> Result<{rust_type}, capnp_schema::DynamicError> {{ {expression} }}"
