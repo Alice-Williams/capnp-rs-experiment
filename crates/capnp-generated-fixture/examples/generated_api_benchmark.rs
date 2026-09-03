@@ -8,7 +8,7 @@ use capnp_io::{FrameLimits, FrameRead, parse_frame};
 use capnp_message::{
     BorrowedMessage, ExclusiveArena, OwnedMessage, ReaderLimits, StructBuilder, StructReadError,
 };
-use capnp_schema::{CompiledSchema, LoadLimits, NodeKind};
+use capnp_schema::{CompiledSchema, DynamicInput, LoadLimits, NodeKind};
 
 const SEED: u64 = 0x4d59_5df4_d0f3_3173;
 const REQUEST: &[u8] = include_bytes!(concat!(
@@ -34,7 +34,7 @@ const EMPTY_FRAME: &[u8] = &[0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let mode = args.next().ok_or(
-        "usage: generated_api_benchmark direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups|borrowed-direct-lists|borrowed-lists|borrowed-direct-nested|borrowed-nested|borrowed-direct-struct-lists|borrowed-struct-lists|borrowed-direct-evolution|borrowed-evolution|borrowed-direct-defaults|borrowed-defaults|direct-builder-scalars|generated-builder-scalars|direct-builder-blobs|generated-builder-blobs|direct-builder-struct|generated-builder-struct|direct-builder-list|generated-builder-list PASSES",
+        "usage: generated_api_benchmark direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups|borrowed-direct-lists|borrowed-lists|borrowed-direct-nested|borrowed-nested|borrowed-direct-struct-lists|borrowed-struct-lists|borrowed-direct-evolution|borrowed-evolution|borrowed-direct-defaults|borrowed-defaults|direct-builder-scalars|generated-builder-scalars|direct-builder-blobs|generated-builder-blobs|direct-builder-struct|generated-builder-struct|direct-builder-list|generated-builder-list|direct-builder-struct-list|generated-builder-struct-list PASSES",
     )?;
     let passes = args.next().ok_or("missing passes")?.parse::<usize>()?;
     if args.next().is_some()
@@ -69,6 +69,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 | "generated-builder-struct"
                 | "direct-builder-list"
                 | "generated-builder-list"
+                | "direct-builder-struct-list"
+                | "generated-builder-struct-list"
         )
     {
         return Err("expected a known mode and positive PASSES".into());
@@ -171,18 +173,25 @@ fn run_builder_benchmark(
     passes: usize,
     schema: &CompiledSchema,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let max_words = if mode.ends_with("builder-blobs")
+    let words_per_pass = if mode.ends_with("builder-struct-list") {
+        5
+    } else if mode.ends_with("builder-blobs")
         || mode.ends_with("builder-struct")
         || mode.ends_with("builder-list")
     {
+        2
+    } else {
+        0
+    };
+    let max_words = if words_per_pass == 0 {
+        1_024
+    } else {
         u32::try_from(
             passes
-                .checked_mul(2)
+                .checked_mul(words_per_pass)
                 .and_then(|words| words.checked_add(64))
                 .ok_or("builder benchmark arena size overflow")?,
         )?
-    } else {
-        1_024
     };
     let mut arena = ExclusiveArena::new(max_words, max_words)?;
     let started;
@@ -277,7 +286,7 @@ fn run_builder_benchmark(
             write_direct_list,
             list_builder_fingerprint,
         )?
-    } else {
+    } else if mode == "generated-builder-list" {
         let mut builder = wire_fixture::Builder::init_root(schema, &mut arena)?;
         started = Instant::now();
         measure_builder(
@@ -285,6 +294,31 @@ fn run_builder_benchmark(
             &mut builder,
             write_generated_list,
             list_builder_fingerprint,
+        )?
+    } else if mode == "direct-builder-struct-list" {
+        let node = schema
+            .node(wire_fixture::TYPE_ID)
+            .ok_or("WireFixture schema is missing")?;
+        let NodeKind::Struct(structure) = &node.kind else {
+            return Err("WireFixture is not a struct".into());
+        };
+        let mut builder =
+            arena.init_root_struct(structure.data_word_count, structure.pointer_count)?;
+        started = Instant::now();
+        measure_builder(
+            passes,
+            &mut builder,
+            write_direct_struct_list,
+            struct_list_builder_fingerprint,
+        )?
+    } else {
+        let mut builder = wire_fixture::Builder::init_root(schema, &mut arena)?;
+        started = Instant::now();
+        measure_builder(
+            passes,
+            &mut builder,
+            write_generated_struct_list,
+            struct_list_builder_fingerprint,
         )?
     };
     println!("{}\t{}", started.elapsed().as_nanos(), checksum);
@@ -394,6 +428,41 @@ fn list_builder_fingerprint(pass: usize) -> u64 {
     fingerprint = fingerprint.rotate_left(11) ^ u64::from(values[1]);
     fingerprint = fingerprint.rotate_left(17) ^ u64::from(values[2]);
     fingerprint.rotate_left(23) ^ u64::from(values[3])
+}
+
+fn struct_list_builder_values(pass: usize) -> [u32; 2] {
+    let value = pass as u32;
+    [value, value.rotate_left(11) ^ 0xa5a5_5a5a]
+}
+
+fn write_direct_struct_list(
+    builder: &mut StructBuilder<'_>,
+    pass: usize,
+) -> Result<(), capnp_message::ArenaError> {
+    let values = struct_list_builder_values(pass);
+    let mut list = builder.init_struct_list(17, 2, 1, 1)?;
+    for (index, value) in values.into_iter().enumerate() {
+        list.get(index as u32)?.set_u32(0, value, 0)?;
+    }
+    Ok(())
+}
+
+fn write_generated_struct_list(
+    builder: &mut wire_fixture::Builder<'_, '_>,
+    pass: usize,
+) -> Result<(), capnp_schema::DynamicError> {
+    let values = struct_list_builder_values(pass);
+    let mut list = builder.init_structs(2)?;
+    for (index, value) in values.into_iter().enumerate() {
+        list.struct_element(index as u32)?
+            .set("value", DynamicInput::UInt32(value))?;
+    }
+    Ok(())
+}
+
+fn struct_list_builder_fingerprint(pass: usize) -> u64 {
+    let values = struct_list_builder_values(pass);
+    u64::from(values[0]).rotate_left(17) ^ u64::from(values[1]).rotate_left(41)
 }
 
 fn write_direct_scalars(
