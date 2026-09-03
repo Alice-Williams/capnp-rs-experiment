@@ -1249,6 +1249,27 @@ fn emit_borrowed_reader_field(
         return writeln!(output, "        pub fn {method}(&self) {{}}")
             .map_err(|_| GenerateError::Format);
     }
+    if let (Type::Enum { type_id, .. }, Value::Enum(default)) = (ty, default_value) {
+        let name = names.reference(*type_id, true)?;
+        let ordinal_method = format!("{method}_ordinal");
+        let ordinal_type = Type::UInt16;
+        let ordinal_default = Value::UInt16(*default);
+        let fallback = format!("self.data.get_u16({offset}, {default})");
+        let expression = borrowed_full_data_value(&ordinal_type, &ordinal_default, *offset, names)?
+            .map_or(fallback.clone(), |full| {
+                format!("if let Some(data) = self.full_data {{ {full} }} else {{ {fallback} }}")
+            });
+        writeln!(
+            output,
+            "        pub fn {ordinal_method}(&self) -> u16 {{ {expression} }}"
+        )
+        .map_err(|_| GenerateError::Format)?;
+        return writeln!(
+            output,
+            "        pub fn {method}(&self) -> {name} {{ {name}::from_ordinal(self.{ordinal_method}()) }}"
+        )
+        .map_err(|_| GenerateError::Format);
+    }
     if let Some((return_type, fallback)) =
         borrowed_total_data_value(ty, default_value, *offset, names)?
     {

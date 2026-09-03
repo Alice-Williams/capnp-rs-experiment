@@ -478,6 +478,7 @@ mod tests {
             .expect("borrowed generated root opens");
         assert_eq!(reader.uint32_value(), 4_000_000_000);
         assert_eq!(reader.color(), Color::Blue);
+        assert_eq!(reader.color_ordinal(), 2);
         assert_eq!(reader.defaulted(), 0);
         assert!(
             reader
@@ -512,6 +513,7 @@ mod tests {
         assert_eq!(reader.uint64_value(), 0);
         assert_eq!(reader.defaulted(), 123_456);
         assert_eq!(reader.color(), Color::Red);
+        assert_eq!(reader.color_ordinal(), 0);
     }
 
     #[test]

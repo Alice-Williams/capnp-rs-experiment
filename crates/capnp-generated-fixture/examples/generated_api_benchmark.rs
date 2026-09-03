@@ -171,13 +171,7 @@ fn borrowed_scalar_fingerprint<B: capnp_message::TraversalBudget>(
     value = value.rotate_left(29) ^ reader.uint64_value();
     value = value.rotate_left(31) ^ u64::from(reader.float32_value().to_bits());
     value = value.rotate_left(37) ^ reader.float64_value().to_bits();
-    value = value.rotate_left(41)
-        ^ u64::from(match reader.color() {
-            Color::Red => 0,
-            Color::Green => 1,
-            Color::Blue => 2,
-            Color::Unrecognized(value) => value,
-        });
+    value = value.rotate_left(41) ^ u64::from(reader.color_ordinal());
     value = value.rotate_left(43) ^ u64::from(reader.defaulted());
     Ok(value)
 }
