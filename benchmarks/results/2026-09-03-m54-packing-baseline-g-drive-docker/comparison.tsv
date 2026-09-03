@@ -1,0 +1,17 @@
+case	shape	cpp_median_ns_per_word	native_median_ns_per_word	native_over_cpp
+copy-packed	mixed	0.1286	0.1386	1.078
+copy-packed	raw	0.1974	0.2146	1.087
+copy-packed	realistic	0.0575	0.0748	1.299
+copy-packed	zero	0.0039	0.0033	0.849
+copy-unpacked	mixed	0.1737	0.1670	0.961
+copy-unpacked	raw	0.1621	0.1684	1.039
+copy-unpacked	realistic	0.1608	0.1644	1.022
+copy-unpacked	zero	0.1960	0.1624	0.828
+pack	mixed	6.2738	16.1760	2.578
+pack	raw	1.3583	8.7968	6.476
+pack	realistic	5.5284	14.6064	2.642
+pack	zero	0.8550	6.2282	7.284
+unpack	mixed	5.5412	10.8145	1.952
+unpack	raw	0.4189	0.2893	0.690
+unpack	realistic	5.0108	9.1430	1.825
+unpack	zero	0.2624	0.1899	0.724

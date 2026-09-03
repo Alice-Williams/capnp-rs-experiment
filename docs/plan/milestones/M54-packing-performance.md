@@ -51,12 +51,12 @@ substitute for another.
 
 ## Implementation checklist
 
-- [ ] Trace native and pinned C++ packed encode/decode paths, buffering,
+- [x] Trace native and pinned C++ packed encode/decode paths, buffering,
   allocation, run detection, and streaming state.
-- [ ] Add matched low-level Rust/C++ fixtures and a paired packing runner with
+- [x] Add matched low-level Rust/C++ fixtures and a paired packing runner with
   exact-output and semantic checksums.
-- [ ] Record and verify the unmodified M54 baseline.
-- [ ] Attribute each material gap with isolated phase, allocation-count, or
+- [x] Record and verify the unmodified M54 baseline.
+- [x] Attribute each material gap with isolated phase, allocation-count, or
   profile evidence before changing implementation code.
 - [ ] Optimize one-shot and streaming paths while preserving safety, limits,
   and deterministic output.
