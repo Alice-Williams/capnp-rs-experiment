@@ -73,6 +73,15 @@ workloads=(
     'scalar-only 1'
     'scalar-only 2'
     'scalar-only 64'
+    'blobs 1'
+    'blobs 2'
+    'blobs 64'
+    'isolated-blobs 1'
+    'isolated-blobs 2'
+    'isolated-blobs 64'
+    'blob-only 1'
+    'blob-only 2'
+    'blob-only 64'
 )
 
 run_workload() {

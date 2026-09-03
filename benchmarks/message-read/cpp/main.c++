@@ -76,6 +76,33 @@ uint64_t readScalarOnly(kj::ArrayPtr<const capnp::byte> data, size_t passes) {
   return checksum;
 }
 
+uint64_t blobFingerprint(capnp::AnyStruct::Reader root) {
+  auto pointers = root.getPointerSection();
+  if (pointers.size() < 2) return 0;
+  auto text = pointers[0].getAs<capnp::Text>();
+  auto data = pointers[1].getAs<capnp::Data>();
+  uint64_t fingerprint = std::rotl(uint64_t{text.size()}, 11)
+      ^ std::rotl(uint64_t{data.size()}, 23);
+  if (text.size() != 0) {
+    fingerprint ^= std::rotl(uint64_t{uint8_t(text[0])}, 31)
+        ^ std::rotl(uint64_t{uint8_t(text[text.size() - 1])}, 37);
+  }
+  if (data.size() != 0) {
+    fingerprint ^= std::rotl(uint64_t{data[0]}, 43)
+        ^ std::rotl(uint64_t{data[data.size() - 1]}, 47);
+  }
+  return fingerprint;
+}
+
+uint64_t readBlobOnly(capnp::AnyStruct::Reader root, size_t passes) {
+  uint64_t checksum = SEED;
+  for (size_t pass = 0; pass < passes; ++pass) {
+    asm volatile("" : : "r"(&root) : "memory");
+    checksum = std::rotl(checksum, 9) ^ blobFingerprint(root);
+  }
+  return checksum;
+}
+
 void setWord(kj::Array<capnp::word>& segment, size_t index, uint64_t value) {
   auto wire = reinterpret_cast<capnp::_::WireValue<uint64_t>*>(segment.begin());
   wire[index].set(value);
@@ -97,12 +124,18 @@ std::vector<kj::Array<capnp::word>> makeSegments(size_t count) {
   }
 
   if (count == 1) {
-    setWord(segments[0], 0, uint64_t{1} << 32);
+    setWord(segments[0], 0, uint64_t{0x00020001} << 32);
     setWord(segments[0], 1, VALUE);
+    setWord(segments[0], 2, (uint64_t{0x42} << 32) | 5);
+    setWord(segments[0], 3, (uint64_t{0x42} << 32) | 1);
+    std::memcpy(segments[0].asBytes().begin() + 32, "capnp!!\0", 8);
   } else if (count == 2) {
     setWord(segments[0], 0, (uint64_t{1} << 32) | 2);
-    setWord(segments[1], 0, uint64_t{1} << 32);
+    setWord(segments[1], 0, uint64_t{0x00020001} << 32);
     setWord(segments[1], 1, VALUE);
+    setWord(segments[1], 2, (uint64_t{0x42} << 32) | 5);
+    setWord(segments[1], 3, (uint64_t{0x42} << 32) | 1);
+    std::memcpy(segments[1].asBytes().begin() + 32, "capnp!!\0", 8);
   } else {
     setWord(segments[0], 0, (uint64_t{63} << 32) | 2);
   }
@@ -122,6 +155,7 @@ uint64_t readMany(
     size_t segmentCount,
     bool readRoot,
     bool readScalars,
+    bool readBlobs,
     size_t passes) {
   uint64_t checksum = SEED;
   for (size_t pass = 0; pass < passes; ++pass) {
@@ -144,6 +178,8 @@ uint64_t readMany(
       auto data = root.getDataSection();
       if (readScalars) {
         fingerprint ^= scalarFingerprint(data);
+      } else if (readBlobs) {
+        fingerprint ^= blobFingerprint(root);
       } else {
         uint64_t value = 0;
         if (data.size() >= sizeof(value)) {
@@ -163,6 +199,7 @@ uint64_t readMany(
 uint64_t readIsolatedRoots(
     kj::ArrayPtr<const kj::ArrayPtr<const capnp::word>> segments,
     bool readScalars,
+    bool readBlobs,
     size_t passes) {
   uint64_t checksum = SEED;
   for (size_t pass = 0; pass < passes; ++pass) {
@@ -172,6 +209,8 @@ uint64_t readIsolatedRoots(
     uint64_t fingerprint;
     if (readScalars) {
       fingerprint = uint64_t{segments.size()} ^ scalarFingerprint(data);
+    } else if (readBlobs) {
+      fingerprint = uint64_t{segments.size()} ^ blobFingerprint(root);
     } else {
       uint64_t value = 0;
       if (data.size() >= sizeof(value)) {
@@ -192,15 +231,17 @@ uint64_t readIsolatedRoots(
 
 int main(int argc, char** argv) {
   if (argc != 4) {
-    std::cerr << "usage: cpp-message-read framing|root|scalars|isolated-root|isolated-scalars|scalar-only SEGMENTS PASSES\n";
+    std::cerr << "usage: cpp-message-read framing|root|scalars|blobs|isolated-root|isolated-scalars|isolated-blobs|scalar-only|blob-only SEGMENTS PASSES\n";
     return 2;
   }
   auto mode = std::string_view(argv[1]);
   auto segmentCount = parseSize(argv[2]);
   auto passes = parseSize(argv[3]);
   if (mode != "framing" && mode != "root" && mode != "scalars"
+      && mode != "blobs"
       && mode != "isolated-root" && mode != "isolated-scalars"
-      && mode != "scalar-only") {
+      && mode != "isolated-blobs" && mode != "scalar-only"
+      && mode != "blob-only") {
     std::cerr << "unknown benchmark mode\n";
     return 2;
   }
@@ -218,12 +259,29 @@ int main(int argc, char** argv) {
     std::cout << elapsed.count() << '\t' << checksum << '\n';
     return 0;
   }
+  if (mode == "blob-only") {
+    capnp::ReaderOptions options;
+    options.traversalLimitInWords = kj::maxValue;
+    capnp::SegmentArrayMessageReader reader(
+        kj::arrayPtr(views.data(), views.size()), options);
+    auto root = reader.getRoot<capnp::AnyStruct>();
+    auto started = std::chrono::steady_clock::now();
+    auto checksum = readBlobOnly(root, passes);
+    auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now() - started);
+    std::cout << elapsed.count() << '\t' << checksum << '\n';
+    return 0;
+  }
   auto started = std::chrono::steady_clock::now();
-  auto isolated = mode == "isolated-root" || mode == "isolated-scalars";
+  auto isolated = mode == "isolated-root" || mode == "isolated-scalars"
+      || mode == "isolated-blobs";
   auto scalars = mode == "scalars" || mode == "isolated-scalars";
+  auto blobs = mode == "blobs" || mode == "isolated-blobs";
   auto checksum = isolated
-      ? readIsolatedRoots(kj::arrayPtr(views.data(), views.size()), scalars, passes)
-      : readMany(encoded.asPtr(), segmentCount, mode != "framing", scalars, passes);
+      ? readIsolatedRoots(
+          kj::arrayPtr(views.data(), views.size()), scalars, blobs, passes)
+      : readMany(
+          encoded.asPtr(), segmentCount, mode != "framing", scalars, blobs, passes);
   auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
       std::chrono::steady_clock::now() - started);
   std::cout << elapsed.count() << '\t' << checksum << '\n';

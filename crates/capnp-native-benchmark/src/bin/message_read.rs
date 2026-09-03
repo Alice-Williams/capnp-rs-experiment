@@ -4,6 +4,7 @@ use std::time::Instant;
 use capnp_io::{BorrowedFrameRead, FrameLimits, Segment, encode_frame, parse_frame_into};
 use capnp_message::{
     DataSection, LocalTraversalBudget, MessageSegments, NestingLimit, PrimitiveError,
+    StructReadError, StructReader,
 };
 
 const SEED: u64 = 0x4d59_5df4_d0f3_3173;
@@ -12,7 +13,7 @@ const VALUE: u64 = 0x0123_4567_89ab_cdef;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let mode = args.next().ok_or(
-            "usage: message_read framing|root|scalars|isolated-root|isolated-scalars|scalar-only SEGMENTS PASSES",
+            "usage: message_read framing|root|scalars|blobs|isolated-root|isolated-scalars|isolated-blobs|scalar-only|blob-only SEGMENTS PASSES",
     )?;
     let segment_count = args
         .next()
@@ -22,14 +23,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if args.next().is_some()
         || !matches!(
             mode.as_str(),
-            "framing" | "root" | "scalars" | "isolated-root" | "isolated-scalars" | "scalar-only"
+            "framing"
+                | "root"
+                | "scalars"
+                | "blobs"
+                | "isolated-root"
+                | "isolated-scalars"
+                | "isolated-blobs"
+                | "scalar-only"
+                | "blob-only"
         )
         || !matches!(segment_count, 1 | 2 | 64)
         || passes == 0
     {
-        return Err(
-            "expected framing|root|scalars|isolated-root|isolated-scalars|scalar-only, SEGMENTS in {1,2,64}, and positive PASSES".into(),
-        );
+        return Err("expected a known read mode, SEGMENTS in {1,2,64}, and positive PASSES".into());
     }
 
     let segments = fixture_segments(segment_count);
@@ -44,14 +51,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("{}\t{}", elapsed.as_nanos(), checksum);
         return Ok(());
     }
+    if mode == "blob-only" {
+        let (elapsed, checksum) = read_blob_only(&descriptors, passes)?;
+        println!("{}\t{}", elapsed.as_nanos(), checksum);
+        return Ok(());
+    }
     let started = Instant::now();
-    let checksum = if matches!(mode.as_str(), "isolated-root" | "isolated-scalars") {
-        read_isolated_roots(&descriptors, mode == "isolated-scalars", passes)?
+    let checksum = if matches!(
+        mode.as_str(),
+        "isolated-root" | "isolated-scalars" | "isolated-blobs"
+    ) {
+        read_isolated_roots(
+            &descriptors,
+            mode == "isolated-scalars",
+            mode == "isolated-blobs",
+            passes,
+        )?
     } else {
         read_many(
             &encoded,
-            matches!(mode.as_str(), "root" | "scalars"),
+            matches!(mode.as_str(), "root" | "scalars" | "blobs"),
             mode == "scalars",
+            mode == "blobs",
             passes,
         )?
     };
@@ -75,9 +96,25 @@ fn read_scalar_only(
     Ok((started.elapsed(), black_box(checksum)))
 }
 
+fn read_blob_only(
+    segments: &[Segment<'_>],
+    passes: usize,
+) -> Result<(std::time::Duration, u64), Box<dyn std::error::Error>> {
+    let message = MessageSegments::from_descriptors(segments)?;
+    let budget = LocalTraversalBudget::new(u64::MAX);
+    let root = message.read_root_struct(&budget, NestingLimit::new(8))?;
+    let mut checksum = SEED;
+    let started = Instant::now();
+    for _ in 0..passes {
+        checksum = checksum.rotate_left(9) ^ blob_fingerprint(black_box(&root))?;
+    }
+    Ok((started.elapsed(), black_box(checksum)))
+}
+
 fn read_isolated_roots(
     segments: &[Segment<'_>],
     read_scalars: bool,
+    read_blobs: bool,
     passes: usize,
 ) -> Result<u64, Box<dyn std::error::Error>> {
     let mut checksum = SEED;
@@ -87,6 +124,8 @@ fn read_isolated_roots(
         let root = message.read_root_struct(&budget, NestingLimit::new(8))?;
         let fingerprint = if read_scalars {
             segments.len() as u64 ^ scalar_fingerprint(root.data_section()?)?
+        } else if read_blobs {
+            segments.len() as u64 ^ blob_fingerprint(&root)?
         } else {
             segments.len() as u64
                 ^ (root.data_byte_len() as u64).rotate_left(17)
@@ -95,6 +134,28 @@ fn read_isolated_roots(
         checksum = checksum.rotate_left(9) ^ fingerprint;
     }
     Ok(black_box(checksum))
+}
+
+#[inline(always)]
+fn blob_fingerprint(
+    root: &StructReader<'_, '_, LocalTraversalBudget>,
+) -> Result<u64, StructReadError> {
+    let text = root.read_text(0, None)?;
+    let data = root.read_data(1, None)?;
+    let mut fingerprint = (text.len() as u64).rotate_left(11) ^ (data.len() as u64).rotate_left(23);
+    if let Some(first) = text.as_bytes().first() {
+        fingerprint ^= u64::from(*first).rotate_left(31);
+    }
+    if let Some(last) = text.as_bytes().last() {
+        fingerprint ^= u64::from(*last).rotate_left(37);
+    }
+    if let Some(first) = data.as_bytes().first() {
+        fingerprint ^= u64::from(*first).rotate_left(43);
+    }
+    if let Some(last) = data.as_bytes().last() {
+        fingerprint ^= u64::from(*last).rotate_left(47);
+    }
+    Ok(fingerprint)
 }
 
 #[inline(always)]
@@ -122,13 +183,19 @@ fn fixture_segments(count: usize) -> Vec<Vec<u8>> {
 
     match count {
         1 => {
-            write_word(&mut segments[0], 0, 1_u64 << 32);
+            write_word(&mut segments[0], 0, 0x0002_0001_u64 << 32);
             write_word(&mut segments[0], 1, VALUE);
+            write_word(&mut segments[0], 2, (0x42_u64 << 32) | 5);
+            write_word(&mut segments[0], 3, (0x42_u64 << 32) | 1);
+            segments[0][32..40].copy_from_slice(b"capnp!!\0");
         }
         2 => {
             write_word(&mut segments[0], 0, (1_u64 << 32) | 2);
-            write_word(&mut segments[1], 0, 1_u64 << 32);
+            write_word(&mut segments[1], 0, 0x0002_0001_u64 << 32);
             write_word(&mut segments[1], 1, VALUE);
+            write_word(&mut segments[1], 2, (0x42_u64 << 32) | 5);
+            write_word(&mut segments[1], 3, (0x42_u64 << 32) | 1);
+            segments[1][32..40].copy_from_slice(b"capnp!!\0");
         }
         64 => {
             write_word(&mut segments[0], 0, (63_u64 << 32) | 2);
@@ -147,6 +214,7 @@ fn read_many(
     encoded: &[u8],
     read_root: bool,
     read_scalars: bool,
+    read_blobs: bool,
     passes: usize,
 ) -> Result<u64, Box<dyn std::error::Error>> {
     let limits = FrameLimits::default();
@@ -178,6 +246,8 @@ fn read_many(
             let root = message.read_root_struct(&budget, NestingLimit::new(8))?;
             fingerprint ^= if read_scalars {
                 scalar_fingerprint(root.data_section()?)?
+            } else if read_blobs {
+                blob_fingerprint(&root)?
             } else {
                 (root.data_byte_len() as u64).rotate_left(17) ^ root.read_u64(0, 0)?.rotate_left(37)
             };

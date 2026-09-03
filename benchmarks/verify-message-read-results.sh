@@ -27,7 +27,7 @@ awk -F '\t' -v expected="$expected_results" -v passes="$expected_passes" '
   NR == 1 { if ($0 != "implementation\tcase\tsegments\tpasses\trun\telapsed_ns\tchecksum") exit 1; next }
   NF != 7 || $4 != passes || $6 <= 0 || $7 < 0 { exit 1 }
   $1 != "cpp" && $1 != "native" { exit 1 }
-  $2 != "framing" && $2 != "root" && $2 != "isolated-root" && $2 != "scalars" && $2 != "isolated-scalars" && $2 != "scalar-only" { exit 1 }
+  $2 != "framing" && $2 != "root" && $2 != "isolated-root" && $2 != "scalars" && $2 != "isolated-scalars" && $2 != "scalar-only" && $2 != "blobs" && $2 != "isolated-blobs" && $2 != "blob-only" { exit 1 }
   $3 != 1 && $3 != 2 && $3 != 64 { exit 1 }
   !($2 FS $3 in checksum) { checksum[$2 FS $3] = $7; next }
   $7 != checksum[$2 FS $3] { exit 1 }
