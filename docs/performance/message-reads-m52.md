@@ -139,3 +139,17 @@ segment-zero lookup remains an optimization target.
 
 Evidence:
 `benchmarks/results/2026-09-03-m52-root-isolated-g-drive-docker/`.
+
+## Cached-primary checkpoint
+
+Caching the immutable segment-zero descriptor in the coordinate context avoids
+an enum/table lookup for the overwhelmingly common root segment. A longer
+one-million-operation run reduced isolated root ratios to 0.285, 0.155, and
+0.158. The 64-segment cumulative ratio passed at 0.328, but cumulative one- and
+two-segment ratios still measured 0.364 and 0.183. The component and framing
+ratios show that the remaining loss is small-message composition/codegen cost,
+not pointer traversal itself. This checkpoint therefore does not close the
+root step.
+
+Evidence:
+`benchmarks/results/2026-09-03-m52-root-final-cached-g-drive-docker/`.
