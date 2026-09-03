@@ -2788,7 +2788,7 @@ fn emit_builder_field(
                                         "            let schema = self.inner.schema();"
                                     )
                                     .map_err(|_| GenerateError::Format)?;
-                                    writeln!(output, "            let inner = self.inner.init_struct_list_slot({offset}, element_count, {}, {})?;", child_structure.data_word_count, child_structure.pointer_count)
+                                    writeln!(output, "            let inner = self.inner.wire_builder().init_struct_list({offset}, element_count, {}, {}).map_err(capnp_schema::DynamicError::from)?;", child_structure.data_word_count, child_structure.pointer_count)
                                     .map_err(|_| GenerateError::Format)?;
                                     writeln!(
                                     output,
@@ -3308,7 +3308,7 @@ mod tests {
         assert!(
             generated
                 .source
-                .contains("self.inner.init_struct_list_slot(17, element_count, 1, 1)")
+                .contains("self.inner.wire_builder().init_struct_list(17, element_count, 1, 1)")
         );
         assert!(
             !generated

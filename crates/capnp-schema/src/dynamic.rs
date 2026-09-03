@@ -1266,6 +1266,15 @@ impl<'schema, 'arena, const TYPE_ID: NodeId> GeneratedStructBuilder<'schema, 'ar
         self.schema
     }
 
+    /// Exposes the checked wire builder to statically generated code. The
+    /// generated caller has already embedded and validated the field layout,
+    /// so it can avoid an intermediate dynamic `Result` wrapper.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn wire_builder(&mut self) -> &mut StructBuilder<'arena> {
+        &mut self.builder
+    }
+
     generated_slot_setters!(
         (set_bool_slot, set_bool, bool),
         (set_i8_slot, set_i8, i8),
