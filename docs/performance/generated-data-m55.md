@@ -508,3 +508,37 @@ to field-name lookup, cloned field/type/brand metadata, runtime type
 resolution, and schema-node lookup before the same checked allocation and
 pointer emission. The next change embeds the pointer offset and child layout in
 the generated initializer while retaining the dynamic path for reflection.
+
+## Struct-builder gate
+
+Generated initializers for ordinary, non-union, unbranded struct fields now
+embed the pointer offset, child type ID, and child data/pointer sizes. They call
+a checked runtime primitive directly, so allocation, zeroing, output limits,
+and pointer emission are unchanged while field-name lookup, field cloning,
+brand resolution, and schema-node lookup leave the hot path. Branded and union
+fields retain the dynamic path so generic substitution and discriminant
+activation remain exact.
+
+The first constant-layout diagnostic reduced native generated construction
+from 120.73 ns to 25.52 ns, but exposed roughly 6.1 ns of residual wrapper cost.
+The generated child builder still carried a three-word owned `Brand` containing
+an empty `Vec`. The final representation stores the common empty brand as
+`None` and a non-empty brand as its boxed scopes slice. This reduces the
+internal builder state without adding an allocation layer for branded scopes;
+generic-brand and dynamic-builder tests continue to exercise the fallback.
+
+Final five-million-operation evidence at native commit `f3c5fd6` is in
+[`benchmarks/results/2026-09-03-m55-generated-builder-struct-final-5m-g-drive-docker`](../../benchmarks/results/2026-09-03-m55-generated-builder-struct-final-5m-g-drive-docker).
+
+| Operation | C++ ns/op | Native ns/op | Native / C++ |
+| --- | ---: | ---: | ---: |
+| direct `Node` construction | 20.6200 | 15.3541 | 0.745 |
+| generated `Node` construction | 20.5658 | 15.6843 | 0.763 |
+
+Generated Rust construction is 23.7% faster than generated C++. Its 0.763
+cumulative ratio stays below the direct-runtime ceiling of 0.767 after the 3%
+tolerance. Native generated wrapping adds 0.31 ns while the paired C++ delta is
+negative, so the incremental comparison is below timer resolution. Generated
+source tests prove the initializer contains the constant layout and does not
+call dynamic field lookup. The ordinary struct-builder gate is closed; list,
+union, default, and evolution builder gates remain open.
