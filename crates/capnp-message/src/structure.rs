@@ -294,6 +294,7 @@ impl<'context, 'data, B: TraversalBudget> StructReader<'context, 'data, B> {
         Ok(DataSection::from_validated_bytes(data))
     }
 
+    #[inline(always)]
     pub fn pointer_location(self, index: u16) -> Result<Option<WireLocation>, StructReadError> {
         let Some(reference) = self.reference else {
             return Ok(None);
@@ -359,6 +360,7 @@ impl<'context, 'data, B: TraversalBudget> StructReader<'context, 'data, B> {
         }
     }
 
+    #[inline(always)]
     pub fn read_text<'reader>(
         &'reader self,
         index: u16,
@@ -367,6 +369,16 @@ impl<'context, 'data, B: TraversalBudget> StructReader<'context, 'data, B> {
     where
         'context: 'reader,
     {
+        if default.is_none() {
+            return match self.pointer_location(index)? {
+                Some(location) => {
+                    Ok(self
+                        .segments
+                        .read_text(location, self.budget, self.nesting)?)
+                }
+                None => Ok(TextReader::empty()),
+            };
+        }
         match self.select_pointer(index, default)? {
             Some((segments, location)) => {
                 Ok(segments.read_text(location, self.budget, self.nesting)?)
@@ -375,6 +387,7 @@ impl<'context, 'data, B: TraversalBudget> StructReader<'context, 'data, B> {
         }
     }
 
+    #[inline(always)]
     pub fn read_data<'reader>(
         &'reader self,
         index: u16,
@@ -383,6 +396,16 @@ impl<'context, 'data, B: TraversalBudget> StructReader<'context, 'data, B> {
     where
         'context: 'reader,
     {
+        if default.is_none() {
+            return match self.pointer_location(index)? {
+                Some(location) => {
+                    Ok(self
+                        .segments
+                        .read_data(location, self.budget, self.nesting)?)
+                }
+                None => Ok(DataReader::empty()),
+            };
+        }
         match self.select_pointer(index, default)? {
             Some((segments, location)) => {
                 Ok(segments.read_data(location, self.budget, self.nesting)?)

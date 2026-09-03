@@ -72,6 +72,12 @@ pub struct BoundedPointer {
     pub charged_words: u64,
 }
 
+pub(crate) enum ValidatedByteList<'a> {
+    Null,
+    Bytes(&'a [u8]),
+    Other(BoundedPointer),
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct TraversalStats {
     pub pointers_followed: u64,
@@ -294,7 +300,7 @@ impl<'a> MessageSegments<'a> {
     /// Struct and list targets consume one copied nesting level. Null and capability
     /// pointers do not. Far landing pads, physical target words, and zero-sized-list
     /// amplification are included in the single all-or-nothing charge.
-    #[inline]
+    #[inline(always)]
     pub fn validate_pointer_with_limits<B: TraversalBudget>(
         &self,
         location: WireLocation,
@@ -356,6 +362,69 @@ impl<'a> MessageSegments<'a> {
             child_nesting,
             charged_words,
         })
+    }
+
+    #[inline(always)]
+    pub(crate) fn validate_byte_list_pointer_with_limits<B: TraversalBudget>(
+        &self,
+        location: WireLocation,
+        budget: &B,
+        nesting: NestingLimit,
+    ) -> Result<ValidatedByteList<'a>, TraversalError> {
+        let (wire_pointer, source_segment) = self.read_pointer_and_segment(location)?;
+        if wire_pointer.is_null() {
+            return Ok(ValidatedByteList::Null);
+        }
+        if wire_pointer.kind() == PointerKind::List {
+            let fields = wire_pointer
+                .list_fields()
+                .expect("list discriminator was checked");
+            if fields.element_size == ElementSize::Byte {
+                let content = positional_target(location, fields.offset)?;
+                let byte_count = usize::try_from(fields.count)
+                    .map_err(|_| ValidationError::TargetWordOverflow)?;
+                let charged_words = list_word_count(ElementSize::Byte, fields.count)?;
+                check_range_in_segment(content, charged_words, source_segment)?;
+                let start = usize::try_from(content.word_offset)
+                    .map_err(|_| ValidationError::TargetWordOverflow)?
+                    .checked_mul(8)
+                    .ok_or(ValidationError::TargetWordOverflow)?;
+                let end = start
+                    .checked_add(byte_count)
+                    .ok_or(ValidationError::TargetWordOverflow)?;
+                let bytes = source_segment
+                    .get(start..end)
+                    .expect("the enclosing checked word range contains the byte list");
+                nesting.descend()?;
+                budget.try_charge(charged_words)?;
+                return Ok(ValidatedByteList::Bytes(bytes));
+            }
+        }
+
+        self.validate_byte_list_pointer_fallback(location, wire_pointer, budget, nesting)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn validate_byte_list_pointer_fallback<B: TraversalBudget>(
+        &self,
+        location: WireLocation,
+        wire_pointer: WirePointer,
+        budget: &B,
+        nesting: NestingLimit,
+    ) -> Result<ValidatedByteList<'a>, TraversalError> {
+        let pointer = self.validate_wire_pointer(location, wire_pointer)?;
+        let child_nesting = match pointer {
+            ResolvedPointer::Struct(_) | ResolvedPointer::List(_) => nesting.descend()?,
+            ResolvedPointer::Null | ResolvedPointer::Capability(_) => nesting,
+        };
+        let charged_words = traversal_charge(wire_pointer, pointer)?;
+        budget.try_charge(charged_words)?;
+        Ok(ValidatedByteList::Other(BoundedPointer {
+            pointer,
+            child_nesting,
+            charged_words,
+        }))
     }
 
     #[inline(always)]
@@ -581,7 +650,7 @@ impl<'a> MessageSegments<'a> {
         }))
     }
 
-    #[inline]
+    #[inline(always)]
     fn validate_list(
         &self,
         pointer_location: WireLocation,
@@ -594,7 +663,7 @@ impl<'a> MessageSegments<'a> {
         self.validate_list_at(target, pointer)
     }
 
-    #[inline]
+    #[inline(always)]
     fn validate_list_at(
         &self,
         target: WireLocation,
@@ -898,6 +967,7 @@ fn positional_target(
     })
 }
 
+#[inline(always)]
 fn list_word_count(element_size: ElementSize, count: u32) -> Result<u64, ValidationError> {
     let count = u64::from(count);
     let words = match element_size {

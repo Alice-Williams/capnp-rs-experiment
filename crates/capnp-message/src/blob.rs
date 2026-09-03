@@ -10,6 +10,7 @@ use core::fmt;
 
 use capnp_wire::ElementSize;
 
+use crate::validation::ValidatedByteList;
 use crate::{
     MessageSegments, NestingLimit, ResolvedPointer, TraversalBudget, TraversalError, WireLocation,
 };
@@ -51,18 +52,22 @@ impl From<TraversalError> for BlobError {
 pub struct DataReader<'a>(&'a [u8]);
 
 impl<'a> DataReader<'a> {
+    #[inline(always)]
     pub const fn empty() -> Self {
         Self(&[])
     }
 
+    #[inline(always)]
     pub const fn as_bytes(self) -> &'a [u8] {
         self.0
     }
 
+    #[inline(always)]
     pub const fn len(self) -> usize {
         self.0.len()
     }
 
+    #[inline(always)]
     pub const fn is_empty(self) -> bool {
         self.0.is_empty()
     }
@@ -80,6 +85,7 @@ pub struct TextReader<'a> {
 }
 
 impl<'a> TextReader<'a> {
+    #[inline(always)]
     pub const fn empty() -> Self {
         Self { with_nul: b"\0" }
     }
@@ -92,6 +98,7 @@ impl<'a> TextReader<'a> {
     /// assert_eq!(text.to_str()?, "hello");
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
+    #[inline(always)]
     pub fn from_bytes_with_nul(bytes: &'a [u8]) -> Result<Self, BlobError> {
         if bytes.last() != Some(&0) {
             return Err(BlobError::TextMissingNul);
@@ -99,19 +106,23 @@ impl<'a> TextReader<'a> {
         Ok(Self { with_nul: bytes })
     }
 
+    #[inline(always)]
     pub const fn as_bytes(self) -> &'a [u8] {
         let len_without_nul = self.with_nul.len() - 1;
         self.with_nul.split_at(len_without_nul).0
     }
 
+    #[inline(always)]
     pub const fn as_bytes_with_nul(self) -> &'a [u8] {
         self.with_nul
     }
 
+    #[inline(always)]
     pub const fn len(self) -> usize {
         self.with_nul.len() - 1
     }
 
+    #[inline(always)]
     pub const fn is_empty(self) -> bool {
         self.len() == 0
     }
@@ -135,6 +146,7 @@ impl fmt::Debug for TextReader<'_> {
 
 impl<'a> MessageSegments<'a> {
     /// Reads a Data pointer only after validation and an exact traversal charge.
+    #[inline(always)]
     pub fn read_data<B: TraversalBudget>(
         &self,
         location: WireLocation,
@@ -148,6 +160,7 @@ impl<'a> MessageSegments<'a> {
     }
 
     /// Reads a Text pointer only after validation and an exact traversal charge.
+    #[inline(always)]
     pub fn read_text<B: TraversalBudget>(
         &self,
         location: WireLocation,
@@ -160,13 +173,19 @@ impl<'a> MessageSegments<'a> {
         }
     }
 
+    #[inline(always)]
     fn byte_list<B: TraversalBudget>(
         &self,
         location: WireLocation,
         budget: &B,
         nesting: NestingLimit,
     ) -> Result<Option<&'a [u8]>, BlobError> {
-        let bounded = self.validate_pointer_with_limits(location, budget, nesting)?;
+        let bounded =
+            match self.validate_byte_list_pointer_with_limits(location, budget, nesting)? {
+                ValidatedByteList::Null => return Ok(None),
+                ValidatedByteList::Bytes(bytes) => return Ok(Some(bytes)),
+                ValidatedByteList::Other(bounded) => bounded,
+            };
         let list = match bounded.pointer {
             ResolvedPointer::Null => return Ok(None),
             ResolvedPointer::List(list) => list,

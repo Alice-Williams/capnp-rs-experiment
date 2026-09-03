@@ -97,8 +97,9 @@ uint64_t blobFingerprint(capnp::AnyStruct::Reader root) {
 uint64_t readBlobOnly(capnp::AnyStruct::Reader root, size_t passes) {
   uint64_t checksum = SEED;
   for (size_t pass = 0; pass < passes; ++pass) {
-    asm volatile("" : : "r"(&root) : "memory");
-    checksum = std::rotl(checksum, 9) ^ blobFingerprint(root);
+    auto rootPointer = &root;
+    asm volatile("" : "+r"(rootPointer) : : "memory");
+    checksum = std::rotl(checksum, 9) ^ blobFingerprint(*rootPointer);
   }
   return checksum;
 }
