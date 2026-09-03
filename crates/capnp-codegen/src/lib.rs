@@ -929,6 +929,7 @@ fn emit_struct(
     let arguments = generic_arguments(&parameters);
     let marker = marker_type(&parameters);
     let brand = generated_brand_expression(&parameters);
+    let data_bytes = usize::from(structure.data_word_count) * 8;
     let generated_bounds = parameters
         .iter()
         .map(|parameter| format!("{}: GeneratedType", parameter.name))
@@ -940,10 +941,14 @@ fn emit_struct(
     writeln!(output, "    use super::*;").map_err(|_| GenerateError::Format)?;
     writeln!(output, "    pub const TYPE_ID: u64 = 0x{:016x};", node.id)
         .map_err(|_| GenerateError::Format)?;
-    writeln!(output, "    #[derive(Clone, Debug)]").map_err(|_| GenerateError::Format)?;
     writeln!(
         output,
-        "    pub struct Reader{declaration} {{ inner: capnp_schema::GeneratedStructReader, marker: PhantomData<fn() -> {marker}> }}"
+        "    #[allow(dead_code)]\n    #[derive(Clone, Debug)]"
+    )
+    .map_err(|_| GenerateError::Format)?;
+    writeln!(
+        output,
+        "    pub struct Reader{declaration} {{ inner: capnp_schema::GeneratedStructReader, full_data: Option<[u8; {data_bytes}]>, marker: PhantomData<fn() -> {marker}> }}"
     )
     .map_err(|_| GenerateError::Format)?;
     writeln!(
@@ -952,7 +957,7 @@ fn emit_struct(
     )
     .map_err(|_| GenerateError::Format)?;
     writeln!(output, "        const TYPE_ID: u64 = TYPE_ID;").map_err(|_| GenerateError::Format)?;
-    writeln!(output, "        fn from_dynamic(value: capnp_schema::DynamicStruct) -> Result<Self, capnp_schema::DynamicError> {{ Ok(Self {{ inner: capnp_schema::GeneratedStructReader::new(value), marker: PhantomData }}) }}")
+    writeln!(output, "        fn from_dynamic(value: capnp_schema::DynamicStruct) -> Result<Self, capnp_schema::DynamicError> {{ let inner = capnp_schema::GeneratedStructReader::new(value); let full_data = inner.copy_data_prefix(); Ok(Self {{ inner, full_data, marker: PhantomData }}) }}")
         .map_err(|_| GenerateError::Format)?;
     writeln!(output, "    }}").map_err(|_| GenerateError::Format)?;
     writeln!(output, "    impl{implementation} Reader{arguments} {{")
@@ -973,7 +978,7 @@ fn emit_struct(
             .map_err(|_| GenerateError::Format)?;
     }
     writeln!(output, "        }}").map_err(|_| GenerateError::Format)?;
-    writeln!(output, "        #[doc(hidden)]\n        pub fn from_dynamic_struct(value: capnp_schema::DynamicStruct) -> Self {{ Self {{ inner: capnp_schema::GeneratedStructReader::new(value), marker: PhantomData }} }}")
+    writeln!(output, "        #[doc(hidden)]\n        pub fn from_dynamic_struct(value: capnp_schema::DynamicStruct) -> Self {{ let inner = capnp_schema::GeneratedStructReader::new(value); let full_data = inner.copy_data_prefix(); Self {{ inner, full_data, marker: PhantomData }} }}")
         .map_err(|_| GenerateError::Format)?;
     writeln!(
         output,
@@ -2443,12 +2448,16 @@ fn emit_direct_scalar_getter(
         }
         _ => None,
     };
-    let Some((rust_type, expression)) = direct else {
+    let Some((rust_type, fallback)) = direct else {
         return Ok(false);
     };
+    let expression =
+        borrowed_full_data_value(ty, default, offset, names)?.map_or(fallback.clone(), |full| {
+            format!("if let Some(data) = &self.full_data {{ Ok({full}) }} else {{ {fallback} }}")
+        });
     writeln!(
         output,
-        "        pub fn {method}(&self) -> Result<{rust_type}, capnp_schema::DynamicError> {{ {expression} }}"
+        "        #[inline(always)]\n        pub fn {method}(&self) -> Result<{rust_type}, capnp_schema::DynamicError> {{ {expression} }}"
     )
     .map_err(|_| GenerateError::Format)?;
     Ok(true)

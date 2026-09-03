@@ -139,6 +139,15 @@ impl GeneratedStructReader {
         &self.dynamic
     }
 
+    /// Copies a fixed generated data prefix from immutable retained storage.
+    /// Short evolution views return `None` and continue through checked reads.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn copy_data_prefix<const N: usize>(&self) -> Option<[u8; N]> {
+        let data = self.data_section().ok()??;
+        data.as_bytes().get(..N)?.try_into().ok()
+    }
+
     #[doc(hidden)]
     pub fn get(&self, name: &str) -> Result<DynamicValue, DynamicError> {
         self.dynamic.get(name)
