@@ -55,7 +55,7 @@ mkdir -p -- "$output"
     printf 'cpp_binary_sha256=%s\n' "$(sha256sum "$cpp_benchmark" | cut -d ' ' -f1)"
     printf 'native_binary_sha256=%s\n' "$(sha256sum "$native_benchmark" | cut -d ' ' -f1)"
     printf 'warmups=%s\nrecorded_runs=%s\npasses=%s\n' "$warmups" "$runs" "$passes"
-    printf 'shapes=direct:[3] words,far:[1,3] words,double-far:[1,2,2] words\n'
+    printf 'shapes=direct:[3] words,far:[1,3] words,double-far:[1,2,2] words,data:[11] words\n'
     printf 'timer=steady monotonic clock inside each binary\n'
 } > "$output/metadata.txt"
 
@@ -67,6 +67,8 @@ workloads=(
     'fresh far'
     'prepared double-far'
     'fresh double-far'
+    'prepared data'
+    'fresh data'
     'reuse direct'
     'copy-prepared graph'
     'copy graph'

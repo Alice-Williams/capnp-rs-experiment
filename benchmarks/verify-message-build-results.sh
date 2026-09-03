@@ -33,7 +33,7 @@ awk -F '\t' -v expected="$expected_results" -v passes="$expected_passes" '
   NF != 8 || $4 != passes || $6 <= 0 || $7 < 0 || $8 < 0 { exit 1 }
   $1 != "cpp" && $1 != "native" { exit 1 }
   $2 != "prepared" && $2 != "fresh" && $2 != "reuse" && $2 != "copy-prepared" && $2 != "copy" && $2 != "copy-reuse" { exit 1 }
-  $3 != "direct" && $3 != "far" && $3 != "double-far" && $3 != "graph" { exit 1 }
+  $3 != "direct" && $3 != "far" && $3 != "double-far" && $3 != "data" && $3 != "graph" { exit 1 }
   !($1 FS $2 FS $3 in semantic) {
     semantic[$1 FS $2 FS $3] = $7
     wire[$1 FS $2 FS $3] = $8

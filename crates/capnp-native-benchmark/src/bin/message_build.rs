@@ -13,7 +13,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mode = args
         .next()
         .ok_or(
-            "usage: message_build prepared|fresh|reuse|copy-prepared|copy|copy-reuse direct|far|double-far|graph PASSES",
+            "usage: message_build prepared|fresh|reuse|copy-prepared|copy|copy-reuse direct|far|double-far|data|graph PASSES",
         )?;
     let shape = args.next().ok_or("missing shape")?;
     let passes = args.next().ok_or("missing pass count")?.parse::<usize>()?;
@@ -23,7 +23,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             mode.as_str(),
             "prepared" | "fresh" | "reuse" | "copy-prepared" | "copy" | "copy-reuse"
         )
-        || !matches!(shape.as_str(), "direct" | "far" | "double-far" | "graph")
+        || !matches!(
+            shape.as_str(),
+            "direct" | "far" | "double-far" | "data" | "graph"
+        )
         || (mode == "reuse" && shape != "direct")
         || copy_mode != (shape == "graph")
         || passes == 0
@@ -35,7 +38,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "direct" => 0,
         "far" => 1,
         "double-far" => 2,
-        "graph" => 3,
+        "data" => 3,
+        "graph" => 4,
         _ => unreachable!(),
     };
     let mut semantic = SEED;
@@ -53,7 +57,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let first = VALUE ^ pass as u64;
         let second = first.rotate_left(23);
         let fingerprint = match mode.as_str() {
-            "prepared" => prepared_iteration(shape, first, second),
+            "prepared" => prepared_iteration(shape, first, second, &source_bytes[24..]),
             "reuse" => reuse_iteration(
                 reuse_arena.as_mut().expect("reuse mode creates its arena"),
                 first,
@@ -67,7 +71,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .expect("copy-reuse mode creates its arena"),
                 &source,
             )?,
-            _ => fresh_iteration(shape, first, second)?,
+            _ => fresh_iteration(shape, first, second, &source_bytes[24..])?,
         };
         semantic = semantic.rotate_left(9) ^ first ^ second.rotate_left(13);
         wire = wire.rotate_left(11) ^ fingerprint;
@@ -88,8 +92,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[inline(never)]
-fn prepared_iteration(shape: u8, first: u64, second: u64) -> u64 {
-    let mut words = [0_u8; 40];
+fn prepared_iteration(shape: u8, first: u64, second: u64, payload: &[u8]) -> u64 {
+    let mut words = [0_u8; 88];
+    if shape == 3 {
+        set_word(&mut words, 0, 0x0001_0001_u64 << 32);
+        set_word(&mut words, 1, first);
+        set_word(&mut words, 2, (514_u64 << 32) | 1);
+        words[24..].copy_from_slice(payload);
+        return hash_prepared(&words, 11, 1);
+    }
     if shape == 2 {
         set_word(&mut words, 0, (2_u64 << 32) | 6);
         set_word(&mut words, 1, first);
@@ -112,17 +123,29 @@ fn prepared_iteration(shape: u8, first: u64, second: u64) -> u64 {
 }
 
 #[inline(never)]
-fn fresh_iteration(shape: u8, first: u64, second: u64) -> Result<u64, capnp_message::ArenaError> {
+fn fresh_iteration(
+    shape: u8,
+    first: u64,
+    second: u64,
+    payload: &[u8],
+) -> Result<u64, capnp_message::ArenaError> {
     let mut arena = match shape {
         0 => ExclusiveArena::new(3, 3)?,
         1 => ExclusiveArena::new_segmented(1, 3, 2, 4)?,
         2 => ExclusiveArena::new_segmented(1, 2, 3, 5)?,
+        3 => ExclusiveArena::new(11, 11)?,
         _ => unreachable!(),
     };
     {
-        let mut root = arena.init_root_struct(2, 0)?;
-        root.set_u64(0, first, 0)?;
-        root.set_u64(1, second, 0)?;
+        if shape == 3 {
+            let mut root = arena.init_root_struct(1, 1)?;
+            root.set_u64(0, first, 0)?;
+            root.set_data(0, payload)?;
+        } else {
+            let mut root = arena.init_root_struct(2, 0)?;
+            root.set_u64(0, first, 0)?;
+            root.set_u64(1, second, 0)?;
+        }
     }
     Ok(hash_segments(&arena))
 }

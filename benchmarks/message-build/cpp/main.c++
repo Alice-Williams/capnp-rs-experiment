@@ -85,9 +85,17 @@ __attribute__((always_inline)) inline uint64_t hashSegments(
 }
 
 __attribute__((noinline)) uint64_t preparedIteration(
-    unsigned int shape, uint64_t first, uint64_t second) {
-  std::array<capnp::word, 5> words{};
+    unsigned int shape, uint64_t first, uint64_t second,
+    kj::ArrayPtr<const capnp::byte> payload) {
+  std::array<capnp::word, 11> words{};
   auto bytes = reinterpret_cast<capnp::byte*>(words.data());
+  if (shape == 3) {
+    setWord(bytes, 0, uint64_t{0x00010001} << 32);
+    setWord(bytes, 1, first);
+    setWord(bytes, 2, (uint64_t{514} << 32) | 1);
+    std::memcpy(bytes + 24, payload.begin(), payload.size());
+    return hashPrepared(words, 11, 1);
+  }
   if (shape == 2) {
     // Three conceptual segments [1, 2, 2] with a double-far root.
     setWord(bytes, 0, (uint64_t{2} << 32) | 6);
@@ -113,9 +121,17 @@ __attribute__((noinline)) uint64_t preparedIteration(
 }
 
 __attribute__((noinline)) uint64_t freshIteration(
-    unsigned int shape, uint64_t first, uint64_t second) {
+    unsigned int shape, uint64_t first, uint64_t second,
+    kj::ArrayPtr<const capnp::byte> payload) {
   capnp::MallocMessageBuilder message(
-      shape == 0 ? 3 : 1, capnp::AllocationStrategy::FIXED_SIZE);
+      shape == 0 ? 3 : shape == 3 ? 11 : 1,
+      capnp::AllocationStrategy::FIXED_SIZE);
+  if (shape == 3) {
+    auto root = message.initRoot<BuildGraph>();
+    root.setValue(first);
+    root.setPayload(payload);
+    return hashSegments(message.getSegmentsForOutput());
+  }
   if (shape == 2) {
     auto orphan = message.getOrphanage().newOrphan<BuildRoot>();
     auto root = orphan.get();
@@ -183,7 +199,7 @@ __attribute__((noinline)) uint64_t copyReuseIteration(
 
 int main(int argc, char** argv) {
   if (argc != 4) {
-    std::cerr << "usage: cpp-message-build prepared|fresh|reuse|copy-prepared|copy|copy-reuse direct|far|double-far|graph PASSES\n";
+    std::cerr << "usage: cpp-message-build prepared|fresh|reuse|copy-prepared|copy|copy-reuse direct|far|double-far|data|graph PASSES\n";
     return 2;
   }
   auto mode = std::string_view(argv[1]);
@@ -192,14 +208,15 @@ int main(int argc, char** argv) {
   auto copyMode = mode == "copy-prepared" || mode == "copy" || mode == "copy-reuse";
   if ((mode != "prepared" && mode != "fresh" && mode != "reuse" && !copyMode)
       || (shape != "direct" && shape != "far" && shape != "double-far"
-          && shape != "graph")
+          && shape != "data" && shape != "graph")
       || (mode == "reuse" && shape != "direct")
       || (copyMode != (shape == "graph"))) {
     std::cerr << "unknown benchmark mode or shape\n";
     return 2;
   }
 
-  auto shapeId = shape == "direct" ? 0u : shape == "far" ? 1u : shape == "double-far" ? 2u : 3u;
+  auto shapeId = shape == "direct" ? 0u : shape == "far" ? 1u
+      : shape == "double-far" ? 2u : shape == "data" ? 3u : 4u;
   uint64_t semantic = SEED;
   uint64_t wire = SEED;
   std::array<capnp::word, 3> scratch{};
@@ -211,13 +228,14 @@ int main(int argc, char** argv) {
   options.traversalLimitInWords = kj::maxValue;
   capnp::SegmentArrayMessageReader graphReader(kj::arrayPtr(&graphView, 1), options);
   auto graphRoot = graphReader.getRoot<capnp::AnyPointer>();
+  auto payload = graphView.asBytes().slice(24, 88);
   auto started = std::chrono::steady_clock::now();
   for (size_t pass = 0; pass < passes; ++pass) {
     auto first = VALUE ^ uint64_t{pass};
     auto second = std::rotl(first, 23);
     uint64_t fingerprint;
     if (mode == "prepared") {
-      fingerprint = preparedIteration(shapeId, first, second);
+      fingerprint = preparedIteration(shapeId, first, second, payload);
     } else if (mode == "reuse") {
       fingerprint = reuseIteration(scratch, first, second);
     } else if (mode == "copy-prepared") {
@@ -227,7 +245,7 @@ int main(int argc, char** argv) {
     } else if (mode == "copy-reuse") {
       fingerprint = copyReuseIteration(copyScratch, graphRoot);
     } else {
-      fingerprint = freshIteration(shapeId, first, second);
+      fingerprint = freshIteration(shapeId, first, second, payload);
     }
     semantic = std::rotl(semantic, 9) ^ first ^ std::rotl(second, 13);
     wire = std::rotl(wire, 11) ^ fingerprint;

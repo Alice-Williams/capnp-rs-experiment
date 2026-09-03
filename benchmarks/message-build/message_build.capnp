@@ -6,3 +6,8 @@ struct BuildRoot {
   first @0 :UInt64;
   second @1 :UInt64;
 }
+
+struct BuildGraph {
+  value @0 :UInt64;
+  payload @1 :Data;
+}
