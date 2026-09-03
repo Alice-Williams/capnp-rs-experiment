@@ -263,7 +263,7 @@ impl<'a> MessageSegments<'a> {
         self.validate_wire_pointer(location, pointer)
     }
 
-    #[inline]
+    #[inline(always)]
     fn validate_wire_pointer(
         &self,
         location: WireLocation,
@@ -550,7 +550,7 @@ impl<'a> MessageSegments<'a> {
         Ok(stats)
     }
 
-    #[inline]
+    #[inline(always)]
     fn validate_struct(
         &self,
         pointer_location: WireLocation,
@@ -563,7 +563,7 @@ impl<'a> MessageSegments<'a> {
         self.validate_struct_at(content, pointer)
     }
 
-    #[inline]
+    #[inline(always)]
     fn validate_struct_at(
         &self,
         content: WireLocation,
@@ -649,7 +649,7 @@ impl<'a> MessageSegments<'a> {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     fn validate_far(&self, pointer: WirePointer) -> Result<ResolvedPointer, ValidationError> {
         let fields = pointer.far_fields().expect("far discriminator was checked");
         let pad = WireLocation {
@@ -688,7 +688,7 @@ impl<'a> MessageSegments<'a> {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     fn validate_non_far(
         &self,
         location: WireLocation,
@@ -711,13 +711,13 @@ impl<'a> MessageSegments<'a> {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     fn read_pointer(&self, location: WireLocation) -> Result<WirePointer, ValidationError> {
         self.read_pointer_and_segment(location)
             .map(|(pointer, _)| pointer)
     }
 
-    #[inline]
+    #[inline(always)]
     fn read_pointer_and_segment(
         &self,
         location: WireLocation,
@@ -748,7 +748,7 @@ impl<'a> MessageSegments<'a> {
         ))
     }
 
-    #[inline]
+    #[inline(always)]
     fn check_range(&self, location: WireLocation, words: u64) -> Result<(), ValidationError> {
         let segment = self
             .segment(location.segment_id)
@@ -791,7 +791,7 @@ fn validate_segments(segments: &[&[u8]]) -> Result<(), ValidationError> {
     Ok(())
 }
 
-#[inline]
+#[inline(always)]
 fn check_range_in_segment(
     location: WireLocation,
     words: u64,
@@ -836,7 +836,7 @@ enum WalkItem {
     },
 }
 
-#[inline]
+#[inline(always)]
 fn traversal_charge(
     wire_pointer: WirePointer,
     resolved: ResolvedPointer,
@@ -880,7 +880,7 @@ fn add_words(location: WireLocation, words: u64) -> Result<WireLocation, Validat
     })
 }
 
-#[inline]
+#[inline(always)]
 fn positional_target(
     pointer_location: WireLocation,
     offset: i32,
