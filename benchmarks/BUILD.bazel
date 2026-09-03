@@ -110,6 +110,16 @@ sh_test(
 )
 
 sh_test(
+    name = "generated_api_reader_baseline_results_test",
+    srcs = ["verify-generated-api-results.sh"],
+    args = [
+        "benchmarks/results/2026-09-03-m55-generated-reader-baseline-g-drive-docker",
+        "100000",
+    ],
+    data = glob(["results/2026-09-03-m55-generated-reader-baseline-g-drive-docker/**"]),
+)
+
+sh_test(
     name = "packing_baseline_results_test",
     srcs = ["verify-packing-results.sh"],
     args = ["benchmarks/results/2026-09-03-m54-packing-baseline-g-drive-docker"],

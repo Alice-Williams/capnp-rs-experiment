@@ -1,0 +1,9 @@
+implementation	case	passes	runs	mean_ns_per_operation	median_ns_per_operation	min_ns_per_operation	max_ns_per_operation
+cpp	direct-blobs	100000	9	32.7196	29.4165	16.8489	92.8618
+cpp	direct-scalars	100000	9	6.1070	6.7413	4.4272	7.6714
+cpp	generated-blobs	100000	9	32.2951	24.1253	17.3299	99.3732
+cpp	generated-scalars	100000	9	5.5985	6.0133	3.5652	6.9514
+native	direct-blobs	100000	9	69.8647	43.3043	41.5672	173.0150
+native	direct-scalars	100000	9	29.0330	26.8044	25.3783	34.6718
+native	generated-blobs	100000	9	375.1971	339.2937	228.8699	645.5976
+native	generated-scalars	100000	9	1370.5871	1273.7523	952.6066	1857.2666

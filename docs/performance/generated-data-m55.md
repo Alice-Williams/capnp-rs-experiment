@@ -39,7 +39,8 @@ copying in every blob getter.
 
 The first paired baseline separates:
 
-1. direct checked runtime reads from already-opened roots;
+1. direct checked runtime reads from each implementation's public retained or
+   borrowed root representation;
 2. generated hot reads from the same pinned message;
 3. direct checked construction with constant layout;
 4. generated construction with identical values and allocation policy.
@@ -50,3 +51,34 @@ owned blob conversion. Typed lists, nested structs/groups, unions/defaults, and
 evolution cases extend the same harness after those floors are stable.
 
 No implementation path changes before this unmodified baseline is checked in.
+
+## Initial retained-reader baseline
+
+Evidence:
+[`benchmarks/results/2026-09-03-m55-generated-reader-baseline-g-drive-docker`](../../benchmarks/results/2026-09-03-m55-generated-reader-baseline-g-drive-docker)
+at native commit `b9fc9d03d0d4eeacd5aec80dcfe096c87418de15`.
+The run uses 100,000 operations per sample, two warmups, and nine alternating
+samples. Every direct/generated and cross-language case produces the same
+semantic checksum over the pinned C++ wire fixture.
+
+| Operation | C++ ns/op | Native ns/op | Native / C++ |
+| --- | ---: | ---: | ---: |
+| direct scalars | 6.7413 | 26.8044 | 3.976 |
+| generated scalars | 6.0133 | 1,273.7523 | 211.822 |
+| direct text/data | 29.4165 | 43.3043 | 1.472 |
+| generated text/data | 24.1253 | 339.2937 | 14.064 |
+
+The C++ direct and generated variants compile to effectively the same
+constant-offset operations; their subtracted difference is below timer
+resolution. Native generated scalar access adds about 1,241 ns per complete
+field sequence over its direct retained-reader control. Native generated blob
+access adds about 256 ns, dominated by two allocations and payload copies.
+
+The ownership rows are intentionally explicit. C++'s generated reader borrows
+stable native pointers from its message reader. Today's Rust generated reader
+owns an `Arc`-retained coordinate and safely reconstructs a short-lived reader;
+it cannot expose a payload borrow with the lifetime of an individual accessor
+call. The 3.976 and 1.472 direct ratios therefore describe the retained Rust
+model, not the lower-level borrowed reader previously qualified in M52. M55
+must measure a new lifetime-bound borrowed generated reader separately rather
+than silently compare unlike ownership semantics.

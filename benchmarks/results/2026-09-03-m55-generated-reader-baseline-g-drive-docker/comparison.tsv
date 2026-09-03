@@ -1,0 +1,5 @@
+case	cpp_median_ns_per_operation	native_median_ns_per_operation	native_over_cpp
+direct-blobs	29.4165	43.3043	1.472
+direct-scalars	6.7413	26.8044	3.976
+generated-blobs	24.1253	339.2937	14.064
+generated-scalars	6.0133	1273.7523	211.822
