@@ -231,9 +231,9 @@ impl OwnedMessage {
         retained_pointer(self, location, nesting)
     }
 
-    fn borrowed_segments(&self) -> Result<MessageSegments<'_>, ValidationError> {
-        let segments = self.segments.iter().map(AsRef::as_ref).collect::<Vec<_>>();
-        MessageSegments::new(&segments)
+    #[inline(always)]
+    fn borrowed_segments(&self) -> MessageSegments<'_> {
+        MessageSegments::from_owned_segments(&self.segments)
     }
 }
 
@@ -356,7 +356,7 @@ impl<T: ObjectKind> ObjectRef<T> {
         location: WireLocation,
         nesting: NestingLimit,
     ) -> Result<Self, OwnedReadError> {
-        let segments = message.borrowed_segments()?;
+        let segments = message.borrowed_segments();
         T::validate(segments.validate_pointer(location)?)?;
         drop(segments);
         Ok(Self {
@@ -384,7 +384,7 @@ impl<T: ObjectKind> ObjectRef<T> {
         target: &mut StructBuilder<'_>,
         pointer_index: u16,
     ) -> Result<(), GraphError> {
-        let segments = self.message.borrowed_segments()?;
+        let segments = self.message.borrowed_segments();
         target.copy_pointer(
             pointer_index,
             &segments,
@@ -408,7 +408,7 @@ impl ObjectRef<StructObject> {
         &self,
         use_reader: impl for<'reader> FnOnce(StructReader<'reader, 'reader, SharedTraversalBudget>) -> R,
     ) -> Result<R, OwnedReadError> {
-        let segments = self.message.borrowed_segments()?;
+        let segments = self.message.borrowed_segments();
         let reader = segments.read_struct(self.location, &self.message.budget, self.nesting)?;
         Ok(use_reader(reader))
     }
@@ -421,7 +421,7 @@ impl ObjectRef<StructObject> {
         let Some(location) = location else {
             return Ok(None);
         };
-        let segments = self.message.borrowed_segments()?;
+        let segments = self.message.borrowed_segments();
         let pointer = segments.validate_pointer(location)?;
         drop(segments);
         match pointer {
@@ -445,7 +445,7 @@ impl ObjectRef<StructObject> {
         let Some(location) = location else {
             return Ok(None);
         };
-        let segments = self.message.borrowed_segments()?;
+        let segments = self.message.borrowed_segments();
         let pointer = segments.validate_pointer(location)?;
         drop(segments);
         match pointer {
@@ -476,7 +476,7 @@ impl ObjectRef<ListObject> {
     pub(crate) fn precharge_for_partitions(
         &self,
     ) -> Result<(Option<ListRef>, NestingLimit, u64), OwnedReadError> {
-        let segments = self.message.borrowed_segments()?;
+        let segments = self.message.borrowed_segments();
         let bounded = segments
             .validate_pointer_with_limits(self.location, &self.message.budget, self.nesting)
             .map_err(ListReadError::from)?;
@@ -499,7 +499,7 @@ impl ObjectRef<ListObject> {
         nesting: NestingLimit,
         use_reader: impl for<'reader> FnOnce(ListReader<'reader, 'reader, SharedTraversalBudget>) -> R,
     ) -> Result<R, OwnedReadError> {
-        let segments = self.message.borrowed_segments()?;
+        let segments = self.message.borrowed_segments();
         let reader =
             ListReader::from_precharged(&segments, &self.message.budget, reference, nesting);
         Ok(use_reader(reader))
@@ -510,7 +510,7 @@ impl ObjectRef<ListObject> {
         &self,
         use_reader: impl for<'reader> FnOnce(ListReader<'reader, 'reader, SharedTraversalBudget>) -> R,
     ) -> Result<R, OwnedReadError> {
-        let segments = self.message.borrowed_segments()?;
+        let segments = self.message.borrowed_segments();
         let reader = segments.read_list(self.location, &self.message.budget, self.nesting)?;
         Ok(use_reader(reader))
     }
@@ -519,7 +519,7 @@ impl ObjectRef<ListObject> {
         &self,
         use_reader: impl for<'reader> FnOnce(crate::TextReader<'reader>) -> R,
     ) -> Result<R, OwnedReadError> {
-        let segments = self.message.borrowed_segments()?;
+        let segments = self.message.borrowed_segments();
         let reader = segments.read_text(self.location, &self.message.budget, self.nesting)?;
         Ok(use_reader(reader))
     }
@@ -528,7 +528,7 @@ impl ObjectRef<ListObject> {
         &self,
         use_reader: impl for<'reader> FnOnce(crate::DataReader<'reader>) -> R,
     ) -> Result<R, OwnedReadError> {
-        let segments = self.message.borrowed_segments()?;
+        let segments = self.message.borrowed_segments();
         let reader = segments.read_data(self.location, &self.message.budget, self.nesting)?;
         Ok(use_reader(reader))
     }
@@ -549,7 +549,7 @@ impl ObjectRef<ListObject> {
     ) -> Result<Option<ObjectRef<StructObject>>, OwnedReadError> {
         let (location, nesting) =
             self.with_reader(|reader| reader.as_pointers()?.element_location(index))??;
-        let segments = self.message.borrowed_segments()?;
+        let segments = self.message.borrowed_segments();
         let pointer = segments.validate_pointer(location)?;
         drop(segments);
         match pointer {
@@ -572,7 +572,7 @@ impl ObjectRef<ListObject> {
     ) -> Result<Option<ObjectRef<ListObject>>, OwnedReadError> {
         let (location, nesting) =
             self.with_reader(|reader| reader.as_pointers()?.element_location(index))??;
-        let segments = self.message.borrowed_segments()?;
+        let segments = self.message.borrowed_segments();
         let pointer = segments.validate_pointer(location)?;
         drop(segments);
         match pointer {
@@ -633,7 +633,7 @@ impl StructElementRef {
         let Some(location) = location else {
             return Ok(None);
         };
-        let segments = self.list.message.borrowed_segments()?;
+        let segments = self.list.message.borrowed_segments();
         let pointer = segments.validate_pointer(location)?;
         drop(segments);
         match pointer {
@@ -659,7 +659,7 @@ impl StructElementRef {
         let Some(location) = location else {
             return Ok(None);
         };
-        let segments = self.list.message.borrowed_segments()?;
+        let segments = self.list.message.borrowed_segments();
         let pointer = segments.validate_pointer(location)?;
         drop(segments);
         match pointer {
@@ -691,7 +691,7 @@ fn retained_pointer(
     location: WireLocation,
     nesting: NestingLimit,
 ) -> Result<OwnedPointerRef, OwnedReadError> {
-    let segments = message.borrowed_segments()?;
+    let segments = message.borrowed_segments();
     let pointer = segments.validate_pointer(location)?;
     drop(segments);
     Ok(match pointer {

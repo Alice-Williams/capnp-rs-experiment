@@ -1,6 +1,6 @@
 use core::fmt;
 
-use alloc::{boxed::Box, vec};
+use alloc::{boxed::Box, sync::Arc, vec};
 
 use capnp_wire::{ElementSize, PointerKind, Segment, WirePointer};
 
@@ -186,6 +186,7 @@ enum SegmentStorage<'a> {
     Two(&'a [u8]),
     Borrowed(&'a [&'a [u8]]),
     Descriptors(&'a [Segment<'a>]),
+    Owned(&'a [Arc<[u8]>]),
     Many(Box<[&'a [u8]]>),
 }
 
@@ -231,6 +232,18 @@ impl<'a> MessageSegments<'a> {
         })
     }
 
+    #[inline(always)]
+    pub(crate) fn from_owned_segments(segments: &'a [Arc<[u8]>]) -> Self {
+        let first = segments
+            .first()
+            .expect("OwnedMessage always contains at least one segment")
+            .as_ref();
+        Self {
+            first,
+            segments: SegmentStorage::Owned(segments),
+        }
+    }
+
     #[inline]
     pub fn segment_count(&self) -> usize {
         match &self.segments {
@@ -238,6 +251,7 @@ impl<'a> MessageSegments<'a> {
             SegmentStorage::Two(_) => 2,
             SegmentStorage::Borrowed(segments) => segments.len(),
             SegmentStorage::Descriptors(segments) => segments.len(),
+            SegmentStorage::Owned(segments) => segments.len(),
             SegmentStorage::Many(segments) => segments.len(),
         }
     }
@@ -255,6 +269,7 @@ impl<'a> MessageSegments<'a> {
             SegmentStorage::Descriptors(segments) => {
                 segments.get(index).copied().map(Segment::bytes)
             }
+            SegmentStorage::Owned(segments) => segments.get(index).map(AsRef::as_ref),
             SegmentStorage::Many(segments) => segments.get(index).copied(),
         }
     }
@@ -1042,6 +1057,16 @@ mod tests {
         assert!(matches!(message.segments, SegmentStorage::Borrowed(_)));
         assert_eq!(message.segment_count(), 3);
         assert_eq!(message.segment(2), Some(bytes.as_slice()));
+    }
+
+    #[test]
+    fn owned_context_borrows_arc_table_without_descriptor_copy() {
+        let bytes: Arc<[u8]> = Arc::from([0u8; 8]);
+        let owned = [bytes];
+        let message = MessageSegments::from_owned_segments(&owned);
+        assert!(matches!(message.segments, SegmentStorage::Owned(_)));
+        assert_eq!(message.segment_count(), 1);
+        assert_eq!(message.segment(0), Some(owned[0].as_ref()));
     }
 
     #[test]
