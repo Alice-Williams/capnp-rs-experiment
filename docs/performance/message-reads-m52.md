@@ -253,3 +253,28 @@ Borrowed text/data and retained reads remain open.
 
 Evidence:
 `benchmarks/results/2026-09-03-m52-scalars-final-far-inline-g-drive-docker/`.
+
+## Borrowed text/data baseline
+
+The blob fixture gives the non-empty roots two pointers to the same eight-byte
+byte list. Field zero is read as seven-byte Text after checking its trailing
+NUL; field one is read as eight-byte Data. The empty 64-segment root exercises
+schema-evolution defaults. Both implementations observe lengths and endpoint
+bytes without copying payloads.
+
+| Segments | Cumulative C++ ns | Cumulative Rust ns | Rust / C++ | Blob-only Rust / C++ |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 60.0182 | 66.1424 | 1.102 | 3.172 |
+| 2 | 175.1435 | 89.4111 | 0.511 | 3.340 |
+| 64 | 539.3382 | 182.3098 | 0.338 | 7.242 |
+
+This fails both the cumulative one-segment gate and the direct component gate.
+Tracing localizes the fixed cost: `StructReader::read_text()` and `read_data()`
+call `select_pointer()`, which validates the pointer to decide whether a schema
+default applies, then call the blob reader, which validates and follows the
+same pointer again. With no schema default, null already maps to the empty blob,
+so that first validation is redundant. These public paths also lack the
+cross-crate inline annotations needed by such small checked accessors.
+
+Evidence:
+`benchmarks/results/2026-09-03-m52-blobs-baseline-g-drive-docker/`.
