@@ -174,6 +174,7 @@ enum SegmentStorage<'a> {
 }
 
 impl<'a> MessageSegments<'a> {
+    #[inline]
     pub fn new(segments: &[&'a [u8]]) -> Result<Self, ValidationError> {
         if segments.is_empty() {
             return Err(ValidationError::NoSegments);
@@ -198,6 +199,7 @@ impl<'a> MessageSegments<'a> {
         Ok(Self { segments })
     }
 
+    #[inline]
     pub fn segment_count(&self) -> usize {
         match &self.segments {
             SegmentStorage::One(_) => 1,
@@ -206,6 +208,7 @@ impl<'a> MessageSegments<'a> {
         }
     }
 
+    #[inline]
     pub fn segment(&self, id: u32) -> Option<&'a [u8]> {
         let index = usize::try_from(id).ok()?;
         match &self.segments {
@@ -216,11 +219,21 @@ impl<'a> MessageSegments<'a> {
     }
 
     /// Validates and follows a pointer, returning coordinates rather than native pointers.
+    #[inline]
     pub fn validate_pointer(
         &self,
         location: WireLocation,
     ) -> Result<ResolvedPointer, ValidationError> {
         let pointer = self.read_pointer(location)?;
+        self.validate_wire_pointer(location, pointer)
+    }
+
+    #[inline]
+    fn validate_wire_pointer(
+        &self,
+        location: WireLocation,
+        pointer: WirePointer,
+    ) -> Result<ResolvedPointer, ValidationError> {
         if pointer.is_null() {
             return Ok(ResolvedPointer::Null);
         }
@@ -246,6 +259,7 @@ impl<'a> MessageSegments<'a> {
     /// Struct and list targets consume one copied nesting level. Null and capability
     /// pointers do not. Far landing pads, physical target words, and zero-sized-list
     /// amplification are included in the single all-or-nothing charge.
+    #[inline]
     pub fn validate_pointer_with_limits<B: TraversalBudget>(
         &self,
         location: WireLocation,
@@ -253,7 +267,7 @@ impl<'a> MessageSegments<'a> {
         nesting: NestingLimit,
     ) -> Result<BoundedPointer, TraversalError> {
         let wire_pointer = self.read_pointer(location)?;
-        let pointer = self.validate_pointer(location)?;
+        let pointer = self.validate_wire_pointer(location, wire_pointer)?;
         let child_nesting = match pointer {
             ResolvedPointer::Struct(_) | ResolvedPointer::List(_) => nesting.descend()?,
             ResolvedPointer::Null | ResolvedPointer::Capability(_) => nesting,
@@ -409,6 +423,7 @@ impl<'a> MessageSegments<'a> {
         Ok(stats)
     }
 
+    #[inline]
     fn validate_struct(
         &self,
         pointer_location: WireLocation,
@@ -421,6 +436,7 @@ impl<'a> MessageSegments<'a> {
         self.validate_struct_at(content, pointer)
     }
 
+    #[inline]
     fn validate_struct_at(
         &self,
         content: WireLocation,
@@ -438,6 +454,7 @@ impl<'a> MessageSegments<'a> {
         }))
     }
 
+    #[inline]
     fn validate_list(
         &self,
         pointer_location: WireLocation,
@@ -450,6 +467,7 @@ impl<'a> MessageSegments<'a> {
         self.validate_list_at(target, pointer)
     }
 
+    #[inline]
     fn validate_list_at(
         &self,
         target: WireLocation,
@@ -504,6 +522,7 @@ impl<'a> MessageSegments<'a> {
         }
     }
 
+    #[inline]
     fn validate_far(&self, pointer: WirePointer) -> Result<ResolvedPointer, ValidationError> {
         let fields = pointer.far_fields().expect("far discriminator was checked");
         let pad = WireLocation {
@@ -542,6 +561,7 @@ impl<'a> MessageSegments<'a> {
         }
     }
 
+    #[inline]
     fn validate_non_far(
         &self,
         location: WireLocation,
@@ -564,6 +584,7 @@ impl<'a> MessageSegments<'a> {
         }
     }
 
+    #[inline]
     fn read_pointer(&self, location: WireLocation) -> Result<WirePointer, ValidationError> {
         self.check_range(location, 1)?;
         let segment = self
@@ -577,6 +598,7 @@ impl<'a> MessageSegments<'a> {
             .map_err(|_| ValidationError::PointerOutOfBounds { location })
     }
 
+    #[inline]
     fn check_range(&self, location: WireLocation, words: u64) -> Result<(), ValidationError> {
         let segment = self
             .segment(location.segment_id)
@@ -623,6 +645,7 @@ enum WalkItem {
     },
 }
 
+#[inline]
 fn traversal_charge(
     wire_pointer: WirePointer,
     resolved: ResolvedPointer,
@@ -666,6 +689,7 @@ fn add_words(location: WireLocation, words: u64) -> Result<WireLocation, Validat
     })
 }
 
+#[inline]
 fn positional_target(
     pointer_location: WireLocation,
     offset: i32,

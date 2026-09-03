@@ -121,6 +121,7 @@ impl<'data> MessageSegments<'data> {
     /// assert!(root.reference().is_none());
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
+    #[inline]
     pub fn read_struct<'context, B: TraversalBudget>(
         &'context self,
         location: WireLocation,
@@ -187,6 +188,7 @@ impl<'context, 'data, B: TraversalBudget> StructReader<'context, 'data, B> {
         self
     }
 
+    #[inline]
     pub fn data_section(self) -> Result<DataSection<'data>, StructReadError> {
         let Some(reference) = self.reference else {
             return Ok(DataSection::new(&[])?);
@@ -213,7 +215,7 @@ impl<'context, 'data, B: TraversalBudget> StructReader<'context, 'data, B> {
                 data_words: reference.data_words,
                 segment_bytes: segment.len(),
             })?;
-        Ok(DataSection::new(data)?)
+        Ok(DataSection::from_validated_bytes(data))
     }
 
     pub fn pointer_location(self, index: u16) -> Result<Option<WireLocation>, StructReadError> {

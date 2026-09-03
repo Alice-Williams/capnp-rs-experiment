@@ -72,6 +72,7 @@ pub struct LocalTraversalBudget {
 }
 
 impl LocalTraversalBudget {
+    #[inline]
     pub const fn new(limit_words: u64) -> Self {
         Self {
             remaining: Cell::new(limit_words),
@@ -82,6 +83,7 @@ impl LocalTraversalBudget {
 impl sealed::Sealed for LocalTraversalBudget {}
 
 impl TraversalBudget for LocalTraversalBudget {
+    #[inline]
     fn try_charge(&self, words: u64) -> Result<(), BudgetExhausted> {
         let remaining = self.remaining.get();
         match remaining.checked_sub(words) {
@@ -96,6 +98,7 @@ impl TraversalBudget for LocalTraversalBudget {
         }
     }
 
+    #[inline]
     fn remaining_words(&self) -> u64 {
         self.remaining.get()
     }
@@ -154,14 +157,17 @@ impl TraversalBudget for SharedTraversalBudget {
 pub struct NestingLimit(u32);
 
 impl NestingLimit {
+    #[inline]
     pub const fn new(levels: u32) -> Self {
         Self(levels)
     }
 
+    #[inline]
     pub const fn remaining(self) -> u32 {
         self.0
     }
 
+    #[inline]
     pub const fn descend(self) -> Result<Self, NestingLimitExceeded> {
         match self.0.checked_sub(1) {
             Some(remaining) => Ok(Self(remaining)),

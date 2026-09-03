@@ -117,6 +117,7 @@ impl<'a> DataSection<'a> {
         Self { bytes }
     }
 
+    #[inline]
     pub const fn as_bytes(self) -> &'a [u8] {
         self.bytes
     }
@@ -159,6 +160,7 @@ impl<'a> DataSection<'a> {
         Ok((self.read_u32(offset, default as u32)?) as i32)
     }
 
+    #[inline]
     pub fn read_u64(self, offset: u32, default: u64) -> Result<u64, PrimitiveError> {
         Ok(u64::from_le_bytes(self.wire_bytes(offset)?) ^ default)
     }
@@ -221,6 +223,7 @@ impl<'a> DataSection<'a> {
         })
     }
 
+    #[inline]
     fn wire_bytes<const N: usize>(self, offset: u32) -> Result<[u8; N], PrimitiveError> {
         let offset = usize::try_from(offset).map_err(|_| PrimitiveError::OffsetOverflow)?;
         let start = offset
