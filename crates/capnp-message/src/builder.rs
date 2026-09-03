@@ -876,105 +876,54 @@ impl ExclusiveArena {
                             .copy_from_slice(bytes);
                         continue;
                     }
-                    FastByteList::Slow => {
-                        self.copy_task_slow(task, source, budget, &mut tasks)?;
-                        continue;
-                    }
+                    FastByteList::Slow => {}
                 }
             }
-            let bounded = source.validate_root_struct_pointer_with_limits(budget, task.nesting)?;
-            if let ResolvedPointer::Struct(reference) = bounded.pointer {
-                self.copy_struct_task(
-                    task.destination,
-                    reference,
-                    bounded.child_nesting,
-                    source,
-                    &mut tasks,
-                )?;
+            let bounded = if task.source == WireLocation::ROOT {
+                source.validate_root_struct_pointer_with_limits(budget, task.nesting)?
             } else {
-                self.copy_resolved_task(
+                source.validate_pointer_with_limits(task.source, budget, task.nesting)?
+            };
+            match bounded.pointer {
+                ResolvedPointer::Null => self.write_pointer(task.destination, WirePointer::NULL)?,
+                ResolvedPointer::Capability(capability) => self.write_pointer(
                     task.destination,
-                    bounded.pointer,
-                    bounded.child_nesting,
-                    source,
-                    &mut tasks,
-                )?;
-            }
-        }
-        Ok(())
-    }
-
-    #[inline(never)]
-    fn copy_task_slow<B: TraversalBudget>(
-        &mut self,
-        task: CopyTask,
-        source: &MessageSegments<'_>,
-        budget: &B,
-        tasks: &mut CopyTasks,
-    ) -> Result<(), GraphError> {
-        let bounded = source.validate_pointer_with_limits(task.source, budget, task.nesting)?;
-        self.copy_resolved_task(
-            task.destination,
-            bounded.pointer,
-            bounded.child_nesting,
-            source,
-            tasks,
-        )
-    }
-
-    #[inline(never)]
-    fn copy_resolved_task(
-        &mut self,
-        destination: WordOffset,
-        pointer: ResolvedPointer,
-        child_nesting: NestingLimit,
-        source: &MessageSegments<'_>,
-        tasks: &mut CopyTasks,
-    ) -> Result<(), GraphError> {
-        match pointer {
-            ResolvedPointer::Null => self.write_pointer(destination, WirePointer::NULL)?,
-            ResolvedPointer::Capability(capability) => {
-                self.write_pointer(destination, WirePointer::new_capability(capability.index))?
-            }
-            ResolvedPointer::Struct(reference) => {
-                self.copy_struct_task(destination, reference, child_nesting, source, tasks)?;
-            }
-            ResolvedPointer::List(reference) => {
-                self.copy_list(destination, reference, child_nesting, source, tasks)?;
-            }
-        }
-        Ok(())
-    }
-
-    #[inline(always)]
-    fn copy_struct_task(
-        &mut self,
-        destination: WordOffset,
-        reference: crate::StructRef,
-        child_nesting: NestingLimit,
-        source: &MessageSegments<'_>,
-        tasks: &mut CopyTasks,
-    ) -> Result<(), GraphError> {
-        let target = self.allocate_struct(reference.data_words, reference.pointer_count)?;
-        self.emit_struct(destination, target)?;
-        self.copy_words_from(
-            target.content,
-            source,
-            reference.content,
-            u64::from(reference.data_words),
-        )?;
-        for index in (0..reference.pointer_count).rev() {
-            tasks.push(CopyTask {
-                destination: add_words(
-                    target.content,
-                    u64::from(reference.data_words) + u64::from(index),
+                    WirePointer::new_capability(capability.index),
                 )?,
-                source: add_wire_words(
-                    reference.content,
-                    u64::from(reference.data_words) + u64::from(index),
-                )?,
-                nesting: child_nesting,
-            });
+                ResolvedPointer::Struct(reference) => {
+                    let target =
+                        self.allocate_struct(reference.data_words, reference.pointer_count)?;
+                    self.emit_struct(task.destination, target)?;
+                    self.copy_words_from(
+                        target.content,
+                        source,
+                        reference.content,
+                        u64::from(reference.data_words),
+                    )?;
+                    for index in (0..reference.pointer_count).rev() {
+                        tasks.push(CopyTask {
+                            destination: add_words(
+                                target.content,
+                                u64::from(reference.data_words) + u64::from(index),
+                            )?,
+                            source: add_wire_words(
+                                reference.content,
+                                u64::from(reference.data_words) + u64::from(index),
+                            )?,
+                            nesting: bounded.child_nesting,
+                        });
+                    }
+                }
+                ResolvedPointer::List(reference) => {
+                    self.copy_list(
+                        task.destination,
+                        reference,
+                        bounded.child_nesting,
+                        source,
+                        &mut tasks,
+                    )?;
+                }
+            }
         }
         Ok(())
     }
