@@ -121,6 +121,7 @@ fn measure(
 fn direct_scalar_fingerprint<B: capnp_message::TraversalBudget>(
     reader: capnp_message::StructReader<'_, '_, B>,
 ) -> Result<u64, StructReadError> {
+    let reader = black_box(reader);
     let data = reader.data_section()?;
     let mut value = u64::from(data.read_bool(0, false)?);
     value = value.rotate_left(5) ^ u64::from(data.read_i8(1, 0)? as u8);
@@ -141,6 +142,7 @@ fn direct_scalar_fingerprint<B: capnp_message::TraversalBudget>(
 fn generated_scalar_fingerprint(
     reader: &wire_fixture::Reader,
 ) -> Result<u64, Box<dyn std::error::Error>> {
+    let reader = black_box(reader);
     let mut value = u64::from(reader.bool_value()?);
     value = value.rotate_left(5) ^ u64::from(reader.int8_value()? as u8);
     value = value.rotate_left(7) ^ u64::from(reader.int16_value()? as u16);
@@ -166,6 +168,7 @@ fn generated_scalar_fingerprint(
 fn borrowed_scalar_fingerprint<B: capnp_message::TraversalBudget>(
     reader: &wire_fixture::BorrowedReader<'_, '_, B>,
 ) -> Result<u64, Box<dyn std::error::Error>> {
+    let reader = black_box(reader);
     let mut value = u64::from(reader.bool_value());
     value = value.rotate_left(5) ^ u64::from(reader.int8_value() as u8);
     value = value.rotate_left(7) ^ u64::from(reader.int16_value() as u16);
@@ -185,6 +188,7 @@ fn borrowed_scalar_fingerprint<B: capnp_message::TraversalBudget>(
 fn direct_blob_fingerprint<B: capnp_message::TraversalBudget>(
     reader: capnp_message::StructReader<'_, '_, B>,
 ) -> Result<u64, StructReadError> {
+    let reader = black_box(reader);
     let text = reader.read_text(0, None)?;
     let data = reader.read_data(1, None)?;
     Ok(blob_fingerprint(text.as_bytes(), data.as_bytes()))
@@ -193,6 +197,7 @@ fn direct_blob_fingerprint<B: capnp_message::TraversalBudget>(
 fn generated_blob_fingerprint(
     reader: &wire_fixture::Reader,
 ) -> Result<u64, Box<dyn std::error::Error>> {
+    let reader = black_box(reader);
     let text = reader.text()?;
     let data = reader.data()?;
     Ok(blob_fingerprint(text.as_bytes(), &data))
@@ -201,6 +206,7 @@ fn generated_blob_fingerprint(
 fn borrowed_blob_fingerprint<B: capnp_message::TraversalBudget>(
     reader: &wire_fixture::BorrowedReader<'_, '_, B>,
 ) -> Result<u64, Box<dyn std::error::Error>> {
+    let reader = black_box(reader);
     let text = reader.text()?;
     let data = reader.data()?;
     Ok(blob_fingerprint(text.as_bytes(), data.as_bytes()))
@@ -220,6 +226,7 @@ fn blob_fingerprint(text: &[u8], data: &[u8]) -> u64 {
 fn direct_group_fingerprint<B: capnp_message::TraversalBudget>(
     reader: capnp_message::StructReader<'_, '_, B>,
 ) -> Result<u64, StructReadError> {
+    let reader = black_box(reader);
     let data = reader.data_section()?;
     Ok(group_fingerprint(
         data.read_u16(19, 0)?,
@@ -232,6 +239,7 @@ fn direct_group_fingerprint<B: capnp_message::TraversalBudget>(
 fn borrowed_group_fingerprint<B: capnp_message::TraversalBudget>(
     reader: &wire_fixture::BorrowedReader<'_, '_, B>,
 ) -> u64 {
+    let reader = black_box(reader);
     let choice = reader.choice();
     let tag = match choice.which() {
         choice::Which::None => 0,
