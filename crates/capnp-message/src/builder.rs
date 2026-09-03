@@ -440,6 +440,18 @@ impl ExclusiveArena {
             .ok_or(ArenaError::AllocationOverflow)
     }
 
+    fn data_list_builder<T: PrimitiveListValue>(
+        &mut self,
+        reference: ListOffset,
+    ) -> Result<DataListBuilder<'_, T>, ArenaError> {
+        let storage = self.primitive_list_storage_mut::<T>(reference)?;
+        Ok(DataListBuilder {
+            storage,
+            reference,
+            marker: PhantomData,
+        })
+    }
+
     pub(crate) fn set_pointer_list_far(
         &mut self,
         reference: ListOffset,
@@ -479,11 +491,7 @@ impl ExclusiveArena {
         let reference = self.allocate_data_list(T::ELEMENT_SIZE, element_count)?;
         self.emit_list(root_offset(), reference)?;
         self.root_initialized = true;
-        Ok(DataListBuilder {
-            arena: self,
-            reference,
-            marker: PhantomData,
-        })
+        self.data_list_builder(reference)
     }
 
     pub fn init_root_pointer_list(
@@ -1956,11 +1964,7 @@ impl StructBuilder<'_> {
             .arena
             .allocate_data_list(T::ELEMENT_SIZE, element_count)?;
         self.arena.emit_list(slot, reference)?;
-        Ok(DataListBuilder {
-            arena: self.arena,
-            reference,
-            marker: PhantomData,
-        })
+        self.arena.data_list_builder(reference)
     }
 
     pub fn init_pointer_list(
@@ -2154,6 +2158,7 @@ impl sealed::Sealed for () {}
 impl PrimitiveListValue for () {
     const ELEMENT_SIZE: ElementSize = ElementSize::Void;
 
+    #[inline(always)]
     fn write_at(_bytes: &mut [u8], _bit_offset: u64, _value: Self) -> Result<(), ArenaError> {
         Ok(())
     }
@@ -2163,6 +2168,7 @@ impl sealed::Sealed for bool {}
 impl PrimitiveListValue for bool {
     const ELEMENT_SIZE: ElementSize = ElementSize::Bit;
 
+    #[inline(always)]
     fn write_at(bytes: &mut [u8], bit_offset: u64, value: Self) -> Result<(), ArenaError> {
         let byte = usize::try_from(bit_offset / 8).map_err(|_| ArenaError::AllocationOverflow)?;
         let bit = u8::try_from(bit_offset % 8).map_err(|_| ArenaError::AllocationOverflow)?;
@@ -2181,6 +2187,7 @@ macro_rules! list_value {
         impl PrimitiveListValue for $ty {
             const ELEMENT_SIZE: ElementSize = ElementSize::$size;
 
+            #[inline(always)]
             fn write_at(bytes: &mut [u8], bit_offset: u64, value: Self) -> Result<(), ArenaError> {
                 let byte =
                     usize::try_from(bit_offset / 8).map_err(|_| ArenaError::AllocationOverflow)?;
@@ -2203,7 +2210,7 @@ list_value!(f32, FourBytes, 32, write_f32_le);
 list_value!(f64, EightBytes, 64, write_f64_le);
 
 pub struct DataListBuilder<'arena, T> {
-    arena: &'arena mut ExclusiveArena,
+    storage: &'arena mut [u8],
     reference: ListOffset,
     marker: PhantomData<T>,
 }
@@ -2221,21 +2228,14 @@ impl<T: PrimitiveListValue> DataListBuilder<'_, T> {
         self.len() == 0
     }
 
+    #[inline(always)]
     pub fn set(&mut self, index: u32, value: T) -> Result<(), ArenaError> {
         check_index(index, self.len())?;
-        let start = u64::from(self.reference.content.word_offset)
-            .checked_mul(64)
-            .ok_or(ArenaError::AllocationOverflow)?;
         let bits = element_bits(T::ELEMENT_SIZE);
         let offset = u64::from(index)
             .checked_mul(bits)
-            .and_then(|relative| start.checked_add(relative))
             .ok_or(ArenaError::AllocationOverflow)?;
-        T::write_at(
-            self.arena.segment_mut(self.reference.content.segment_id)?,
-            offset,
-            value,
-        )
+        T::write_at(self.storage, offset, value)
     }
 }
 
@@ -2282,11 +2282,7 @@ impl PointerListBuilder<'_> {
             .arena
             .allocate_data_list(T::ELEMENT_SIZE, element_count)?;
         self.arena.emit_list(slot, reference)?;
-        Ok(DataListBuilder {
-            arena: self.arena,
-            reference,
-            marker: PhantomData,
-        })
+        self.arena.data_list_builder(reference)
     }
 
     pub fn init_pointer_list(
