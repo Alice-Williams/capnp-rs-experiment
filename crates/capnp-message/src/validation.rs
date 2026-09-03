@@ -449,6 +449,61 @@ impl<'a> MessageSegments<'a> {
         })
     }
 
+    #[inline]
+    pub(crate) fn validate_list_pointer_with_limits<B: TraversalBudget>(
+        &self,
+        location: WireLocation,
+        budget: &B,
+        nesting: NestingLimit,
+    ) -> Result<BoundedPointer, TraversalError> {
+        let (wire_pointer, source_segment) = self.read_pointer_and_segment(location)?;
+        if !wire_pointer.is_null() && wire_pointer.kind() == PointerKind::List {
+            let fields = wire_pointer
+                .list_fields()
+                .expect("list discriminator was checked");
+            if fields.element_size != ElementSize::InlineComposite {
+                let content = positional_target(location, fields.offset)?;
+                let content_words = list_word_count(fields.element_size, fields.count)?;
+                check_range_in_segment(content, content_words, source_segment)?;
+                let amplified = if fields.element_size == ElementSize::Void {
+                    u64::from(fields.count)
+                } else {
+                    0
+                };
+                let charged_words = content_words
+                    .checked_add(amplified)
+                    .ok_or(ValidationError::TargetWordOverflow)?;
+                let child_nesting = nesting.descend()?;
+                budget.try_charge(charged_words)?;
+                return Ok(BoundedPointer {
+                    pointer: ResolvedPointer::List(ListRef {
+                        content,
+                        element_size: fields.element_size,
+                        element_count: fields.count,
+                        content_words: u32::try_from(content_words)
+                            .map_err(|_| ValidationError::TargetWordOverflow)?,
+                        inline_struct_size: None,
+                    }),
+                    child_nesting,
+                    charged_words,
+                });
+            }
+        }
+
+        let pointer = self.validate_wire_pointer(location, wire_pointer)?;
+        let child_nesting = match pointer {
+            ResolvedPointer::Struct(_) | ResolvedPointer::List(_) => nesting.descend()?,
+            ResolvedPointer::Null | ResolvedPointer::Capability(_) => nesting,
+        };
+        let charged_words = traversal_charge(wire_pointer, pointer)?;
+        budget.try_charge(charged_words)?;
+        Ok(BoundedPointer {
+            pointer,
+            child_nesting,
+            charged_words,
+        })
+    }
+
     #[inline(always)]
     pub(crate) fn validate_root_struct_pointer_with_limits<B: TraversalBudget>(
         &self,

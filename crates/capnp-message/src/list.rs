@@ -182,7 +182,7 @@ impl<'data> MessageSegments<'data> {
         budget: &'context B,
         nesting: NestingLimit,
     ) -> Result<ListReader<'context, 'data, B>, ListReadError> {
-        let bounded = self.validate_pointer_with_limits(location, budget, nesting)?;
+        let bounded = self.validate_list_pointer_with_limits(location, budget, nesting)?;
         match bounded.pointer {
             ResolvedPointer::Null => Ok(ListReader::empty(self, budget, bounded.child_nesting)),
             ResolvedPointer::List(reference) => Ok(ListReader {
