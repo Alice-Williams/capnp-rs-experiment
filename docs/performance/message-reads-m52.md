@@ -210,3 +210,26 @@ a false negative increment while retaining the raw and marginal medians.
 
 Evidence:
 `benchmarks/results/2026-09-03-m52-scalars-baseline-g-drive-docker/`.
+
+## Audited scalar checkpoint
+
+Inlining the checked `DataSection` accessors allows one bounds/byte path to be
+optimized as a unit. A dedicated `scalar-only` case keeps the data slice opaque
+on every iteration using symmetric Rust black-box and C++ compiler-memory
+barriers, preventing either compiler from hoisting the nine reads.
+
+| Segments | C++ scalar-only ns | Rust scalar-only ns | Rust / C++ | Cumulative Rust / C++ |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 4.4145 | 3.5985 | 0.815 | 0.263 |
+| 2 | 3.8275 | 3.5125 | 0.918 | 0.180 |
+| 64 | 1.8954 | 1.5421 | 0.814 | 0.332 |
+
+The scalar component itself now passes the 1.03 parity gate for every shape.
+One- and 64-segment cumulative workloads preserve the inherited ceilings. The
+two-segment cumulative ratio is 0.180 versus its 0.172 ceiling, so this remains
+a checkpoint rather than the final scalar result. The scalar work is already
+faster; the remaining headroom must come from the checked far-pointer root path
+below it.
+
+Evidence:
+`benchmarks/results/2026-09-03-m52-scalars-final-audited-g-drive-docker/`.
