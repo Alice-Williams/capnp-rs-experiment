@@ -633,3 +633,38 @@ control, but generated dispatch adds roughly 299 ns and loses that advantage.
 The next change generates a constant-layout typed struct-list initializer and
 typed element wrapper, retaining dynamic list construction only for reflection,
 unions, and branded element types.
+
+## Struct-list builder gate
+
+Generated initializers for ordinary, unbranded struct lists now embed the
+pointer slot and element layout and return a typed list whose `get()` yields
+the generated element builder. Reflection, union activation, and branded
+element resolution retain their dynamic paths. The checked message builder
+caches the validated element widths and stride, and inlines element indexing;
+generated code enters that wire builder directly instead of returning the
+large list builder through an intermediate dynamic result. No unchecked code
+or weaker bounds behavior is introduced.
+
+Because the full-operation generated-minus-direct differences are close to
+timer resolution, the paired harness also retains one two-element list and
+measures only element selection and the two scalar writes. This isolates the
+generated typed wrapper from allocation, tag emission, and zeroing.
+
+Final five-million-operation evidence at native commit `6b8f9f4` is in
+[`benchmarks/results/2026-09-03-m55-struct-list-wire-path-5m`](../../benchmarks/results/2026-09-03-m55-struct-list-wire-path-5m).
+
+| Operation | C++ ns/op | Native ns/op | Native / C++ |
+| --- | ---: | ---: | ---: |
+| direct struct-list construction and writes | 57.2777 | 34.2751 | 0.598 |
+| generated struct-list construction and writes | 59.4020 | 34.8792 | 0.587 |
+| retained direct element access and writes | 4.6391 | 6.6911 | 1.442 |
+| retained generated element access and writes | 4.5771 | 6.6868 | 1.461 |
+
+Generated Rust is 41.3% faster than generated C++ and slightly improves on
+the paired direct-runtime ratio, closing the cumulative gate. In the isolated
+workload, generated and direct native medians differ by 0.0043 ns; the paired
+increment is 0.0635 ns and the C++ increment is negative, so incremental
+subtraction is below timer resolution. The isolated generated/direct ratio
+differs by 1.3%, within the 3% tolerance, corroborating that typed wrapping
+adds no material native cost. The ordinary struct-list builder gate is closed;
+pointer lists, unions, defaults, and evolution builders remain open.
