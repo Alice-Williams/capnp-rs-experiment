@@ -642,12 +642,8 @@ mod tests {
             }
             {
                 let mut blobs = root.init_data_blobs(2).expect("typed Data list init");
-                blobs
-                    .set(0, &[1, 2, 3])
-                    .expect("first Data list element");
-                blobs
-                    .set(1, &[4, 5])
-                    .expect("second Data list element");
+                blobs.set(0, &[1, 2, 3]).expect("first Data list element");
+                blobs.set(1, &[4, 5]).expect("second Data list element");
             }
         }
         let message = OwnedMessage::new(arena.into_segments(), ReaderLimits::default())
