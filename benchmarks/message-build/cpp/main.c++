@@ -44,8 +44,9 @@ __attribute__((always_inline)) inline uint64_t readWord(
   return encoded.get();
 }
 
+template <size_t N>
 __attribute__((always_inline)) inline uint64_t hashPrepared(
-    const std::array<capnp::word, 5>& words, size_t wordCount,
+    const std::array<capnp::word, N>& words, size_t wordCount,
     size_t segmentCount) {
   uint64_t hash = SEED ^ std::rotl(uint64_t{segmentCount}, 17)
       ^ std::rotl(uint64_t{wordCount}, 31);
@@ -54,6 +55,19 @@ __attribute__((always_inline)) inline uint64_t hashPrepared(
     hash = std::rotl(hash, 7) ^ readWord(bytes, index);
   }
   return hash;
+}
+
+kj::Array<capnp::word> makeGraph() {
+  auto words = kj::heapArray<capnp::word>(11);
+  std::memset(words.begin(), 0, words.asBytes().size());
+  auto bytes = reinterpret_cast<capnp::byte*>(words.begin());
+  setWord(bytes, 0, uint64_t{0x00010001} << 32);
+  setWord(bytes, 1, VALUE);
+  setWord(bytes, 2, (uint64_t{514} << 32) | 1);
+  for (size_t index = 0; index < 64; ++index) {
+    bytes[24 + index] = static_cast<capnp::byte>(index ^ 0xa5);
+  }
+  return words;
 }
 
 __attribute__((always_inline)) inline uint64_t hashSegments(
@@ -133,36 +147,72 @@ __attribute__((noinline)) uint64_t reuseIteration(
   return fingerprint;
 }
 
+__attribute__((noinline)) uint64_t copyPreparedIteration(
+    kj::ArrayPtr<const capnp::word> source) {
+  alignas(capnp::word) std::array<capnp::byte, 88> output{};
+  std::memcpy(output.data(), source.begin(), output.size());
+  uint64_t hash = SEED ^ std::rotl(uint64_t{1}, 17)
+      ^ std::rotl(uint64_t{11}, 31);
+  for (size_t index = 0; index < 11; ++index) {
+    hash = std::rotl(hash, 7) ^ readWord(output.data(), index);
+  }
+  return hash;
+}
+
+__attribute__((noinline)) uint64_t copyIteration(capnp::AnyPointer::Reader source) {
+  capnp::MallocMessageBuilder message(
+      11, capnp::AllocationStrategy::FIXED_SIZE);
+  message.setRoot(source);
+  return hashSegments(message.getSegmentsForOutput());
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
   if (argc != 4) {
-    std::cerr << "usage: cpp-message-build prepared|fresh|reuse direct|far|double-far PASSES\n";
+    std::cerr << "usage: cpp-message-build prepared|fresh|reuse|copy-prepared|copy direct|far|double-far|graph PASSES\n";
     return 2;
   }
   auto mode = std::string_view(argv[1]);
   auto shape = std::string_view(argv[2]);
   auto passes = parseSize(argv[3]);
-  if ((mode != "prepared" && mode != "fresh" && mode != "reuse")
-      || (shape != "direct" && shape != "far" && shape != "double-far")
-      || (mode == "reuse" && shape != "direct")) {
+  auto copyMode = mode == "copy-prepared" || mode == "copy";
+  if ((mode != "prepared" && mode != "fresh" && mode != "reuse" && !copyMode)
+      || (shape != "direct" && shape != "far" && shape != "double-far"
+          && shape != "graph")
+      || (mode == "reuse" && shape != "direct")
+      || (copyMode != (shape == "graph"))) {
     std::cerr << "unknown benchmark mode or shape\n";
     return 2;
   }
 
-  auto shapeId = shape == "direct" ? 0u : shape == "far" ? 1u : 2u;
+  auto shapeId = shape == "direct" ? 0u : shape == "far" ? 1u : shape == "double-far" ? 2u : 3u;
   uint64_t semantic = SEED;
   uint64_t wire = SEED;
   std::array<capnp::word, 3> scratch{};
+  auto graph = makeGraph();
+  auto graphView = kj::arrayPtr(
+      static_cast<const capnp::word*>(graph.begin()), graph.size());
+  capnp::ReaderOptions options;
+  options.traversalLimitInWords = kj::maxValue;
+  capnp::SegmentArrayMessageReader graphReader(kj::arrayPtr(&graphView, 1), options);
+  auto graphRoot = graphReader.getRoot<capnp::AnyPointer>();
   auto started = std::chrono::steady_clock::now();
   for (size_t pass = 0; pass < passes; ++pass) {
     auto first = VALUE ^ uint64_t{pass};
     auto second = std::rotl(first, 23);
-    auto fingerprint = mode == "prepared"
-        ? preparedIteration(shapeId, first, second)
-        : mode == "reuse"
-        ? reuseIteration(scratch, first, second)
-        : freshIteration(shapeId, first, second);
+    uint64_t fingerprint;
+    if (mode == "prepared") {
+      fingerprint = preparedIteration(shapeId, first, second);
+    } else if (mode == "reuse") {
+      fingerprint = reuseIteration(scratch, first, second);
+    } else if (mode == "copy-prepared") {
+      fingerprint = copyPreparedIteration(graphView);
+    } else if (mode == "copy") {
+      fingerprint = copyIteration(graphRoot);
+    } else {
+      fingerprint = freshIteration(shapeId, first, second);
+    }
     semantic = std::rotl(semantic, 9) ^ first ^ std::rotl(second, 13);
     wire = std::rotl(wire, 11) ^ fingerprint;
   }

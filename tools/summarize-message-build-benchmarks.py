@@ -11,11 +11,13 @@ from pathlib import Path
 
 
 def main() -> None:
-    if len(sys.argv) != 5:
+    if len(sys.argv) != 6:
         raise SystemExit(
-            "usage: summarize-message-build-benchmarks.py RAW SUMMARY COMPARISON INCREMENTAL"
+            "usage: summarize-message-build-benchmarks.py RAW SUMMARY COMPARISON INCREMENTAL COPY_INCREMENTAL"
         )
-    raw, summary_path, comparison_path, incremental_path = map(Path, sys.argv[1:])
+    raw, summary_path, comparison_path, incremental_path, copy_incremental_path = map(
+        Path, sys.argv[1:]
+    )
     samples: dict[tuple[str, ...], list[float]] = defaultdict(list)
     by_run: dict[tuple[str, ...], float] = {}
     with raw.open(newline="", encoding="utf-8") as source:
@@ -65,9 +67,9 @@ def main() -> None:
              "native_fresh_minus_prepared_ns", "incremental_native_over_cpp",
              "prepared_native_over_cpp", "fresh_native_over_cpp"]
         )
-        for shape in sorted({key[2] for key in medians}):
-            cpp_incremental = paired_median(by_run, "cpp", shape)
-            native_incremental = paired_median(by_run, "native", shape)
+        for shape in sorted({key[2] for key in medians if key[1] == "fresh"}):
+            cpp_incremental = paired_median(by_run, "cpp", "fresh", "prepared", shape)
+            native_incremental = paired_median(by_run, "native", "fresh", "prepared", shape)
             if cpp_incremental <= 0 or native_incremental <= 0:
                 raise SystemExit(f"non-positive incremental median for {shape}")
             writer.writerow(
@@ -77,15 +79,42 @@ def main() -> None:
                  f"{medians[('native', 'fresh', shape)] / medians[('cpp', 'fresh', shape)]:.3f}"]
             )
 
+    with copy_incremental_path.open("w", newline="", encoding="utf-8") as destination:
+        writer = csv.writer(destination, delimiter="\t", lineterminator="\n")
+        writer.writerow(
+            ["shape", "cpp_copy_minus_prepared_ns", "native_copy_minus_prepared_ns",
+             "incremental_native_over_cpp", "prepared_native_over_cpp",
+             "copy_native_over_cpp"]
+        )
+        cpp_incremental = paired_median(
+            by_run, "cpp", "copy", "copy-prepared", "graph"
+        )
+        native_incremental = paired_median(
+            by_run, "native", "copy", "copy-prepared", "graph"
+        )
+        if cpp_incremental <= 0 or native_incremental <= 0:
+            raise SystemExit("non-positive incremental median for graph copy")
+        writer.writerow(
+            ["graph", f"{cpp_incremental:.4f}", f"{native_incremental:.4f}",
+             f"{native_incremental / cpp_incremental:.3f}",
+             f"{medians[('native', 'copy-prepared', 'graph')] / medians[('cpp', 'copy-prepared', 'graph')]:.3f}",
+             f"{medians[('native', 'copy', 'graph')] / medians[('cpp', 'copy', 'graph')]:.3f}"]
+        )
 
-def paired_median(samples: dict[tuple[str, ...], float], implementation: str, shape: str) -> float:
+
+def paired_median(
+    samples: dict[tuple[str, ...], float], implementation: str,
+    upper_case: str, lower_case: str, shape: str
+) -> float:
     upper = {key[4]: value for key, value in samples.items()
-             if key[0] == implementation and key[1] == "fresh" and key[2] == shape}
+             if key[0] == implementation and key[1] == upper_case and key[2] == shape}
     lower = {key[4]: value for key, value in samples.items()
-             if key[0] == implementation and key[1] == "prepared" and key[2] == shape}
+             if key[0] == implementation and key[1] == lower_case and key[2] == shape}
     runs = sorted(upper.keys() & lower.keys(), key=int)
     if not runs:
-        raise SystemExit(f"no paired prepared/fresh samples for {implementation} {shape}")
+        raise SystemExit(
+            f"no paired {lower_case}/{upper_case} samples for {implementation} {shape}"
+        )
     return statistics.median(upper[run] - lower[run] for run in runs)
 
 

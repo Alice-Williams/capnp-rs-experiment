@@ -7,6 +7,7 @@ expected_passes=${2:-100000}
 gate_mode=${3:-structural}
 workload_count=$(tail -n +2 "$result_dir/results.tsv" | cut -f2,3 | sort -u | wc -l)
 shape_count=$(tail -n +2 "$result_dir/results.tsv" | cut -f3 | sort -u | wc -l)
+fresh_shape_count=$(awk -F '\t' '$2 == "fresh" { print $3 }' "$result_dir/results.tsv" | sort -u | wc -l)
 expected_results=$((1 + workload_count * 2 * 11))
 expected_summary=$((1 + workload_count * 2))
 expected_comparison=$((1 + workload_count))
@@ -26,13 +27,13 @@ test "$workload_count" -ge "$((shape_count * 2))"
 test "$(wc -l < "$result_dir/results.tsv")" -eq "$expected_results"
 test "$(wc -l < "$result_dir/summary.tsv")" -eq "$expected_summary"
 test "$(wc -l < "$result_dir/comparison.tsv")" -eq "$expected_comparison"
-test "$(wc -l < "$result_dir/incremental.tsv")" -eq "$((shape_count + 1))"
+test "$(wc -l < "$result_dir/incremental.tsv")" -eq "$((fresh_shape_count + 1))"
 awk -F '\t' -v expected="$expected_results" -v passes="$expected_passes" '
   NR == 1 { if ($0 != "implementation\tcase\tshape\tpasses\trun\telapsed_ns\tsemantic_checksum\twire_checksum") exit 1; next }
   NF != 8 || $4 != passes || $6 <= 0 || $7 < 0 || $8 < 0 { exit 1 }
   $1 != "cpp" && $1 != "native" { exit 1 }
-  $2 != "prepared" && $2 != "fresh" && $2 != "reuse" { exit 1 }
-  $3 != "direct" && $3 != "far" && $3 != "double-far" { exit 1 }
+  $2 != "prepared" && $2 != "fresh" && $2 != "reuse" && $2 != "copy-prepared" && $2 != "copy" { exit 1 }
+  $3 != "direct" && $3 != "far" && $3 != "double-far" && $3 != "graph" { exit 1 }
   !($1 FS $2 FS $3 in semantic) {
     semantic[$1 FS $2 FS $3] = $7
     wire[$1 FS $2 FS $3] = $8
@@ -46,7 +47,11 @@ awk -F '\t' -v expected="$expected_results" -v passes="$expected_passes" '
 ' workloads="$workload_count" "$result_dir/results.tsv"
 awk -F '\t' -v expected="$expected_summary" 'NR == 1 { next } NF != 9 || $6 <= 0 || $7 <= 0 || $8 <= 0 || $9 <= 0 { exit 1 } END { if (NR != expected) exit 1 }' "$result_dir/summary.tsv"
 awk -F '\t' -v expected="$expected_comparison" 'NR == 1 { next } NF != 5 || $3 <= 0 || $4 <= 0 || $5 <= 0 { exit 1 } END { if (NR != expected) exit 1 }' "$result_dir/comparison.tsv"
-awk -F '\t' -v expected="$((shape_count + 1))" 'NR == 1 { next } NF != 6 || $2 <= 0 || $3 <= 0 || $4 <= 0 || $5 <= 0 || $6 <= 0 { exit 1 } END { if (NR != expected) exit 1 }' "$result_dir/incremental.tsv"
+awk -F '\t' -v expected="$((fresh_shape_count + 1))" 'NR == 1 { next } NF != 6 || $2 <= 0 || $3 <= 0 || $4 <= 0 || $5 <= 0 || $6 <= 0 { exit 1 } END { if (NR != expected) exit 1 }' "$result_dir/incremental.tsv"
+if test -e "$result_dir/copy-incremental.tsv"; then
+    test "$(wc -l < "$result_dir/copy-incremental.tsv")" -eq 2
+    awk -F '\t' 'NR == 1 { next } NF != 6 || $2 <= 0 || $3 <= 0 || $4 <= 0 || $5 <= 0 || $6 <= 0 { exit 1 } END { if (NR != 2) exit 1 }' "$result_dir/copy-incremental.tsv"
+fi
 
 if [[ "$gate_mode" == final ]]; then
     awk -F '\t' '
@@ -54,8 +59,14 @@ if [[ "$gate_mode" == final ]]; then
       $1 == "prepared" && $5 > 1.036 { exit 1 }
       $1 == "fresh" && $5 > 1.03 { exit 1 }
       $1 == "reuse" && $5 > 1.03 { exit 1 }
+      $1 == "copy-prepared" && $5 > 1.03 { exit 1 }
+      $1 == "copy" && $5 > 1.03 { exit 1 }
       END { if (NR < 5) exit 1 }
     ' "$result_dir/comparison.tsv"
-    awk -F '\t' -v expected="$((shape_count + 1))" 'NR == 1 { next } $4 > 1.03 { exit 1 } END { if (NR != expected) exit 1 }' \
+    awk -F '\t' -v expected="$((fresh_shape_count + 1))" 'NR == 1 { next } $4 > 1.03 { exit 1 } END { if (NR != expected) exit 1 }' \
         "$result_dir/incremental.tsv"
+    if test -e "$result_dir/copy-incremental.tsv"; then
+        awk -F '\t' 'NR == 1 { next } $4 > 1.03 { exit 1 } END { if (NR != 2) exit 1 }' \
+            "$result_dir/copy-incremental.tsv"
+    fi
 fi
