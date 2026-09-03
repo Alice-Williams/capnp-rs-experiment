@@ -163,7 +163,14 @@ impl core::error::Error for ValidationError {}
 /// Immutable borrowed segments addressed only by stable coordinates.
 #[derive(Debug)]
 pub struct MessageSegments<'a> {
-    segments: Box<[&'a [u8]]>,
+    segments: SegmentStorage<'a>,
+}
+
+#[derive(Debug)]
+enum SegmentStorage<'a> {
+    One(&'a [u8]),
+    Two([&'a [u8]; 2]),
+    Many(Box<[&'a [u8]]>),
 }
 
 impl<'a> MessageSegments<'a> {
@@ -183,19 +190,29 @@ impl<'a> MessageSegments<'a> {
                 });
             }
         }
-        Ok(Self {
-            segments: segments.into(),
-        })
+        let segments = match segments {
+            [one] => SegmentStorage::One(one),
+            [first, second] => SegmentStorage::Two([first, second]),
+            many => SegmentStorage::Many(many.into()),
+        };
+        Ok(Self { segments })
     }
 
     pub fn segment_count(&self) -> usize {
-        self.segments.len()
+        match &self.segments {
+            SegmentStorage::One(_) => 1,
+            SegmentStorage::Two(_) => 2,
+            SegmentStorage::Many(segments) => segments.len(),
+        }
     }
 
     pub fn segment(&self, id: u32) -> Option<&'a [u8]> {
-        usize::try_from(id)
-            .ok()
-            .and_then(|index| self.segments.get(index).copied())
+        let index = usize::try_from(id).ok()?;
+        match &self.segments {
+            SegmentStorage::One(segment) => (index == 0).then_some(*segment),
+            SegmentStorage::Two(segments) => segments.get(index).copied(),
+            SegmentStorage::Many(segments) => segments.get(index).copied(),
+        }
     }
 
     /// Validates and follows a pointer, returning coordinates rather than native pointers.
@@ -710,6 +727,19 @@ mod tests {
         let mut bytes = vec![0u8; (trailing_words + 1) * 8];
         pointer.write_to(&mut bytes, 0).expect("pointer word fits");
         bytes
+    }
+
+    #[test]
+    fn one_and_two_segment_contexts_use_inline_storage() {
+        let bytes = [0u8; 8];
+        let one = MessageSegments::new(&[&bytes]).expect("one segment is valid");
+        assert!(matches!(one.segments, SegmentStorage::One(_)));
+
+        let two = MessageSegments::new(&[&bytes, &bytes]).expect("two segments are valid");
+        assert!(matches!(two.segments, SegmentStorage::Two(_)));
+        assert_eq!(two.segment(0), Some(bytes.as_slice()));
+        assert_eq!(two.segment(1), Some(bytes.as_slice()));
+        assert_eq!(two.segment(2), None);
     }
 
     #[test]
