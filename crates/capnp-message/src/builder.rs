@@ -752,14 +752,14 @@ impl ExclusiveArena {
     ) -> Result<Box<[u8]>, GraphError> {
         let mut arena = Self::new(1, max_output_words)?;
         arena.canonical_copy_tasks(
-            vec![CopyTask {
+            CopyTasks::new(CopyTask {
                 destination: root_offset(),
                 source: WireLocation {
                     segment_id: 0,
                     word_offset: 0,
                 },
                 nesting,
-            }],
+            }),
             source,
             budget,
         )?;
@@ -793,11 +793,11 @@ impl ExclusiveArena {
         }
         let checkpoint = self.checkpoint();
         let result = self.copy_tasks(
-            vec![CopyTask {
+            CopyTasks::new(CopyTask {
                 destination,
                 source: source_location,
                 nesting,
-            }],
+            }),
             source,
             budget,
         );
@@ -811,7 +811,7 @@ impl ExclusiveArena {
 
     fn copy_tasks<B: TraversalBudget>(
         &mut self,
-        mut tasks: Vec<CopyTask>,
+        mut tasks: CopyTasks,
         source: &MessageSegments<'_>,
         budget: &B,
     ) -> Result<(), GraphError> {
@@ -863,7 +863,7 @@ impl ExclusiveArena {
 
     fn canonical_copy_tasks<B: TraversalBudget>(
         &mut self,
-        mut tasks: Vec<CopyTask>,
+        mut tasks: CopyTasks,
         source: &MessageSegments<'_>,
         budget: &B,
     ) -> Result<(), GraphError> {
@@ -940,7 +940,7 @@ impl ExclusiveArena {
         reference: ListRef,
         nesting: NestingLimit,
         source: &MessageSegments<'_>,
-        tasks: &mut Vec<CopyTask>,
+        tasks: &mut CopyTasks,
     ) -> Result<(), GraphError> {
         if reference.element_size != ElementSize::InlineComposite {
             let target =
@@ -1084,7 +1084,7 @@ impl ExclusiveArena {
         reference: ListRef,
         nesting: NestingLimit,
         source: &MessageSegments<'_>,
-        tasks: &mut Vec<CopyTask>,
+        tasks: &mut CopyTasks,
     ) -> Result<(), GraphError> {
         if reference.element_size != ElementSize::InlineComposite {
             let target =
@@ -1290,24 +1290,32 @@ impl ExclusiveArena {
     }
 
     fn checkpoint(&self) -> ArenaCheckpoint {
+        let mut segments = self.segments.iter();
         ArenaCheckpoint {
-            lengths: self
-                .segments
-                .iter()
-                .map(|segment| segment.bytes.len())
-                .collect(),
+            first_length: segments
+                .next()
+                .expect("an arena always has segment zero")
+                .bytes
+                .len(),
+            additional_lengths: segments.map(|segment| segment.bytes.len()).collect(),
         }
     }
 
     fn rollback(&mut self, checkpoint: ArenaCheckpoint) {
-        for (segment, length) in self.segments.iter_mut().zip(&checkpoint.lengths) {
-            segment.bytes[*length..].fill(0);
-            segment.bytes.truncate(*length);
+        let retained = checkpoint.additional_lengths.len() + 1;
+        for (index, segment) in self.segments.iter_mut().enumerate() {
+            let length = if index == 0 {
+                checkpoint.first_length
+            } else if let Some(length) = checkpoint.additional_lengths.get(index - 1) {
+                *length
+            } else {
+                segment.bytes.fill(0);
+                continue;
+            };
+            segment.bytes[length..].fill(0);
+            segment.bytes.truncate(length);
         }
-        for segment in self.segments.iter_mut().skip(checkpoint.lengths.len()) {
-            segment.bytes.fill(0);
-        }
-        self.segments.truncate(checkpoint.lengths.len());
+        self.segments.truncate(retained);
     }
 
     #[inline]
@@ -1458,13 +1466,51 @@ impl ExclusiveArena {
 }
 
 struct ArenaCheckpoint {
-    lengths: Vec<usize>,
+    first_length: usize,
+    additional_lengths: Vec<usize>,
 }
 
+#[derive(Clone, Copy)]
 struct CopyTask {
     destination: WordOffset,
     source: WireLocation,
     nesting: NestingLimit,
+}
+
+const INLINE_COPY_TASKS: usize = 8;
+
+struct CopyTasks {
+    inline: [Option<CopyTask>; INLINE_COPY_TASKS],
+    inline_len: usize,
+    overflow: Vec<CopyTask>,
+}
+
+impl CopyTasks {
+    fn new(task: CopyTask) -> Self {
+        let mut inline = [None; INLINE_COPY_TASKS];
+        inline[0] = Some(task);
+        Self {
+            inline,
+            inline_len: 1,
+            overflow: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, task: CopyTask) {
+        if self.inline_len < INLINE_COPY_TASKS {
+            self.inline[self.inline_len] = Some(task);
+            self.inline_len += 1;
+        } else {
+            self.overflow.push(task);
+        }
+    }
+
+    fn pop(&mut self) -> Option<CopyTask> {
+        self.overflow.pop().or_else(|| {
+            self.inline_len = self.inline_len.checked_sub(1)?;
+            self.inline[self.inline_len].take()
+        })
+    }
 }
 
 #[derive(Clone, Copy)]
