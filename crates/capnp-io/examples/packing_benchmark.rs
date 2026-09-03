@@ -100,7 +100,7 @@ fn pack_streaming(
 }
 
 fn unpack_streaming(packed: &[u8], max_output: usize) -> Result<Vec<u8>, capnp_io::PackedError> {
-    let mut decoder = PackedDecoder::new(max_output);
+    let mut decoder = PackedDecoder::with_capacity(max_output, max_output);
     for chunk in packed.chunks(STREAM_DECODE_CHUNK_BYTES) {
         decoder.push(chunk)?;
     }

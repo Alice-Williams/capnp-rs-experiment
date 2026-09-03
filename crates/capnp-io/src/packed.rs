@@ -266,6 +266,20 @@ impl PackedDecoder {
         }
     }
 
+    /// Creates a decoder with caller-selected initial output capacity.
+    ///
+    /// The allocation is capped at `max_output_bytes`; decoded growth remains
+    /// subject to the same limit checks as [`Self::new`]. This is useful when a
+    /// frame or transport layer already knows the expected unpacked size.
+    pub fn with_capacity(max_output_bytes: usize, initial_capacity: usize) -> Self {
+        Self {
+            output: Vec::with_capacity(initial_capacity.min(max_output_bytes)),
+            max_output_bytes,
+            state: DecodeState::Tag,
+            failed: false,
+        }
+    }
+
     pub fn push(&mut self, input: &[u8]) -> Result<(), PackedError> {
         if self.failed {
             return Err(PackedError::PreviousFailure);
@@ -901,6 +915,19 @@ mod tests {
         let mut encoder = PackedEncoder::new(1);
         assert!(encoder.push(&[0; 8]).is_err());
         assert_eq!(encoder.push(&[]), Err(PackedError::PreviousFailure));
+    }
+
+    #[test]
+    fn prepared_decoder_capacity_is_bounded_and_preserves_results() {
+        let packed = pack(CPP_UNPACKED, usize::MAX).expect("fixture packs");
+        let mut decoder = PackedDecoder::with_capacity(CPP_UNPACKED.len(), usize::MAX);
+        for chunk in packed.chunks(17) {
+            decoder.push(chunk).expect("prepared decoder accepts chunk");
+        }
+        assert_eq!(
+            decoder.finish().expect("prepared decoder finishes"),
+            CPP_UNPACKED
+        );
     }
 
     #[test]
