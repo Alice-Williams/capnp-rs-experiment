@@ -568,3 +568,37 @@ for each of the four elements. C++'s generated/direct delta is below timer
 resolution. The next step isolates the direct allocation and element-store
 costs, improves the lower-level floor, and only then generates a typed
 constant-layout list initializer.
+
+## Primitive-list builder gate
+
+The lower-level `DataListBuilder` now retains a checked mutable slice bounded
+to the allocated primitive-list payload. Its exclusive borrow prevents arena
+growth for the slice's lifetime, so element writes no longer reacquire a
+segment or recompute an absolute word coordinate. Primitive write
+implementations are inlined across the crate boundary, while index arithmetic
+and byte-range checks remain intact. This uses ordinary safe references and
+adds no `unsafe` code.
+
+For ordinary non-union primitive-list fields, generated initializers now embed
+the pointer offset and instantiate the typed `DataListBuilder<T>` directly.
+The public generated setter consequently accepts `T`, matching the schema,
+instead of requiring `DynamicInput`; reflection remains available through the
+dynamic builder API. Generated-source tests require the constant offset and
+reject field-name lookup for `uint16s`.
+
+Final five-million-operation evidence at native commit `ae37f1b` is in
+[`benchmarks/results/2026-09-03-m55-generated-builder-list-final-5m-g-drive-docker`](../../benchmarks/results/2026-09-03-m55-generated-builder-list-final-5m-g-drive-docker).
+
+| Operation | C++ ns/op | Native ns/op | Native / C++ |
+| --- | ---: | ---: | ---: |
+| direct primitive-list construction | 16.9785 | 13.7330 | 0.809 |
+| generated primitive-list construction | 17.2460 | 14.1470 | 0.820 |
+
+Direct Rust is 19.1% faster than direct C++ and 27.2% faster than its recorded
+baseline. Generated Rust is 18.0% faster than generated C++ and 90.9% faster
+than its pre-specialization baseline. Its 0.820 cumulative ratio stays below
+the improved direct-runtime ceiling of 0.833 after the 3% tolerance. Native
+generated wrapping adds 0.41 ns while the paired C++ delta is negative, so the
+incremental comparison is below timer resolution. The ordinary primitive-list
+builder gate is closed; pointer/struct lists, unions, defaults, and evolution
+builder gates remain open.
