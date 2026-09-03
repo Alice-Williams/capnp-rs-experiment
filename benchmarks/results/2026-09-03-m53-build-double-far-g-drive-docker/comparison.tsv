@@ -1,0 +1,7 @@
+case	shape	cpp_median_ns_per_message	native_median_ns_per_message	native_over_cpp
+fresh	direct	44.0747	41.0079	0.930
+fresh	double-far	223.5244	131.8762	0.590
+fresh	far	171.5495	120.9184	0.705
+prepared	direct	3.1418	2.9686	0.945
+prepared	double-far	3.4014	3.3956	0.998
+prepared	far	3.5210	3.2720	0.929

@@ -69,8 +69,9 @@ The direct prepared difference is only 0.7476 ns/message, so subtraction is
 noise-sensitive, but the 85.1598 ns fresh-path gap is not. Disassembly shows
 the benchmark calling native `ExclusiveArena::new`, `init_root_struct`, and
 both scalar setters across crate boundaries, while the equivalent C++ wrapper
-inlines its small header-defined operations around the builder library calls. Native
-also allocates its segment-descriptor `Vec` separately from the segment bytes.
+inlines its small header-defined operations around the builder library calls.
+Native also allocates its segment-descriptor `Vec` separately from the segment
+bytes.
 The first implementation experiment therefore exports the small hot builder
 chain for cross-crate inlining before changing storage representation.
 
@@ -97,3 +98,27 @@ iteration call and timer sensitivity. M50's longer isolated word/pointer tests
 already demonstrate parity. Before the final M53 gate, the prepared case will
 batch enough word operations per observation to make its cumulative ratio
 statistically meaningful rather than weakening the ceiling.
+
+## Direct and far-pointer sublayer
+
+Evidence: `benchmarks/results/2026-09-03-m53-build-double-far-g-drive-docker`
+
+The benchmark now forces all three schema-independent pointer-placement paths.
+For the double-far case, pinned C++ allocates an unattached two-word generated
+orphan into a full segment and adopts it at the root; native uses an equivalent
+two-word low-level struct allocation. Both produce the exact `[1,2,2]` word
+segments and the same wire checksum.
+
+| Shape | Prepared Rust / C++ | Fresh Rust / C++ | Incremental Rust / C++ |
+| --- | ---: | ---: | ---: |
+| direct `[3]` | 0.945 | 0.930 | 0.917 |
+| single-far `[1,3]` | 0.929 | 0.705 | 0.712 |
+| double-far `[1,2,2]` | 0.998 | 0.590 | 0.585 |
+
+Every pointer-placement shape now preserves the M50 prepared-write ceiling and
+clears the 1.03 fresh and incremental gates. The increasingly large advantage
+for far placement is concrete rather than an optimizer artifact: both binaries
+materialize and checksum every output word, and the double-far wire bytes match
+exactly. C++'s general builder arena/orphan machinery carries more bookkeeping
+and virtual allocation calls for these deliberately tiny forced segments;
+native's exclusive deterministic arena has less machinery on the same graph.
