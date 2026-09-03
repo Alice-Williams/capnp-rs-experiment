@@ -1501,39 +1501,29 @@ struct CopyTask {
     nesting: NestingLimit,
 }
 
-const INLINE_COPY_TASKS: usize = 8;
-
 struct CopyTasks {
-    inline: [Option<CopyTask>; INLINE_COPY_TASKS],
-    inline_len: usize,
+    first: Option<CopyTask>,
     overflow: Vec<CopyTask>,
 }
 
 impl CopyTasks {
     fn new(task: CopyTask) -> Self {
-        let mut inline = [None; INLINE_COPY_TASKS];
-        inline[0] = Some(task);
         Self {
-            inline,
-            inline_len: 1,
+            first: Some(task),
             overflow: Vec::new(),
         }
     }
 
     fn push(&mut self, task: CopyTask) {
-        if self.inline_len < INLINE_COPY_TASKS {
-            self.inline[self.inline_len] = Some(task);
-            self.inline_len += 1;
+        if self.first.is_none() {
+            self.first = Some(task);
         } else {
             self.overflow.push(task);
         }
     }
 
     fn pop(&mut self) -> Option<CopyTask> {
-        self.overflow.pop().or_else(|| {
-            self.inline_len = self.inline_len.checked_sub(1)?;
-            self.inline[self.inline_len].take()
-        })
+        self.overflow.pop().or_else(|| self.first.take())
     }
 }
 
