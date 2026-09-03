@@ -487,6 +487,9 @@ mod tests {
         assert_eq!(metadata.created(), 9_876_543_210);
         assert!(metadata.valid());
         assert_eq!(reader.node().expect("borrowed node").value(), 10);
+        let values = reader.uint16s().expect("borrowed primitive list");
+        assert_eq!(values.len(), 3);
+        assert_eq!(values.get(2).expect("borrowed primitive element"), u16::MAX);
         assert!(
             reader
                 .text()
@@ -521,6 +524,12 @@ mod tests {
         assert_eq!(reader.defaulted(), 123_456);
         assert_eq!(reader.color(), Color::Red);
         assert_eq!(reader.color_ordinal(), 0);
+        assert!(
+            reader
+                .uint16s()
+                .expect("missing list defaults empty")
+                .is_empty()
+        );
     }
 
     #[test]

@@ -13,9 +13,9 @@
 use core::fmt;
 
 use crate::{
-    BlobError, BoundedPointer, DataReader, DataSection, MessageSegments, NestingLimit,
-    PrimitiveError, ResolvedPointer, StructRef, TextReader, TraversalBudget, TraversalError,
-    ValidationError, WireLocation,
+    BlobError, BoundedPointer, DataReader, DataSection, ListReadError, ListReader, MessageSegments,
+    NestingLimit, PrimitiveError, ResolvedPointer, StructRef, TextReader, TraversalBudget,
+    TraversalError, ValidationError, WireLocation,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -166,6 +166,14 @@ impl<'context, 'data, B: TraversalBudget> PointerSection<'context, 'data, B> {
                 self.budget,
                 self.nesting,
             )),
+        }
+    }
+
+    #[inline]
+    pub fn read_list(self, index: u16) -> Result<ListReader<'context, 'data, B>, ListReadError> {
+        match self.location(index)? {
+            Some(location) => self.segments.read_list(location, self.budget, self.nesting),
+            None => Ok(ListReader::empty(self.segments, self.budget, self.nesting)),
         }
     }
 }

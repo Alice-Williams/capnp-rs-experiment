@@ -213,7 +213,7 @@ impl<'context, 'data, B: TraversalBudget> ListReader<'context, 'data, B> {
         }
     }
 
-    fn empty(
+    pub(crate) fn empty(
         segments: &'context MessageSegments<'data>,
         budget: &'context B,
         nesting: NestingLimit,

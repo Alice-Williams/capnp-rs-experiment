@@ -1274,6 +1274,38 @@ fn emit_borrowed_reader_field(
         )
         .map_err(|_| GenerateError::Format);
     }
+    if let (Type::List(element), Value::List(default)) = (ty, default_value) {
+        if matches!(default.kind, capnp_schema::OpaquePointerKind::Null) {
+            let list = match element.as_ref() {
+                Type::Void => Some((
+                    "capnp_message::PrimitiveListReader<'context, 'data, B, ()>".to_owned(),
+                    "as_primitive::<()>()".to_owned(),
+                )),
+                Type::Bool => Some((
+                    "capnp_message::PrimitiveListReader<'context, 'data, B, bool>".to_owned(),
+                    "as_primitive::<bool>()".to_owned(),
+                )),
+                Type::Int8 => Some(borrowed_primitive_list("i8")),
+                Type::Int16 => Some(borrowed_primitive_list("i16")),
+                Type::Int32 => Some(borrowed_primitive_list("i32")),
+                Type::Int64 => Some(borrowed_primitive_list("i64")),
+                Type::UInt8 => Some(borrowed_primitive_list("u8")),
+                Type::UInt16 => Some(borrowed_primitive_list("u16")),
+                Type::UInt32 => Some(borrowed_primitive_list("u32")),
+                Type::UInt64 => Some(borrowed_primitive_list("u64")),
+                Type::Float32 => Some(borrowed_primitive_list("f32")),
+                Type::Float64 => Some(borrowed_primitive_list("f64")),
+                _ => None,
+            };
+            if let Some((return_type, conversion)) = list {
+                return writeln!(
+                    output,
+                    "        pub fn {method}(&self) -> Result<{return_type}, capnp_message::ListReadError> {{ self.pointers.read_list({offset})?.{conversion} }}"
+                )
+                .map_err(|_| GenerateError::Format);
+            }
+        }
+    }
     if let (Type::Struct { type_id, brand }, Value::Struct(default)) = (ty, default_value) {
         if matches!(default.kind, capnp_schema::OpaquePointerKind::Null) && brand.scopes.is_empty()
         {
@@ -1314,6 +1346,13 @@ fn emit_borrowed_reader_field(
     };
     writeln!(output, "        pub fn {method}(&self) -> Result<{return_type}, capnp_message::StructReadError> {{ {expression} }}")
         .map_err(|_| GenerateError::Format)
+}
+
+fn borrowed_primitive_list(rust_type: &str) -> (String, String) {
+    (
+        format!("capnp_message::PrimitiveListReader<'context, 'data, B, {rust_type}>"),
+        format!("as_primitive::<{rust_type}>()"),
+    )
 }
 
 fn borrowed_total_data_value(
@@ -2765,6 +2804,11 @@ mod tests {
             generated
                 .source
                 .contains("BorrowedReader::from_reader(self.pointers.read_struct(22)?)")
+        );
+        assert!(
+            generated
+                .source
+                .contains("PrimitiveListReader<'context, 'data, B, u16>")
         );
     }
 
