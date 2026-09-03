@@ -1,0 +1,4 @@
+segments	cpp_root_minus_framing_ns	native_root_minus_framing_ns	incremental_native_over_cpp	framing_native_over_cpp	root_native_over_cpp
+1	31.3752	6.1647	0.196	0.284	0.216
+2	119.7777	12.4328	0.104	0.158	0.115
+64	133.5464	13.4575	0.101	0.371	0.303

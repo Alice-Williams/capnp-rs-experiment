@@ -310,3 +310,28 @@ Retained/owned reopening remains the final open read category.
 
 Evidence:
 `benchmarks/results/2026-09-03-m52-blobs-final-direct-fast-g-drive-docker/`.
+
+## Retained-root baseline
+
+The retained benchmark constructs ownership and traversal limits before the
+timer. C++ retains a `SegmentArrayMessageReader` over its owned fixture buffers
+and calls `getRoot()` on every iteration. Rust retains a typed `ObjectRef` whose
+`Arc<OwnedMessage>` keeps the buffers alive, then calls `with_reader()` on every
+iteration. Both reopen the root, observe its data-section length and first
+word, and use an unlimited exact traversal budget.
+
+| Segments | C++ ns/reopen | Rust ns/reopen | Rust / C++ |
+| ---: | ---: | ---: | ---: |
+| 1 | 20.2640 | 37.2785 | 1.840 |
+| 2 | 43.5998 | 46.1094 | 1.058 |
+| 64 | 44.5352 | 125.6853 | 2.822 |
+
+The native path fails for every shape. `ObjectRef::with_reader()` calls
+`OwnedMessage::borrowed_segments()`, which allocates a new `Vec<&[u8]>` and
+then constructs another owned descriptor table on every reopen. The 64-segment
+result makes the linear allocation/copy cost explicit. The owned message has
+already validated and frozen its `Arc<[u8]>` segments, so this repeated
+descriptor ownership is not required for safety.
+
+Evidence:
+`benchmarks/results/2026-09-03-m52-retained-baseline-g-drive-docker/`.
