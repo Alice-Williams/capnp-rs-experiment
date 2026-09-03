@@ -608,8 +608,7 @@ fn write_direct_union(
     builder: &mut StructBuilder<'_>,
     pass: usize,
 ) -> Result<(), capnp_message::ArenaError> {
-    builder.set_u16(19, 1, 0)?;
-    builder.set_u64(6, union_builder_value(pass), 0)
+    builder.set_u64_union(19, 1, 6, union_builder_value(pass), 0)
 }
 
 fn write_generated_union(

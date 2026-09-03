@@ -3043,7 +3043,13 @@ fn emit_direct_slot_setter(
     let Some((arg_type, argument, mut expression)) = direct else {
         return Ok(false);
     };
-    if let Some((discriminant_offset, discriminant_value)) = discriminant {
+    if let (Type::UInt64, Value::UInt64(default), Some((discriminant_offset, discriminant_value))) =
+        (ty, default, discriminant)
+    {
+        expression = format!(
+            "self.inner.set_u64_union_slot({discriminant_offset}, {discriminant_value}, {offset}, value, {default})"
+        );
+    } else if let Some((discriminant_offset, discriminant_value)) = discriminant {
         expression = format!(
             "{{ self.inner.set_u16_slot({discriminant_offset}, {discriminant_value}, 0)?; {expression} }}"
         );
@@ -3430,12 +3436,7 @@ mod tests {
         assert!(
             generated
                 .source
-                .contains("self.inner.set_u16_slot(19, 1, 0)?")
-        );
-        assert!(
-            generated
-                .source
-                .contains("self.inner.set_u64_slot(6, value, 0)")
+                .contains("self.inner.set_u64_union_slot(19, 1, 6, value, 0)")
         );
         assert!(
             !generated

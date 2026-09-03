@@ -1319,6 +1319,25 @@ impl<'schema, 'arena, const TYPE_ID: NodeId> GeneratedStructBuilder<'schema, 'ar
 
     #[doc(hidden)]
     #[inline(always)]
+    pub fn set_u64_union_slot(
+        &mut self,
+        discriminant_offset: u32,
+        discriminant_value: u16,
+        value_offset: u32,
+        value: u64,
+        default: u64,
+    ) -> Result<(), DynamicError> {
+        Ok(self.builder.set_u64_union(
+            discriminant_offset,
+            discriminant_value,
+            value_offset,
+            value,
+            default,
+        )?)
+    }
+
+    #[doc(hidden)]
+    #[inline(always)]
     pub fn init_struct_slot(
         &mut self,
         offset: u32,

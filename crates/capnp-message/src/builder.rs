@@ -1903,6 +1903,26 @@ impl StructBuilder<'_> {
         Ok(())
     }
 
+    /// Selects a union arm and writes its `UInt64` payload through one checked
+    /// mutable segment access.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn set_u64_union(
+        &mut self,
+        discriminant_offset: u32,
+        discriminant_value: u16,
+        value_offset: u32,
+        value: u64,
+        default: u64,
+    ) -> Result<(), ArenaError> {
+        let discriminant_byte = self.data_element_offset(discriminant_offset, 2)?;
+        let value_byte = self.data_element_offset(value_offset, 8)?;
+        let segment = self.arena.segment_mut(self.reference.content.segment_id)?;
+        write_u16_le(segment, discriminant_byte, discriminant_value)?;
+        write_u64_le(segment, value_byte, value ^ default)?;
+        Ok(())
+    }
+
     #[inline(always)]
     pub fn set_i64(&mut self, offset: u32, value: i64, default: i64) -> Result<(), ArenaError> {
         let byte = self.data_element_offset(offset, 8)?;
@@ -2970,6 +2990,23 @@ mod tests {
         assert_eq!(
             list.set(1, 7),
             Err(ArenaError::IndexOutOfBounds { index: 1, len: 1 })
+        );
+    }
+
+    #[test]
+    fn union_write_checks_payload_before_changing_the_discriminant() {
+        let mut arena = ExclusiveArena::new(2, 2).expect("arena allocates");
+        {
+            let mut root = arena.init_root_struct(1, 0).expect("root initializes");
+            root.set_u16(0, 7, 0).expect("initial tag writes");
+            assert!(matches!(
+                root.set_u64_union(0, 9, 1, 42, 0),
+                Err(ArenaError::IndexOutOfBounds { .. })
+            ));
+        }
+        assert_eq!(
+            u16::from_le_bytes([arena.as_segment()[8], arena.as_segment()[9]]),
+            7
         );
     }
 
