@@ -146,6 +146,7 @@ impl core::error::Error for ArenaError {
 }
 
 impl From<WireError> for ArenaError {
+    #[inline(always)]
     fn from(value: WireError) -> Self {
         Self::Wire(value)
     }
@@ -234,12 +235,12 @@ impl ExactSizeIterator for ArenaSegments<'_> {
 }
 
 impl SegmentStorage {
-    #[inline]
+    #[inline(always)]
     fn used(&self) -> &[u8] {
         &self.bytes[..self.used_bytes]
     }
 
-    #[inline]
+    #[inline(always)]
     fn used_mut(&mut self) -> &mut [u8] {
         &mut self.bytes[..self.used_bytes]
     }
@@ -1408,7 +1409,7 @@ impl ExclusiveArena {
             .truncate(checkpoint.additional_lengths.len());
     }
 
-    #[inline]
+    #[inline(always)]
     fn segment_mut(&mut self, segment_id: u32) -> Result<&mut [u8], ArenaError> {
         if segment_id == 0 {
             return Ok(self.first_segment.used_mut());
@@ -1800,6 +1801,7 @@ impl StructBuilder<'_> {
         }
     }
 
+    #[inline(always)]
     pub fn set_bool(
         &mut self,
         bit_offset: u32,
@@ -1819,6 +1821,7 @@ impl StructBuilder<'_> {
         Ok(())
     }
 
+    #[inline(always)]
     pub fn set_u8(&mut self, offset: u32, value: u8, default: u8) -> Result<(), ArenaError> {
         let byte = self.data_element_offset(offset, 1)?;
         write_u8(
@@ -1829,6 +1832,7 @@ impl StructBuilder<'_> {
         Ok(())
     }
 
+    #[inline(always)]
     pub fn set_i8(&mut self, offset: u32, value: i8, default: i8) -> Result<(), ArenaError> {
         let byte = self.data_element_offset(offset, 1)?;
         write_i8(
@@ -1839,6 +1843,7 @@ impl StructBuilder<'_> {
         Ok(())
     }
 
+    #[inline(always)]
     pub fn set_u16(&mut self, offset: u32, value: u16, default: u16) -> Result<(), ArenaError> {
         let byte = self.data_element_offset(offset, 2)?;
         write_u16_le(
@@ -1849,6 +1854,7 @@ impl StructBuilder<'_> {
         Ok(())
     }
 
+    #[inline(always)]
     pub fn set_i16(&mut self, offset: u32, value: i16, default: i16) -> Result<(), ArenaError> {
         let byte = self.data_element_offset(offset, 2)?;
         write_i16_le(
@@ -1859,6 +1865,7 @@ impl StructBuilder<'_> {
         Ok(())
     }
 
+    #[inline(always)]
     pub fn set_u32(&mut self, offset: u32, value: u32, default: u32) -> Result<(), ArenaError> {
         let byte = self.data_element_offset(offset, 4)?;
         write_u32_le(
@@ -1869,6 +1876,7 @@ impl StructBuilder<'_> {
         Ok(())
     }
 
+    #[inline(always)]
     pub fn set_i32(&mut self, offset: u32, value: i32, default: i32) -> Result<(), ArenaError> {
         let byte = self.data_element_offset(offset, 4)?;
         write_i32_le(
@@ -1879,7 +1887,7 @@ impl StructBuilder<'_> {
         Ok(())
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn set_u64(&mut self, offset: u32, value: u64, default: u64) -> Result<(), ArenaError> {
         let byte = self.data_element_offset(offset, 8)?;
         write_u64_le(
@@ -1890,6 +1898,7 @@ impl StructBuilder<'_> {
         Ok(())
     }
 
+    #[inline(always)]
     pub fn set_i64(&mut self, offset: u32, value: i64, default: i64) -> Result<(), ArenaError> {
         let byte = self.data_element_offset(offset, 8)?;
         write_i64_le(
@@ -1900,6 +1909,7 @@ impl StructBuilder<'_> {
         Ok(())
     }
 
+    #[inline(always)]
     pub fn set_f32(&mut self, offset: u32, value: f32, default: f32) -> Result<(), ArenaError> {
         let byte = self.data_element_offset(offset, 4)?;
         write_f32_le(
@@ -1910,6 +1920,7 @@ impl StructBuilder<'_> {
         Ok(())
     }
 
+    #[inline(always)]
     pub fn set_f64(&mut self, offset: u32, value: f64, default: f64) -> Result<(), ArenaError> {
         let byte = self.data_element_offset(offset, 8)?;
         write_f64_le(
@@ -2088,6 +2099,7 @@ impl StructBuilder<'_> {
         })
     }
 
+    #[inline(always)]
     fn data_bit_offset(&self, bit_offset: u32) -> Result<u64, ArenaError> {
         let available = u64::from(self.reference.data_words) * 64;
         if u64::from(bit_offset) >= available {
@@ -2102,7 +2114,7 @@ impl StructBuilder<'_> {
             .ok_or(ArenaError::AllocationOverflow)
     }
 
-    #[inline]
+    #[inline(always)]
     fn data_element_offset(&self, offset: u32, width: u32) -> Result<usize, ArenaError> {
         let relative = u64::from(offset)
             .checked_mul(u64::from(width))
@@ -2481,7 +2493,7 @@ fn sub_word(offset: WordOffset) -> Result<WordOffset, ArenaError> {
     })
 }
 
-#[inline]
+#[inline(always)]
 fn byte_offset(offset: WordOffset) -> Result<usize, ArenaError> {
     usize::try_from(offset.word_offset)
         .ok()
