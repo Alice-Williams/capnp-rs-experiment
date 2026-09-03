@@ -55,16 +55,16 @@ substitute for the fresh-allocation result, or vice versa.
 
 ## Implementation checklist
 
-- [ ] Trace native and pinned C++ arena allocation, root placement, object
+- [x] Trace native and pinned C++ arena allocation, root placement, object
   allocation, far-pointer emission, graph-copy, and scratch-reuse paths.
-- [ ] Add matched low-level Rust/C++ fixtures and a paired construction runner
+- [x] Add matched low-level Rust/C++ fixtures and a paired construction runner
   with wire-output and semantic checksums.
-- [ ] Record and verify the unmodified M53 baseline.
-- [ ] Attribute each material gap with isolated phase, allocation-count, or
+- [x] Record and verify the unmodified M53 baseline.
+- [x] Attribute each material gap with isolated phase, allocation-count, or
   profile evidence before changing implementation code.
-- [ ] Optimize only schema-independent construction paths while preserving
+- [x] Optimize only schema-independent construction paths while preserving
   safety, limits, and deterministic output.
-- [ ] Record final cumulative and incremental comparisons.
+- [x] Record final cumulative and incremental comparisons.
 - [ ] Add Bazel evidence gates and pass full Cargo/MSRV/Bazel/Miri validation.
 
 ## Required exit evidence

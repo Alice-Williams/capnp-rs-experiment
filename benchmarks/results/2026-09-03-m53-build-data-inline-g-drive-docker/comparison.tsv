@@ -1,0 +1,13 @@
+case	shape	cpp_median_ns_per_message	native_median_ns_per_message	native_over_cpp
+copy	graph	112.9685	102.0693	0.904
+copy-prepared	graph	8.9207	8.1157	0.910
+copy-reuse	graph	102.7659	83.2218	0.810
+fresh	data	88.1349	64.9792	0.737
+fresh	direct	62.9354	47.4200	0.753
+fresh	double-far	305.3077	164.5309	0.539
+fresh	far	214.6494	144.3955	0.673
+prepared	data	11.6239	9.3700	0.806
+prepared	direct	4.8983	5.6113	1.146
+prepared	double-far	6.5574	5.4857	0.837
+prepared	far	6.2794	6.4634	1.029
+reuse	direct	55.2322	35.2896	0.639

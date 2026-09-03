@@ -80,4 +80,16 @@ elif [[ "$gate_mode" == copy-final ]]; then
     ' "$result_dir/comparison.tsv"
     awk -F '\t' 'NR == 1 { next } $4 > 1.03 { exit 1 } END { if (NR != 2) exit 1 }' \
         "$result_dir/copy-incremental.tsv"
+elif [[ "$gate_mode" == data-final ]]; then
+    awk -F '\t' '
+      NR == 1 { next }
+      $1 == "prepared" && $2 == "data" { seen_prepared = 1; if ($5 > 1.03) exit 1 }
+      $1 == "fresh" && $2 == "data" { seen_fresh = 1; if ($5 > 1.03) exit 1 }
+      END { if (!seen_prepared || !seen_fresh) exit 1 }
+    ' "$result_dir/comparison.tsv"
+    awk -F '\t' '
+      NR == 1 { next }
+      $1 == "data" { seen = 1; if ($4 > 1.03) exit 1 }
+      END { if (!seen) exit 1 }
+    ' "$result_dir/incremental.tsv"
 fi

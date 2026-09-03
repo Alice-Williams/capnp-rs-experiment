@@ -212,3 +212,35 @@ is unchanged. Retaining initialized bytes after reset does not increase allocate
 capacity—the old implementation already retained that capacity—but it keeps the
 safe `Vec` length at its high-water mark internally while exposing only the
 used prefix through every public segment view and ownership conversion.
+
+## Public scalar and Data construction
+
+Evidence: `benchmarks/results/2026-09-03-m53-build-data-inline-g-drive-docker`
+
+The final user-facing construction shape builds an 11-word one-segment message
+through public APIs: one root `UInt64` plus one 64-byte `Data` field. Pinned C++
+uses generated `BuildGraph` setters; native uses `init_root_struct()`, `set_u64()`,
+and `set_data()`. The prepared lower case emits and observes the identical wire
+words without an arena. Semantic and wire checksums match across implementations.
+
+The unmodified public-path baseline measured native fresh construction at 1.079
+of C++ and its paired incremental cost at 1.153. Optimized Rust still called the
+small `set_data()` chain across its crate boundary, whereas generated C++ inlined
+its header-defined setter before entering the runtime. Adding ordinary inline
+exports to native byte-list allocation, pointer-slot validation, pointer emission,
+and `set_data()`/`set_text()` removes those calls without removing a bounds,
+overflow, allocation, or pointer check.
+
+| Case | C++ ns/message | Rust ns/message | Rust / C++ |
+| --- | ---: | ---: | ---: |
+| prepared scalar + Data words | 11.6239 | 9.3700 | 0.806 |
+| fresh public scalar + Data build | 88.1349 | 64.9792 | 0.737 |
+| paired construction increment | 72.8052 | 58.6438 | 0.805 |
+
+This level therefore preserves the faster lower layers rather than spending
+their margin: the complete public Data build is 26.3% faster and the incremental
+builder work is 19.5% faster than pinned C++. In the same run, fresh graph copy
+is 0.904, reusable graph copy is 0.810, and its paired increment is 0.911. The
+separate pointer-placement gate remains authoritative for the sub-nanosecond
+prepared direct case, whose ratio is timer-sensitive in mixed runs; its complete
+fresh and incremental construction results remain comfortably faster here.
