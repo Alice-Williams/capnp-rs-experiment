@@ -239,6 +239,83 @@ impl DynamicStruct {
         self.get_field(field, structure)
     }
 
+    /// Reads a generated scalar slot without performing reflection lookup.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn read_bool_slot(&self, offset: u32, default: bool) -> Result<bool, DynamicError> {
+        self.with_reader(|reader| Ok(reader.data()?.read_bool(offset, default)?))
+    }
+
+    /// Reads a generated scalar slot without performing reflection lookup.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn read_i8_slot(&self, offset: u32, default: i8) -> Result<i8, DynamicError> {
+        self.with_reader(|reader| Ok(reader.data()?.read_i8(offset, default)?))
+    }
+
+    /// Reads a generated scalar slot without performing reflection lookup.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn read_i16_slot(&self, offset: u32, default: i16) -> Result<i16, DynamicError> {
+        self.with_reader(|reader| Ok(reader.data()?.read_i16(offset, default)?))
+    }
+
+    /// Reads a generated scalar slot without performing reflection lookup.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn read_i32_slot(&self, offset: u32, default: i32) -> Result<i32, DynamicError> {
+        self.with_reader(|reader| Ok(reader.data()?.read_i32(offset, default)?))
+    }
+
+    /// Reads a generated scalar slot without performing reflection lookup.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn read_i64_slot(&self, offset: u32, default: i64) -> Result<i64, DynamicError> {
+        self.with_reader(|reader| Ok(reader.data()?.read_i64(offset, default)?))
+    }
+
+    /// Reads a generated scalar slot without performing reflection lookup.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn read_u8_slot(&self, offset: u32, default: u8) -> Result<u8, DynamicError> {
+        self.with_reader(|reader| Ok(reader.data()?.read_u8(offset, default)?))
+    }
+
+    /// Reads a generated scalar slot without performing reflection lookup.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn read_u16_slot(&self, offset: u32, default: u16) -> Result<u16, DynamicError> {
+        self.with_reader(|reader| Ok(reader.data()?.read_u16(offset, default)?))
+    }
+
+    /// Reads a generated scalar slot without performing reflection lookup.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn read_u32_slot(&self, offset: u32, default: u32) -> Result<u32, DynamicError> {
+        self.with_reader(|reader| Ok(reader.data()?.read_u32(offset, default)?))
+    }
+
+    /// Reads a generated scalar slot without performing reflection lookup.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn read_u64_slot(&self, offset: u32, default: u64) -> Result<u64, DynamicError> {
+        self.with_reader(|reader| Ok(reader.data()?.read_u64(offset, default)?))
+    }
+
+    /// Reads a generated scalar slot without performing reflection lookup.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn read_f32_slot(&self, offset: u32, default: f32) -> Result<f32, DynamicError> {
+        self.with_reader(|reader| Ok(reader.data()?.read_f32(offset, default)?))
+    }
+
+    /// Reads a generated scalar slot without performing reflection lookup.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn read_f64_slot(&self, offset: u32, default: f64) -> Result<f64, DynamicError> {
+        self.with_reader(|reader| Ok(reader.data()?.read_f64(offset, default)?))
+    }
+
     /// Resolves a field's runtime type through this value's current brand.
     pub fn field_type(&self, name: &str) -> Result<Type, DynamicError> {
         let structure = self.struct_schema()?;

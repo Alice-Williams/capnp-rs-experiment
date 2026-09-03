@@ -1833,11 +1833,100 @@ fn emit_reader_field(
             emit_mismatch(output, "group field", 16)?;
             writeln!(output, "            }}\n        }}").map_err(|_| GenerateError::Format)?;
         }
-        FieldKind::Slot { ty, .. } => {
-            emit_typed_getter(output, schema, &method, &field.name, ty, names, context)?;
+        FieldKind::Slot {
+            offset,
+            ty,
+            default_value,
+            ..
+        } => {
+            if !emit_direct_scalar_getter(output, &method, *offset, ty, default_value, names)? {
+                emit_typed_getter(output, schema, &method, &field.name, ty, names, context)?;
+            }
         }
     }
     Ok(())
+}
+
+fn emit_direct_scalar_getter(
+    output: &mut String,
+    method: &str,
+    offset: u32,
+    ty: &Type,
+    default: &capnp_schema::Value,
+    names: &Names,
+) -> Result<bool, GenerateError> {
+    use capnp_schema::Value;
+
+    let direct = match (ty, default) {
+        (Type::Void, Value::Void) => Some(("()".to_owned(), "Ok(())".to_owned())),
+        (Type::Bool, Value::Bool(value)) => Some((
+            "bool".to_owned(),
+            format!("self.inner.read_bool_slot({offset}, {value})"),
+        )),
+        (Type::Int8, Value::Int8(value)) => Some((
+            "i8".to_owned(),
+            format!("self.inner.read_i8_slot({offset}, {value})"),
+        )),
+        (Type::Int16, Value::Int16(value)) => Some((
+            "i16".to_owned(),
+            format!("self.inner.read_i16_slot({offset}, {value})"),
+        )),
+        (Type::Int32, Value::Int32(value)) => Some((
+            "i32".to_owned(),
+            format!("self.inner.read_i32_slot({offset}, {value})"),
+        )),
+        (Type::Int64, Value::Int64(value)) => Some((
+            "i64".to_owned(),
+            format!("self.inner.read_i64_slot({offset}, {value})"),
+        )),
+        (Type::UInt8, Value::UInt8(value)) => Some((
+            "u8".to_owned(),
+            format!("self.inner.read_u8_slot({offset}, {value})"),
+        )),
+        (Type::UInt16, Value::UInt16(value)) => Some((
+            "u16".to_owned(),
+            format!("self.inner.read_u16_slot({offset}, {value})"),
+        )),
+        (Type::UInt32, Value::UInt32(value)) => Some((
+            "u32".to_owned(),
+            format!("self.inner.read_u32_slot({offset}, {value})"),
+        )),
+        (Type::UInt64, Value::UInt64(value)) => Some((
+            "u64".to_owned(),
+            format!("self.inner.read_u64_slot({offset}, {value})"),
+        )),
+        (Type::Float32, Value::Float32(value)) => Some((
+            "f32".to_owned(),
+            format!(
+                "self.inner.read_f32_slot({offset}, f32::from_bits(0x{:08x}))",
+                value.to_bits()
+            ),
+        )),
+        (Type::Float64, Value::Float64(value)) => Some((
+            "f64".to_owned(),
+            format!(
+                "self.inner.read_f64_slot({offset}, f64::from_bits(0x{:016x}))",
+                value.to_bits()
+            ),
+        )),
+        (Type::Enum { type_id, .. }, Value::Enum(value)) => {
+            let name = names.reference(*type_id, true)?;
+            Some((
+                name.clone(),
+                format!("Ok({name}::from_ordinal(self.inner.read_u16_slot({offset}, {value})?))"),
+            ))
+        }
+        _ => None,
+    };
+    let Some((rust_type, expression)) = direct else {
+        return Ok(false);
+    };
+    writeln!(
+        output,
+        "        pub fn {method}(&self) -> Result<{rust_type}, capnp_schema::DynamicError> {{ {expression} }}"
+    )
+    .map_err(|_| GenerateError::Format)?;
+    Ok(true)
 }
 
 fn emit_typed_getter(
@@ -2329,6 +2418,13 @@ mod tests {
         ] {
             assert!(generated.source.contains(needle), "missing {needle}");
         }
+        assert!(generated.source.contains("self.inner.read_u32_slot(5, 0)"));
+        assert!(
+            generated
+                .source
+                .contains("self.inner.read_u32_slot(16, 123456)")
+        );
+        assert!(!generated.source.contains("self.inner.get(\"uint32Value\")"));
     }
 
     #[test]
