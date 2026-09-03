@@ -287,7 +287,19 @@ impl<'context, 'data, B: TraversalBudget> ListReader<'context, 'data, B> {
                 expected: ElementSize::InlineComposite,
             });
         }
-        Ok(StructListReader { list: self })
+        let layout = self.layout()?;
+        Ok(StructListReader {
+            segments: self.segments,
+            budget: self.budget,
+            bytes: self.segment()?,
+            len: self.len(),
+            segment_id: self.reference.map_or(0, |value| value.content.segment_id),
+            content_start_bits: self.content_start_bits()?,
+            step_bits: layout.step_bits,
+            data_bits: layout.data_bits,
+            pointer_count: layout.pointers,
+            nesting: self.nesting,
+        })
     }
 
     #[inline(always)]
@@ -666,7 +678,16 @@ impl<'context, 'data, B: TraversalBudget> Iterator for PointerListIter<'context,
 
 #[derive(Debug)]
 pub struct StructListReader<'context, 'data, B> {
-    list: ListReader<'context, 'data, B>,
+    segments: &'context MessageSegments<'data>,
+    budget: &'context B,
+    bytes: &'data [u8],
+    len: u32,
+    segment_id: u32,
+    content_start_bits: u64,
+    step_bits: u64,
+    data_bits: u64,
+    pointer_count: u16,
+    nesting: NestingLimit,
 }
 
 impl<'context, 'data, B> Clone for StructListReader<'context, 'data, B> {
@@ -678,7 +699,7 @@ impl<'context, 'data, B> Copy for StructListReader<'context, 'data, B> {}
 
 impl<'context, 'data, B: TraversalBudget> StructListReader<'context, 'data, B> {
     pub const fn len(self) -> u32 {
-        self.list.len()
+        self.len
     }
 
     pub const fn is_empty(self) -> bool {
@@ -688,45 +709,48 @@ impl<'context, 'data, B: TraversalBudget> StructListReader<'context, 'data, B> {
     #[inline(always)]
     pub fn get(self, index: u32) -> Result<StructElementReader<'context, 'data, B>, ListReadError> {
         check_index(index, self.len())?;
-        let nesting = self.list.nesting.descend()?;
-        let Some(reference) = self.list.reference else {
-            return Ok(StructElementReader::empty(
-                self.list.segments,
-                self.list.budget,
-                nesting,
-            ));
-        };
-        let layout = self.list.layout()?;
+        let nesting = self.nesting.descend()?;
         let start_bit = self
-            .list
-            .content_start_bits()?
+            .content_start_bits
             .checked_add(
                 u64::from(index)
-                    .checked_mul(layout.step_bits)
+                    .checked_mul(self.step_bits)
                     .ok_or(ListReadError::RangeOverflow)?,
             )
             .ok_or(ListReadError::RangeOverflow)?;
-        let pointer_start = if layout.pointers == 0 {
+        if start_bit % 8 != 0 || self.data_bits % 8 != 0 {
+            return Err(ListReadError::RangeOverflow);
+        }
+        let data_start =
+            usize::try_from(start_bit / 8).map_err(|_| ListReadError::RangeOverflow)?;
+        let data_len =
+            usize::try_from(self.data_bits / 8).map_err(|_| ListReadError::RangeOverflow)?;
+        let data_end = data_start
+            .checked_add(data_len)
+            .ok_or(ListReadError::RangeOverflow)?;
+        let data = self
+            .bytes
+            .get(data_start..data_end)
+            .ok_or(ListReadError::RangeOverflow)?;
+        let pointer_start = if self.pointer_count == 0 {
             None
         } else {
             let element_word = start_bit / 64;
             let pointer_word = element_word
-                .checked_add(layout.data_bits / 64)
+                .checked_add(self.data_bits / 64)
                 .ok_or(ListReadError::RangeOverflow)?;
             Some(WireLocation {
-                segment_id: reference.content.segment_id,
+                segment_id: self.segment_id,
                 word_offset: u32::try_from(pointer_word)
                     .map_err(|_| ListReadError::RangeOverflow)?,
             })
         };
         Ok(StructElementReader {
-            segments: self.list.segments,
-            budget: self.list.budget,
-            segment_id: reference.content.segment_id,
-            data_start_bit: start_bit,
-            data_bits: layout.data_bits,
+            segments: self.segments,
+            budget: self.budget,
+            data: DataSection::from_validated_bytes(data),
             pointer_start,
-            pointer_count: layout.pointers,
+            pointer_count: self.pointer_count,
             nesting,
         })
     }
@@ -761,9 +785,7 @@ impl<'context, 'data, B: TraversalBudget> Iterator for StructListIter<'context, 
 pub struct StructElementReader<'context, 'data, B> {
     segments: &'context MessageSegments<'data>,
     budget: &'context B,
-    segment_id: u32,
-    data_start_bit: u64,
-    data_bits: u64,
+    data: DataSection<'data>,
     pointer_start: Option<WireLocation>,
     pointer_count: u16,
     nesting: NestingLimit,
@@ -777,45 +799,9 @@ impl<'context, 'data, B> Clone for StructElementReader<'context, 'data, B> {
 impl<'context, 'data, B> Copy for StructElementReader<'context, 'data, B> {}
 
 impl<'context, 'data, B: TraversalBudget> StructElementReader<'context, 'data, B> {
-    fn empty(
-        segments: &'context MessageSegments<'data>,
-        budget: &'context B,
-        nesting: NestingLimit,
-    ) -> Self {
-        Self {
-            segments,
-            budget,
-            segment_id: 0,
-            data_start_bit: 0,
-            data_bits: 0,
-            pointer_start: None,
-            pointer_count: 0,
-            nesting,
-        }
-    }
-
     #[inline(always)]
     pub fn data_section(self) -> Result<DataSection<'data>, ListReadError> {
-        if self.data_bits == 0 {
-            return Ok(DataSection::from_validated_bytes(&[]));
-        }
-        if self.data_start_bit % 8 != 0 || self.data_bits % 8 != 0 {
-            return Err(ListReadError::RangeOverflow);
-        }
-        let segment =
-            self.segments
-                .segment(self.segment_id)
-                .ok_or(ListReadError::UnknownSegment {
-                    segment_id: self.segment_id,
-                })?;
-        let start =
-            usize::try_from(self.data_start_bit / 8).map_err(|_| ListReadError::RangeOverflow)?;
-        let len = usize::try_from(self.data_bits / 8).map_err(|_| ListReadError::RangeOverflow)?;
-        let end = start.checked_add(len).ok_or(ListReadError::RangeOverflow)?;
-        let bytes = segment
-            .get(start..end)
-            .ok_or(ListReadError::RangeOverflow)?;
-        Ok(DataSection::from_validated_bytes(bytes))
+        Ok(self.data)
     }
 
     pub const fn pointer_section(self) -> crate::PointerSection<'context, 'data, B> {
