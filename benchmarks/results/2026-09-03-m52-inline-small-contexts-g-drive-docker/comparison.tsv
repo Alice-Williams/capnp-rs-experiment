@@ -1,0 +1,7 @@
+case	segments	cpp_median_ns_per_message	native_median_ns_per_message	native_over_cpp
+framing	1	12.3646	4.0512	0.328
+framing	2	37.7568	6.4043	0.170
+framing	64	394.8309	169.4291	0.429
+root	1	49.5744	40.3939	0.815
+root	2	164.3219	48.6703	0.296
+root	64	575.2095	282.8635	0.492

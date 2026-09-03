@@ -28,17 +28,36 @@ Subtracting the paired framing medians isolates the added message-read work:
 | 64 | 139.3373 | 103.7017 | 0.744 |
 
 This baseline fails M52's cumulative inherited-speedup gate for every shape.
-The nearly identical 41 ns Rust increment for one and two segments points to a
-fixed cost before pointer shape matters: `MessageSegments::new()` copies the
-already-parsed segment views into a new boxed slice. C++'s reader already owns
-its message context after framing, so it does not add a second descriptor
-allocation at this boundary. The 64-segment Rust increment adds the descriptor
-copy and the scan/far-pointer work.
-
-The first optimization target is therefore a safe reusable or borrowed
-message context over already-validated segment descriptors. It must preserve
-the existing allocating convenience API, exact bounds and traversal charging,
-and the workspace's no-unsafe policy.
+The nearly identical 41 ns Rust increment for one and two segments initially
+suggested that allocating descriptor storage in `MessageSegments::new()` was
+the dominant fixed cost. The next checkpoint disproved that attribution.
 
 Evidence:
 `benchmarks/results/2026-09-03-m52-root-baseline-g-drive-docker/`.
+
+## Inline small-context checkpoint
+
+`MessageSegments` now stores one- and two-segment descriptors inline while
+retaining owned descriptor storage for larger messages. The same paired run
+measured:
+
+| Case | Segments | C++ ns/message | Rust ns/message | Rust / C++ |
+| --- | ---: | ---: | ---: | ---: |
+| framing | 1 | 12.3646 | 4.0512 | 0.328 |
+| root | 1 | 49.5744 | 40.3939 | 0.815 |
+| framing | 2 | 37.7568 | 6.4043 | 0.170 |
+| root | 2 | 164.3219 | 48.6703 | 0.296 |
+| framing | 64 | 394.8309 | 169.4291 | 0.429 |
+| root | 64 | 575.2095 | 282.8635 | 0.492 |
+
+The paired incremental costs were 36.3427 ns versus 37.2098 ns for one
+segment, 42.2660 ns versus 126.5651 ns for two segments, and 113.4344 ns
+versus 180.3786 ns for 64 segments. Removing the small-message allocation
+improved the stable one-segment Rust root median from 45.1501 ns to 40.3939 ns,
+but left most of the increment intact. The dominant cost is therefore in
+validation and accessor work rather than allocation. Source tracing next found
+that the bounded-pointer path read and checked the root pointer twice and that
+several public hot methods were not available for cross-crate inlining.
+
+Evidence:
+`benchmarks/results/2026-09-03-m52-inline-small-contexts-g-drive-docker/`.
