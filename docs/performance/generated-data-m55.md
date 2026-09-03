@@ -542,3 +542,29 @@ negative, so the incremental comparison is below timer resolution. Generated
 source tests prove the initializer contains the constant layout and does not
 call dynamic field lookup. The ordinary struct-builder gate is closed; list,
 union, default, and evolution builder gates remain open.
+
+## Primitive-list builder baseline
+
+The paired primitive-list workload initializes a four-element `List(UInt16)`
+in the root's `uint16s` field and writes four pass-dependent values on every
+iteration. Both implementations use fixed-capacity one-segment arenas and
+include list allocation, zeroing, pointer emission, list-builder construction,
+and all checked element writes. Root construction remains outside the timed
+region. Evidence before list specialization is in
+[`benchmarks/results/2026-09-03-m55-generated-builder-list-baseline-100k-g-drive-docker`](../../benchmarks/results/2026-09-03-m55-generated-builder-list-baseline-100k-g-drive-docker)
+at native commit `a89ef64`.
+
+| Operation | C++ ns/op | Native ns/op | Native / C++ |
+| --- | ---: | ---: | ---: |
+| direct primitive-list construction | 16.5818 | 18.8729 | 1.138 |
+| generated primitive-list construction | 15.9477 | 155.1202 | 9.727 |
+
+The direct native path is 13.8% slower than C++, so its allocation and element
+write costs must be investigated before using it as an inherited generated-API
+ceiling. Generated Rust adds a further 136.40 ns per list. Source tracing
+attributes that delta to field-name lookup, cloned list type metadata and brand
+resolution during initialization, followed by dynamic storage/input dispatch
+for each of the four elements. C++'s generated/direct delta is below timer
+resolution. The next step isolates the direct allocation and element-store
+costs, improves the lower-level floor, and only then generates a typed
+constant-layout list initializer.
