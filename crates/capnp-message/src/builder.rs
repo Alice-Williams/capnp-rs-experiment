@@ -221,6 +221,7 @@ pub struct ExclusiveArena {
 }
 
 impl ExclusiveArena {
+    #[inline]
     pub fn new(initial_capacity_words: u32, max_words: u32) -> Result<Self, ArenaError> {
         validate_segment_words(max_words)?;
         Self::new_with_policy(
@@ -232,6 +233,7 @@ impl ExclusiveArena {
         )
     }
 
+    #[inline]
     pub fn new_segmented(
         first_segment_words: u32,
         next_segment_words: u32,
@@ -257,6 +259,7 @@ impl ExclusiveArena {
         )
     }
 
+    #[inline]
     fn new_with_policy(
         initial_capacity_words: u32,
         first_word_limit: u32,
@@ -286,6 +289,7 @@ impl ExclusiveArena {
         })
     }
 
+    #[inline]
     pub fn word_len(&self) -> u64 {
         self.segments
             .iter()
@@ -297,10 +301,12 @@ impl ExclusiveArena {
         self.max_total_words
     }
 
+    #[inline]
     pub fn segment_count(&self) -> usize {
         self.segments.len()
     }
 
+    #[inline]
     pub fn segment(&self, id: u32) -> Option<&[u8]> {
         usize::try_from(id).ok().and_then(|index| {
             self.segments
@@ -309,6 +315,7 @@ impl ExclusiveArena {
         })
     }
 
+    #[inline]
     pub fn segments(&self) -> impl ExactSizeIterator<Item = &[u8]> {
         self.segments.iter().map(|segment| segment.bytes.as_slice())
     }
@@ -372,6 +379,7 @@ impl ExclusiveArena {
     }
 
     /// Initializes the root once and returns the arena's exclusive struct view.
+    #[inline]
     pub fn init_root_struct(
         &mut self,
         data_words: u16,
@@ -432,6 +440,7 @@ impl ExclusiveArena {
         })
     }
 
+    #[inline]
     fn require_uninitialized_root(&self) -> Result<(), ArenaError> {
         if self.root_initialized {
             return Err(ArenaError::AlreadyInitialized);
@@ -439,6 +448,7 @@ impl ExclusiveArena {
         Ok(())
     }
 
+    #[inline]
     fn allocate_words(&mut self, words: u64) -> Result<WordOffset, ArenaError> {
         let words_u32 = u32::try_from(words).map_err(|_| ArenaError::AllocationOverflow)?;
         if words_u32 > MAX_SINGLE_SEGMENT_WORDS {
@@ -452,6 +462,7 @@ impl ExclusiveArena {
         self.allocate_new_segment(words_u32)
     }
 
+    #[inline]
     fn try_allocate_in_segment(
         &mut self,
         segment_id: u32,
@@ -484,6 +495,7 @@ impl ExclusiveArena {
         }))
     }
 
+    #[inline]
     fn allocate_new_segment(&mut self, words: u32) -> Result<WordOffset, ArenaError> {
         self.ensure_total_limit(u64::from(words))?;
         let requested_segments = u32::try_from(self.segments.len())
@@ -512,6 +524,7 @@ impl ExclusiveArena {
         })
     }
 
+    #[inline]
     fn ensure_total_limit(&self, additional: u64) -> Result<(), ArenaError> {
         let requested = self
             .word_len()
@@ -527,6 +540,7 @@ impl ExclusiveArena {
         }
     }
 
+    #[inline]
     fn allocate_struct(
         &mut self,
         data_words: u16,
@@ -596,6 +610,7 @@ impl ExclusiveArena {
         })
     }
 
+    #[inline]
     fn emit_struct(
         &mut self,
         pointer_location: WordOffset,
@@ -650,6 +665,7 @@ impl ExclusiveArena {
         )
     }
 
+    #[inline]
     fn emit_far(
         &mut self,
         pointer_location: WordOffset,
@@ -677,6 +693,7 @@ impl ExclusiveArena {
         )
     }
 
+    #[inline]
     fn write_pointer(
         &mut self,
         location: WordOffset,
@@ -1268,6 +1285,7 @@ impl ExclusiveArena {
         self.segments.truncate(checkpoint.lengths.len());
     }
 
+    #[inline]
     fn segment_mut(&mut self, segment_id: u32) -> Result<&mut [u8], ArenaError> {
         usize::try_from(segment_id)
             .ok()
@@ -1707,6 +1725,7 @@ impl StructBuilder<'_> {
         Ok(())
     }
 
+    #[inline]
     pub fn set_u64(&mut self, offset: u32, value: u64, default: u64) -> Result<(), ArenaError> {
         let byte = self.data_element_offset(offset, 8)?;
         write_u64_le(
@@ -1927,6 +1946,7 @@ impl StructBuilder<'_> {
             .ok_or(ArenaError::AllocationOverflow)
     }
 
+    #[inline]
     fn data_element_offset(&self, offset: u32, width: u32) -> Result<usize, ArenaError> {
         let relative = u64::from(offset)
             .checked_mul(u64::from(width))
@@ -2251,6 +2271,7 @@ fn check_index(index: u32, len: u32) -> Result<(), ArenaError> {
     }
 }
 
+#[inline]
 fn relative_offset(pointer: WordOffset, target: WordOffset) -> Result<i32, ArenaError> {
     if pointer.segment_id != target.segment_id {
         return Err(ArenaError::AllocationOverflow);
@@ -2300,6 +2321,7 @@ fn sub_word(offset: WordOffset) -> Result<WordOffset, ArenaError> {
     })
 }
 
+#[inline]
 fn byte_offset(offset: WordOffset) -> Result<usize, ArenaError> {
     usize::try_from(offset.word_offset)
         .ok()
@@ -2384,6 +2406,7 @@ const fn root_offset() -> WordOffset {
     }
 }
 
+#[inline]
 fn validate_segment_words(words: u32) -> Result<(), ArenaError> {
     if words == 0 || words > MAX_SINGLE_SEGMENT_WORDS {
         Err(ArenaError::InvalidWordLimit { requested: words })
@@ -2392,6 +2415,7 @@ fn validate_segment_words(words: u32) -> Result<(), ArenaError> {
     }
 }
 
+#[inline]
 fn word_bytes(words: u32) -> Result<usize, ArenaError> {
     usize::try_from(words)
         .ok()
