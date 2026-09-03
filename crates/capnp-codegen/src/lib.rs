@@ -1181,18 +1181,21 @@ fn emit_borrowed_reader(
         .map_err(|_| GenerateError::Format)?;
     writeln!(output, "    impl<'context, 'data, B: capnp_message::TraversalBudget> BorrowedReader<'context, 'data, B> {{")
         .map_err(|_| GenerateError::Format)?;
-    writeln!(output, "        #[doc(hidden)]\n        pub fn from_reader(inner: capnp_message::StructReader<'context, 'data, B>) -> Result<Self, capnp_message::StructReadError> {{ let data = inner.data_section()?; Ok(Self::from_sections(inner.pointer_section()?, data)) }}")
+    writeln!(output, "        #[doc(hidden)]\n        #[inline(always)]\n        pub fn from_reader(inner: capnp_message::StructReader<'context, 'data, B>) -> Result<Self, capnp_message::StructReadError> {{ let data = inner.data_section()?; Ok(Self::from_sections(inner.pointer_section()?, data)) }}")
         .map_err(|_| GenerateError::Format)?;
-    writeln!(output, "        #[doc(hidden)]\n        pub fn from_element(inner: capnp_message::StructElementReader<'context, 'data, B>) -> Result<Self, capnp_message::ListReadError> {{ let data = inner.data_section()?; Ok(Self::from_sections(inner.pointer_section(), data)) }}")
+    writeln!(output, "        #[doc(hidden)]\n        #[inline(always)]\n        pub fn from_element(inner: capnp_message::StructElementReader<'context, 'data, B>) -> Result<Self, capnp_message::ListReadError> {{ let data = inner.data_section()?; Ok(Self::from_sections(inner.pointer_section(), data)) }}")
         .map_err(|_| GenerateError::Format)?;
-    writeln!(output, "        #[doc(hidden)]\n        pub(super) fn from_sections(pointers: capnp_message::PointerSection<'context, 'data, B>, data: capnp_message::DataSection<'data>) -> Self {{ let full_data = data.as_bytes().get(..{data_bytes}).and_then(|bytes| bytes.try_into().ok()); Self {{ pointers, data, full_data }} }}")
+    writeln!(output, "        #[doc(hidden)]\n        #[inline(always)]\n        pub(super) fn from_sections(pointers: capnp_message::PointerSection<'context, 'data, B>, data: capnp_message::DataSection<'data>) -> Self {{ let full_data = data.as_bytes().get(..{data_bytes}).and_then(|bytes| bytes.try_into().ok()); Self {{ pointers, data, full_data }} }}")
         .map_err(|_| GenerateError::Format)?;
     for field in &structure.fields {
         emit_borrowed_reader_field(output, field, names)?;
     }
     if structure.discriminant_count > 0 {
-        writeln!(output, "        pub fn which(&self) -> Which {{")
-            .map_err(|_| GenerateError::Format)?;
+        writeln!(
+            output,
+            "        #[inline(always)]\n        pub fn which(&self) -> Which {{"
+        )
+        .map_err(|_| GenerateError::Format)?;
         let discriminant_byte = usize::try_from(structure.discriminant_offset)
             .ok()
             .and_then(|offset| offset.checked_mul(2))
@@ -1247,7 +1250,7 @@ fn emit_borrowed_reader_field(
         let target = names.reference(*type_id, true)?;
         return writeln!(
             output,
-            "        pub fn {method}(&self) -> {target}::BorrowedReader<'context, 'data, B> {{ {target}::BorrowedReader::from_sections(self.pointers, self.data) }}"
+            "        #[inline(always)]\n        pub fn {method}(&self) -> {target}::BorrowedReader<'context, 'data, B> {{ {target}::BorrowedReader::from_sections(self.pointers, self.data) }}"
         )
         .map_err(|_| GenerateError::Format);
     }
@@ -1261,8 +1264,11 @@ fn emit_borrowed_reader_field(
         return Ok(());
     };
     if matches!((ty, default_value), (Type::Void, Value::Void)) {
-        return writeln!(output, "        pub fn {method}(&self) {{}}")
-            .map_err(|_| GenerateError::Format);
+        return writeln!(
+            output,
+            "        #[inline(always)]\n        pub fn {method}(&self) {{}}"
+        )
+        .map_err(|_| GenerateError::Format);
     }
     if let (Type::Enum { type_id, .. }, Value::Enum(default)) = (ty, default_value) {
         let name = names.reference(*type_id, true)?;
@@ -1276,12 +1282,12 @@ fn emit_borrowed_reader_field(
             });
         writeln!(
             output,
-            "        pub fn {ordinal_method}(&self) -> u16 {{ {expression} }}"
+            "        #[inline(always)]\n        pub fn {ordinal_method}(&self) -> u16 {{ {expression} }}"
         )
         .map_err(|_| GenerateError::Format)?;
         return writeln!(
             output,
-            "        pub fn {method}(&self) -> {name} {{ {name}::from_ordinal(self.{ordinal_method}()) }}"
+            "        #[inline(always)]\n        pub fn {method}(&self) -> {name} {{ {name}::from_ordinal(self.{ordinal_method}()) }}"
         )
         .map_err(|_| GenerateError::Format);
     }
@@ -1292,28 +1298,28 @@ fn emit_borrowed_reader_field(
                 Type::Text | Type::Data => {
                     return writeln!(
                         output,
-                        "        pub fn {method}(&self) -> Result<{wrapper}<'context, 'data, B>, capnp_message::ListReadError> {{ Ok({wrapper} {{ inner: self.pointers.read_list({offset})?.as_pointers()? }}) }}"
+                        "        #[inline(always)]\n        pub fn {method}(&self) -> Result<{wrapper}<'context, 'data, B>, capnp_message::ListReadError> {{ Ok({wrapper} {{ inner: self.pointers.read_list({offset})?.as_pointers()? }}) }}"
                     )
                     .map_err(|_| GenerateError::Format);
                 }
                 Type::Enum { .. } => {
                     return writeln!(
                         output,
-                        "        pub fn {method}(&self) -> Result<{wrapper}<'context, 'data, B>, capnp_message::ListReadError> {{ Ok({wrapper} {{ inner: self.pointers.read_list({offset})?.as_primitive::<u16>()? }}) }}"
+                        "        #[inline(always)]\n        pub fn {method}(&self) -> Result<{wrapper}<'context, 'data, B>, capnp_message::ListReadError> {{ Ok({wrapper} {{ inner: self.pointers.read_list({offset})?.as_primitive::<u16>()? }}) }}"
                     )
                     .map_err(|_| GenerateError::Format);
                 }
                 Type::List(nested) if borrowed_primitive_rust_type(nested).is_some() => {
                     return writeln!(
                         output,
-                        "        pub fn {method}(&self) -> Result<{wrapper}<'context, 'data, B>, capnp_message::ListReadError> {{ Ok({wrapper} {{ inner: self.pointers.read_list({offset})?.as_pointers()? }}) }}"
+                        "        #[inline(always)]\n        pub fn {method}(&self) -> Result<{wrapper}<'context, 'data, B>, capnp_message::ListReadError> {{ Ok({wrapper} {{ inner: self.pointers.read_list({offset})?.as_pointers()? }}) }}"
                     )
                     .map_err(|_| GenerateError::Format);
                 }
                 Type::Struct { brand, .. } if brand.scopes.is_empty() => {
                     return writeln!(
                         output,
-                        "        pub fn {method}(&self) -> Result<{wrapper}<'context, 'data, B>, capnp_message::ListReadError> {{ Ok({wrapper} {{ inner: self.pointers.read_list({offset})?.as_structs()? }}) }}"
+                        "        #[inline(always)]\n        pub fn {method}(&self) -> Result<{wrapper}<'context, 'data, B>, capnp_message::ListReadError> {{ Ok({wrapper} {{ inner: self.pointers.read_list({offset})?.as_structs()? }}) }}"
                     )
                     .map_err(|_| GenerateError::Format);
                 }
@@ -1343,7 +1349,7 @@ fn emit_borrowed_reader_field(
             if let Some((return_type, conversion)) = list {
                 return writeln!(
                     output,
-                    "        pub fn {method}(&self) -> Result<{return_type}, capnp_message::ListReadError> {{ self.pointers.read_list({offset})?.{conversion} }}"
+                    "        #[inline(always)]\n        pub fn {method}(&self) -> Result<{return_type}, capnp_message::ListReadError> {{ self.pointers.read_list({offset})?.{conversion} }}"
                 )
                 .map_err(|_| GenerateError::Format);
             }
@@ -1355,7 +1361,7 @@ fn emit_borrowed_reader_field(
             let target = names.reference(*type_id, true)?;
             return writeln!(
                 output,
-                "        pub fn {method}(&self) -> Result<{target}::BorrowedReader<'context, 'data, B>, capnp_message::StructReadError> {{ {target}::BorrowedReader::from_reader(self.pointers.read_struct({offset})?) }}"
+                "        #[inline(always)]\n        pub fn {method}(&self) -> Result<{target}::BorrowedReader<'context, 'data, B>, capnp_message::StructReadError> {{ {target}::BorrowedReader::from_reader(self.pointers.read_struct({offset})?) }}"
             )
             .map_err(|_| GenerateError::Format);
         }
@@ -1369,7 +1375,7 @@ fn emit_borrowed_reader_field(
             });
         return writeln!(
             output,
-            "        pub fn {method}(&self) -> {return_type} {{ {expression} }}"
+            "        #[inline(always)]\n        pub fn {method}(&self) -> {return_type} {{ {expression} }}"
         )
         .map_err(|_| GenerateError::Format);
     }
@@ -1387,7 +1393,7 @@ fn emit_borrowed_reader_field(
     let Some((return_type, expression)) = body else {
         return Ok(());
     };
-    writeln!(output, "        pub fn {method}(&self) -> Result<{return_type}, capnp_message::StructReadError> {{ {expression} }}")
+    writeln!(output, "        #[inline(always)]\n        pub fn {method}(&self) -> Result<{return_type}, capnp_message::StructReadError> {{ {expression} }}")
         .map_err(|_| GenerateError::Format)
 }
 
