@@ -685,6 +685,7 @@ impl<'context, 'data, B: TraversalBudget> StructListReader<'context, 'data, B> {
         self.len() == 0
     }
 
+    #[inline(always)]
     pub fn get(self, index: u32) -> Result<StructElementReader<'context, 'data, B>, ListReadError> {
         check_index(index, self.len())?;
         let nesting = self.list.nesting.descend()?;
@@ -793,6 +794,7 @@ impl<'context, 'data, B: TraversalBudget> StructElementReader<'context, 'data, B
         }
     }
 
+    #[inline(always)]
     pub fn data_section(self) -> Result<DataSection<'data>, ListReadError> {
         if self.data_bits == 0 {
             return Ok(DataSection::from_validated_bytes(&[]));
