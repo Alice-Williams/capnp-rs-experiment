@@ -513,6 +513,9 @@ fn pack_aligned_into(
     max_output_bytes: usize,
 ) -> Result<(), PackedError> {
     debug_assert_eq!(input.len() % WORD_BYTES, 0);
+    if pack_all_zero(input, output, max_output_bytes)? {
+        return Ok(());
+    }
     let complete_bytes = input.len();
     let mut offset = 0;
     while offset < complete_bytes {
@@ -571,6 +574,27 @@ fn pack_aligned_into(
         }
     }
     Ok(())
+}
+
+fn pack_all_zero(
+    input: &[u8],
+    output: &mut Vec<u8>,
+    max_output_bytes: usize,
+) -> Result<bool, PackedError> {
+    if input.is_empty() || !input.chunks_exact(WORD_BYTES).all(word_is_zero) {
+        return Ok(false);
+    }
+    let mut remaining_words = input.len() / WORD_BYTES;
+    while remaining_words != 0 {
+        check_output_limit(output.len(), 2, max_output_bytes)?;
+        let run_words = remaining_words.min(MAX_RUN_WORDS + 1);
+        output.extend_from_slice(&[
+            0,
+            u8::try_from(run_words - 1).expect("zero run is capped at the format limit"),
+        ]);
+        remaining_words -= run_words;
+    }
+    Ok(true)
 }
 
 pub fn unpack(input: &[u8], max_output_bytes: usize) -> Result<Vec<u8>, PackedError> {
