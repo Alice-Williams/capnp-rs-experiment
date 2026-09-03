@@ -2,7 +2,7 @@ use core::fmt;
 
 use alloc::{boxed::Box, vec};
 
-use capnp_wire::{ElementSize, PointerKind, WirePointer};
+use capnp_wire::{ElementSize, PointerKind, Segment, WirePointer};
 
 use crate::{BudgetExhausted, NestingLimit, NestingLimitExceeded, TraversalBudget};
 
@@ -170,27 +170,15 @@ pub struct MessageSegments<'a> {
 enum SegmentStorage<'a> {
     One(&'a [u8]),
     Two([&'a [u8]; 2]),
+    Borrowed(&'a [&'a [u8]]),
+    Descriptors(&'a [Segment<'a>]),
     Many(Box<[&'a [u8]]>),
 }
 
 impl<'a> MessageSegments<'a> {
     #[inline]
     pub fn new(segments: &[&'a [u8]]) -> Result<Self, ValidationError> {
-        if segments.is_empty() {
-            return Err(ValidationError::NoSegments);
-        }
-        if segments.len() > u32::MAX as usize {
-            return Err(ValidationError::TooManySegments);
-        }
-        for (index, segment) in segments.iter().enumerate() {
-            if segment.len() % 8 != 0 {
-                return Err(ValidationError::SegmentNotWordAligned {
-                    segment_id: u32::try_from(index)
-                        .map_err(|_| ValidationError::TooManySegments)?,
-                    bytes: segment.len(),
-                });
-            }
-        }
+        validate_segments(segments)?;
         let segments = match segments {
             [one] => SegmentStorage::One(one),
             [first, second] => SegmentStorage::Two([first, second]),
@@ -199,11 +187,40 @@ impl<'a> MessageSegments<'a> {
         Ok(Self { segments })
     }
 
+    /// Borrows caller-owned segment descriptors after validating their shape.
+    ///
+    /// This avoids copying or allocating descriptor storage when a framing layer
+    /// already keeps a reusable descriptor array alive for the reader context.
+    /// Segment bodies remain borrowed exactly as they are with [`Self::new`].
+    #[inline]
+    pub fn new_borrowed(segments: &'a [&'a [u8]]) -> Result<Self, ValidationError> {
+        validate_segments(segments)?;
+        Ok(Self {
+            segments: SegmentStorage::Borrowed(segments),
+        })
+    }
+
+    /// Borrows descriptors whose word alignment was already validated.
+    #[inline]
+    pub fn from_descriptors(segments: &'a [Segment<'a>]) -> Result<Self, ValidationError> {
+        if segments.is_empty() {
+            return Err(ValidationError::NoSegments);
+        }
+        if segments.len() > u32::MAX as usize {
+            return Err(ValidationError::TooManySegments);
+        }
+        Ok(Self {
+            segments: SegmentStorage::Descriptors(segments),
+        })
+    }
+
     #[inline]
     pub fn segment_count(&self) -> usize {
         match &self.segments {
             SegmentStorage::One(_) => 1,
             SegmentStorage::Two(_) => 2,
+            SegmentStorage::Borrowed(segments) => segments.len(),
+            SegmentStorage::Descriptors(segments) => segments.len(),
             SegmentStorage::Many(segments) => segments.len(),
         }
     }
@@ -214,6 +231,10 @@ impl<'a> MessageSegments<'a> {
         match &self.segments {
             SegmentStorage::One(segment) => (index == 0).then_some(*segment),
             SegmentStorage::Two(segments) => segments.get(index).copied(),
+            SegmentStorage::Borrowed(segments) => segments.get(index).copied(),
+            SegmentStorage::Descriptors(segments) => {
+                segments.get(index).copied().map(Segment::bytes)
+            }
             SegmentStorage::Many(segments) => segments.get(index).copied(),
         }
     }
@@ -267,6 +288,48 @@ impl<'a> MessageSegments<'a> {
         nesting: NestingLimit,
     ) -> Result<BoundedPointer, TraversalError> {
         let wire_pointer = self.read_pointer(location)?;
+        let pointer = self.validate_wire_pointer(location, wire_pointer)?;
+        let child_nesting = match pointer {
+            ResolvedPointer::Struct(_) | ResolvedPointer::List(_) => nesting.descend()?,
+            ResolvedPointer::Null | ResolvedPointer::Capability(_) => nesting,
+        };
+        let charged_words = traversal_charge(wire_pointer, pointer)?;
+        budget.try_charge(charged_words)?;
+        Ok(BoundedPointer {
+            pointer,
+            child_nesting,
+            charged_words,
+        })
+    }
+
+    #[inline]
+    pub(crate) fn validate_struct_pointer_with_limits<B: TraversalBudget>(
+        &self,
+        location: WireLocation,
+        budget: &B,
+        nesting: NestingLimit,
+    ) -> Result<BoundedPointer, TraversalError> {
+        let (wire_pointer, source_segment) = self.read_pointer_and_segment(location)?;
+        if !wire_pointer.is_null() && wire_pointer.kind() == PointerKind::Struct {
+            let fields = wire_pointer
+                .struct_fields()
+                .expect("struct discriminator was checked");
+            let content = positional_target(location, fields.offset)?;
+            let charged_words = u64::from(fields.data_words) + u64::from(fields.pointer_count);
+            check_range_in_segment(content, charged_words, source_segment)?;
+            let child_nesting = nesting.descend()?;
+            budget.try_charge(charged_words)?;
+            return Ok(BoundedPointer {
+                pointer: ResolvedPointer::Struct(StructRef {
+                    content,
+                    data_words: fields.data_words,
+                    pointer_count: fields.pointer_count,
+                }),
+                child_nesting,
+                charged_words,
+            });
+        }
+
         let pointer = self.validate_wire_pointer(location, wire_pointer)?;
         let child_nesting = match pointer {
             ResolvedPointer::Struct(_) | ResolvedPointer::List(_) => nesting.descend()?,
@@ -586,16 +649,39 @@ impl<'a> MessageSegments<'a> {
 
     #[inline]
     fn read_pointer(&self, location: WireLocation) -> Result<WirePointer, ValidationError> {
-        self.check_range(location, 1)?;
+        self.read_pointer_and_segment(location)
+            .map(|(pointer, _)| pointer)
+    }
+
+    #[inline]
+    fn read_pointer_and_segment(
+        &self,
+        location: WireLocation,
+    ) -> Result<(WirePointer, &'a [u8]), ValidationError> {
         let segment = self
             .segment(location.segment_id)
             .ok_or(ValidationError::UnknownSegment {
                 segment_id: location.segment_id,
             })?;
-        let byte_offset = usize::try_from(u64::from(location.word_offset) * 8)
-            .map_err(|_| ValidationError::TargetWordOverflow)?;
-        WirePointer::read_from(segment, byte_offset)
-            .map_err(|_| ValidationError::PointerOutOfBounds { location })
+        check_range_in_segment(location, 1, segment)?;
+        let byte_offset = usize::try_from(location.word_offset)
+            .map_err(|_| ValidationError::TargetWordOverflow)?
+            .checked_mul(8)
+            .ok_or(ValidationError::TargetWordOverflow)?;
+        let byte_end = byte_offset
+            .checked_add(8)
+            .ok_or(ValidationError::TargetWordOverflow)?;
+        let bytes = segment
+            .get(byte_offset..byte_end)
+            .ok_or(ValidationError::PointerOutOfBounds { location })?;
+        Ok((
+            WirePointer::from_le_bytes(
+                bytes
+                    .try_into()
+                    .expect("a checked wire-word range is exactly eight bytes"),
+            ),
+            segment,
+        ))
     }
 
     #[inline]
@@ -619,6 +705,47 @@ impl<'a> MessageSegments<'a> {
         } else {
             Ok(())
         }
+    }
+}
+
+#[inline]
+fn validate_segments(segments: &[&[u8]]) -> Result<(), ValidationError> {
+    if segments.is_empty() {
+        return Err(ValidationError::NoSegments);
+    }
+    if segments.len() > u32::MAX as usize {
+        return Err(ValidationError::TooManySegments);
+    }
+    for (index, segment) in segments.iter().enumerate() {
+        if segment.len() % 8 != 0 {
+            return Err(ValidationError::SegmentNotWordAligned {
+                segment_id: u32::try_from(index).map_err(|_| ValidationError::TooManySegments)?,
+                bytes: segment.len(),
+            });
+        }
+    }
+    Ok(())
+}
+
+#[inline]
+fn check_range_in_segment(
+    location: WireLocation,
+    words: u64,
+    segment: &[u8],
+) -> Result<(), ValidationError> {
+    let segment_words =
+        u64::try_from(segment.len() / 8).map_err(|_| ValidationError::TargetWordOverflow)?;
+    let end = u64::from(location.word_offset)
+        .checked_add(words)
+        .ok_or(ValidationError::TargetWordOverflow)?;
+    if end > segment_words {
+        Err(ValidationError::ObjectOutOfBounds {
+            location,
+            words,
+            segment_words,
+        })
+    } else {
+        Ok(())
     }
 }
 
@@ -764,6 +891,26 @@ mod tests {
         assert_eq!(two.segment(0), Some(bytes.as_slice()));
         assert_eq!(two.segment(1), Some(bytes.as_slice()));
         assert_eq!(two.segment(2), None);
+    }
+
+    #[test]
+    fn borrowed_context_reuses_caller_descriptor_storage() {
+        let bytes = [0u8; 8];
+        let descriptors = [&bytes[..]; 3];
+        let message = MessageSegments::new_borrowed(&descriptors).expect("segments are valid");
+        assert!(matches!(message.segments, SegmentStorage::Borrowed(_)));
+        assert_eq!(message.segment_count(), 3);
+        assert_eq!(message.segment(2), Some(bytes.as_slice()));
+    }
+
+    #[test]
+    fn validated_descriptors_are_borrowed_without_a_shape_scan() {
+        let bytes = [0u8; 8];
+        let descriptor = Segment::from_bytes(&bytes).expect("one complete word");
+        let descriptors = [descriptor; 3];
+        let message = MessageSegments::from_descriptors(&descriptors).expect("non-empty table");
+        assert!(matches!(message.segments, SegmentStorage::Descriptors(_)));
+        assert_eq!(message.segment(2), Some(bytes.as_slice()));
     }
 
     #[test]

@@ -3,6 +3,7 @@ use core::fmt;
 #[cfg(feature = "alloc")]
 use alloc::{boxed::Box, vec::Vec};
 
+pub use capnp_wire::Segment;
 use capnp_wire::{WORD_BYTES, read_u32_le};
 
 /// The reference implementation's hard segment-count limit.
@@ -98,24 +99,6 @@ impl fmt::Display for FrameError {
 }
 
 impl core::error::Error for FrameError {}
-
-/// Immutable location and contents of one segment within a parsed frame.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Segment<'a> {
-    bytes: &'a [u8],
-}
-
-impl<'a> Segment<'a> {
-    pub const EMPTY: Self = Self { bytes: &[] };
-
-    pub const fn word_count(self) -> u32 {
-        (self.bytes.len() / WORD_BYTES) as u32
-    }
-
-    pub const fn bytes(self) -> &'a [u8] {
-        self.bytes
-    }
-}
 
 /// A standard frame whose segment descriptors occupy caller-provided storage.
 #[derive(Debug, Eq, PartialEq)]
@@ -225,9 +208,8 @@ pub fn parse_frame_into<'input, 'storage>(
                 available: input.len() - table_len,
             });
         }
-        storage[0] = Segment {
-            bytes: &input[table_len..encoded_len],
-        };
+        storage[0] = Segment::from_bytes(&input[table_len..encoded_len])
+            .expect("word-count-derived segment length is aligned");
         return Ok(BorrowedFrameRead::Message {
             frame: BorrowedFrame {
                 segments: &storage[..1],
@@ -260,12 +242,10 @@ pub fn parse_frame_into<'input, 'storage>(
             });
         }
         let second_offset = table_len + first_words as usize * WORD_BYTES;
-        storage[0] = Segment {
-            bytes: &input[table_len..second_offset],
-        };
-        storage[1] = Segment {
-            bytes: &input[second_offset..encoded_len],
-        };
+        storage[0] = Segment::from_bytes(&input[table_len..second_offset])
+            .expect("word-count-derived segment length is aligned");
+        storage[1] = Segment::from_bytes(&input[second_offset..encoded_len])
+            .expect("word-count-derived segment length is aligned");
         return Ok(BorrowedFrameRead::Message {
             frame: BorrowedFrame {
                 segments: &storage[..2],
@@ -308,7 +288,7 @@ pub fn parse_frame_into<'input, 'storage>(
             u32::from_le_bytes(encoded_words.try_into().expect("four-byte table entry"));
         let byte_len = word_count as usize * WORD_BYTES;
         let (segment, remaining) = body.split_at(byte_len);
-        *slot = Segment { bytes: segment };
+        *slot = Segment::from_bytes(segment).expect("word-count-derived segment length is aligned");
         body = remaining;
     }
     Ok(BorrowedFrameRead::Message {
@@ -486,9 +466,10 @@ pub fn parse_frame(input: &[u8], limits: FrameLimits) -> Result<FrameRead<'_>, F
     for word_count in sizes {
         let byte_len = usize::try_from(word_count).expect("validated body length fits usize") * 8;
         let end = body_offset + byte_len;
-        segments.push(Segment {
-            bytes: &input[body_offset..end],
-        });
+        segments.push(
+            Segment::from_bytes(&input[body_offset..end])
+                .expect("word-count-derived segment length is aligned"),
+        );
         body_offset = end;
     }
 

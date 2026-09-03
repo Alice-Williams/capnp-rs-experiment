@@ -14,6 +14,7 @@
 mod endian;
 mod integer;
 mod pointer;
+mod segment;
 
 pub use endian::{
     Word, WordIter, WordIterMut, WordSlice, WordSliceMut, WordSlot, read_f32_le, read_f64_le,
@@ -26,6 +27,7 @@ pub use pointer::{
     ElementSize, FarPointerFields, InlineCompositeTagFields, ListPointerFields, PointerKind,
     StructPointerFields, WirePointer,
 };
+pub use segment::Segment;
 
 /// Cap'n Proto's fundamental wire-format unit is a 64-bit word.
 pub const WORD_BYTES: usize = 8;

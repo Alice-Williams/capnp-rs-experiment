@@ -128,7 +128,7 @@ impl<'data> MessageSegments<'data> {
         budget: &'context B,
         nesting: NestingLimit,
     ) -> Result<StructReader<'context, 'data, B>, StructReadError> {
-        let bounded = self.validate_pointer_with_limits(location, budget, nesting)?;
+        let bounded = self.validate_struct_pointer_with_limits(location, budget, nesting)?;
         match bounded.pointer {
             ResolvedPointer::Null => Ok(StructReader {
                 segments: self,

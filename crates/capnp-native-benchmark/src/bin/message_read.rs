@@ -73,7 +73,6 @@ fn read_many(
 ) -> Result<u64, Box<dyn std::error::Error>> {
     let limits = FrameLimits::default();
     let mut storage = [Segment::EMPTY; 64];
-    let mut views = [&[][..]; 64];
     let mut checksum = SEED;
 
     for _ in 0..passes {
@@ -96,10 +95,7 @@ fn read_many(
         }
 
         if read_root {
-            for (view, segment) in views.iter_mut().zip(segments) {
-                *view = segment.bytes();
-            }
-            let message = MessageSegments::new(&views[..segments.len()])?;
+            let message = MessageSegments::from_descriptors(segments)?;
             let budget = LocalTraversalBudget::new(16);
             let root = message.read_struct(
                 WireLocation {
