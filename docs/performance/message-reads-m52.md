@@ -61,3 +61,30 @@ several public hot methods were not available for cross-crate inlining.
 
 Evidence:
 `benchmarks/results/2026-09-03-m52-inline-small-contexts-g-drive-docker/`.
+
+## Single-read and inlining checkpoint
+
+The bounded root path previously decoded and bounds-checked the same root word
+twice. It now carries the decoded word into validation, and the checked
+message, budget, data-section, and primitive helpers are available for
+cross-crate inlining. This reduced the paired Rust root medians substantially:
+
+| Case | Segments | C++ ns/message | Rust ns/message | Rust / C++ |
+| --- | ---: | ---: | ---: | ---: |
+| framing | 1 | 21.5606 | 6.7892 | 0.315 |
+| root | 1 | 72.9262 | 25.9398 | 0.356 |
+| framing | 2 | 106.0102 | 10.2523 | 0.097 |
+| root | 2 | 409.7002 | 41.5332 | 0.101 |
+| framing | 64 | 883.6094 | 277.9353 | 0.315 |
+| root | 64 | 1232.8038 | 506.9421 | 0.411 |
+
+The paired incremental Rust/C++ ratios are 0.373, 0.103, and 0.656. The
+two-segment shape passes its cumulative gate; the one- and 64-segment shapes
+remain above their inherited ceilings. The remaining 64-segment increment
+includes allocating and copying a second descriptor table after framing; the
+next step is to borrow already-owned descriptors. The direct-root validation
+path also still performs generic range work that can be specialized without
+changing checked-coordinate semantics.
+
+Evidence:
+`benchmarks/results/2026-09-03-m52-streamlined-root-g-drive-docker/`.
