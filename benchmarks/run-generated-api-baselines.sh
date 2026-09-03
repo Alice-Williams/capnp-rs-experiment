@@ -108,6 +108,8 @@ workloads=(
     generated-builder-struct-list-hot
     direct-builder-pointer-list
     generated-builder-pointer-list
+    direct-builder-union
+    generated-builder-union
 )
 
 run_workload() {

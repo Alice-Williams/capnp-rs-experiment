@@ -533,6 +533,46 @@ void benchmarkGeneratedPointerListBuilder(size_t passes) {
   std::cout << elapsed.count() << '\t' << checksum << '\n';
 }
 
+uint64_t unionBuilderValue(size_t pass) {
+  return SEED + static_cast<uint64_t>(pass) * 0x9e3779b97f4a7c15ull;
+}
+
+uint64_t unionBuilderFingerprint(size_t pass) {
+  return std::rotl(uint64_t{1}, 17) ^ unionBuilderValue(pass);
+}
+
+void writeDirectUnion(capnp::AnyStruct::Builder& root, size_t pass) {
+  auto data = root.getDataSection();
+  writeData<uint16_t>(data, 19, 1);
+  writeData<uint64_t>(data, 6, unionBuilderValue(pass));
+}
+
+void writeGeneratedUnion(WireFixture::Builder& root, size_t pass) {
+  root.getChoice().setNumber(unionBuilderValue(pass));
+}
+
+void benchmarkDirectUnionBuilder(size_t passes) {
+  capnp::MallocMessageBuilder message;
+  auto root = message.initRoot<capnp::AnyPointer>().initAsAnyStruct(9, 28);
+  auto started = std::chrono::steady_clock::now();
+  auto checksum = measureBuilder(
+      root, writeDirectUnion, unionBuilderFingerprint, passes);
+  auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now() - started);
+  std::cout << elapsed.count() << '\t' << checksum << '\n';
+}
+
+void benchmarkGeneratedUnionBuilder(size_t passes) {
+  capnp::MallocMessageBuilder message;
+  auto root = message.initRoot<WireFixture>();
+  auto started = std::chrono::steady_clock::now();
+  auto checksum = measureBuilder(
+      root, writeGeneratedUnion, unionBuilderFingerprint, passes);
+  auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now() - started);
+  std::cout << elapsed.count() << '\t' << checksum << '\n';
+}
+
 uint64_t directScalarFingerprint(capnp::AnyStruct::Reader root) {
   auto data = root.getDataSection();
   uint64_t value = data.size() > 0 && (data[0] & 1) != 0;
@@ -739,7 +779,7 @@ uint64_t measure(Root root, Fingerprint fingerprint, size_t passes) {
 
 int main(int argc, char** argv) {
   if (argc != 4) {
-    std::cerr << "usage: cpp-generated-api direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups|borrowed-direct-lists|borrowed-lists|borrowed-direct-nested|borrowed-nested|borrowed-direct-struct-lists|borrowed-struct-lists|borrowed-direct-evolution|borrowed-evolution|borrowed-direct-defaults|borrowed-defaults|direct-builder-scalars|generated-builder-scalars|direct-builder-blobs|generated-builder-blobs|direct-builder-struct|generated-builder-struct|direct-builder-list|generated-builder-list|direct-builder-struct-list|generated-builder-struct-list|direct-builder-struct-list-hot|generated-builder-struct-list-hot|direct-builder-pointer-list|generated-builder-pointer-list PASSES FIXTURE\n";
+    std::cerr << "usage: cpp-generated-api direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups|borrowed-direct-lists|borrowed-lists|borrowed-direct-nested|borrowed-nested|borrowed-direct-struct-lists|borrowed-struct-lists|borrowed-direct-evolution|borrowed-evolution|borrowed-direct-defaults|borrowed-defaults|direct-builder-scalars|generated-builder-scalars|direct-builder-blobs|generated-builder-blobs|direct-builder-struct|generated-builder-struct|direct-builder-list|generated-builder-list|direct-builder-struct-list|generated-builder-struct-list|direct-builder-struct-list-hot|generated-builder-struct-list-hot|direct-builder-pointer-list|generated-builder-pointer-list|direct-builder-union|generated-builder-union PASSES FIXTURE\n";
     return 2;
   }
   auto mode = std::string_view(argv[1]);
@@ -798,6 +838,14 @@ int main(int argc, char** argv) {
   }
   if (mode == "generated-builder-pointer-list") {
     benchmarkGeneratedPointerListBuilder(passes);
+    return 0;
+  }
+  if (mode == "direct-builder-union") {
+    benchmarkDirectUnionBuilder(passes);
+    return 0;
+  }
+  if (mode == "generated-builder-union") {
+    benchmarkGeneratedUnionBuilder(passes);
     return 0;
   }
   auto words = mode == "borrowed-direct-defaults" || mode == "borrowed-defaults"
