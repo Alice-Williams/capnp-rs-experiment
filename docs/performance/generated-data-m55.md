@@ -668,3 +668,33 @@ subtraction is below timer resolution. The isolated generated/direct ratio
 differs by 1.3%, within the 3% tolerance, corroborating that typed wrapping
 adds no material native cost. The ordinary struct-list builder gate is closed;
 pointer lists, unions, defaults, and evolution builders remain open.
+
+## Pointer-list builder baseline
+
+The paired pointer-list workload initializes a two-element `List(Text)` in the
+root's `texts` field and writes two alternating short strings on every
+iteration. Both implementations use fixed-capacity one-segment arenas and
+time pointer-list allocation, zeroing, list pointer emission, both Text
+allocations and copies, and both element-pointer writes. Root construction is
+outside the timed region.
+
+The direct controls embed pointer slot 15 and use their checked pointer-list
+builders. Generated C++ uses `initTexts()` and typed Text setters. The current
+generated Rust path still looks up `texts` by name, clones and resolves list
+metadata, constructs a dynamic list storage enum, and dispatches two
+`DynamicInput::Text` values.
+
+Alternating 100,000-operation baseline evidence at native commit `b767aae` is
+in
+[`benchmarks/results/2026-09-03-m55-generated-builder-pointer-list-baseline-100k-v2-g-drive-docker`](../../benchmarks/results/2026-09-03-m55-generated-builder-pointer-list-baseline-100k-v2-g-drive-docker).
+
+| Operation | C++ ns/op | Native ns/op | Native / C++ |
+| --- | ---: | ---: | ---: |
+| direct two-element Text-list construction | 69.9918 | 65.4265 | 0.935 |
+| generated two-element Text-list construction | 70.6339 | 171.3259 | 2.426 |
+
+The checked lower-level native path is already 6.5% faster than the direct C++
+control. Generated reflection adds about 106 ns and discards that advantage.
+The next change emits a constant-slot typed Text-list initializer and setter,
+while preserving the dynamic list builder for reflection, nested generic
+lists, unions, and other runtime-selected element types.
