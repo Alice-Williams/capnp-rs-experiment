@@ -48,3 +48,28 @@ The next attribution step equalizes the Rust and C++ benchmark function
 boundaries (the initial Rust prepared path had two extra non-inlined calls),
 then records allocation counts/capacities before changing arena representation
 or allocation policy.
+
+## Word-level observation baseline
+
+Evidence:
+`benchmarks/results/2026-09-03-m53-build-word-observation-g-drive-docker`
+
+The corrected harness gives each implementation one non-inlined iteration
+boundary and uses the M50-style rotate/XOR word checksum rather than hashing
+every byte. Longer 500,000-message samples produce:
+
+| Case | Shape | C++ ns/message | Rust ns/message | Rust / C++ |
+| --- | --- | ---: | ---: | ---: |
+| prepared storage | direct `[3]` | 4.9418 | 5.6894 | 1.151 |
+| fresh arena | direct `[3]` | 115.2537 | 200.4135 | 1.739 |
+| prepared storage | far `[1,3]` | 6.6297 | 6.1793 | 0.932 |
+| fresh arena | far `[1,3]` | 485.7785 | 464.5458 | 0.956 |
+
+The direct prepared difference is only 0.7476 ns/message, so subtraction is
+noise-sensitive, but the 85.1598 ns fresh-path gap is not. Disassembly shows
+the benchmark calling native `ExclusiveArena::new`, `init_root_struct`, and
+both scalar setters across crate boundaries, while the equivalent C++ wrapper
+inlines its small header-defined operations around the builder library calls. Native
+also allocates its segment-descriptor `Vec` separately from the segment bytes.
+The first implementation experiment therefore exports the small hot builder
+chain for cross-crate inlining before changing storage representation.
