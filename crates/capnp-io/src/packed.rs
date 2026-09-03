@@ -83,11 +83,16 @@ impl PackedEncoder {
         if self.partial_len == 0
             && matches!(self.run, EncodeRun::None)
             && input.len() % WORD_BYTES == 0
-            && ends_at_flushable_boundary(input)
         {
-            pack_aligned_into(input, &mut self.output, self.max_output_bytes)?;
-            *input = &[];
-            return Ok(());
+            if pack_complete_run_chunk(input, &mut self.output, self.max_output_bytes)? {
+                *input = &[];
+                return Ok(());
+            }
+            if ends_with_ordinary_word(input) {
+                pack_aligned_into(input, &mut self.output, self.max_output_bytes)?;
+                *input = &[];
+                return Ok(());
+            }
         }
 
         if self.partial_len != 0 {
@@ -615,27 +620,39 @@ fn word_is_zero(word: &[u8]) -> bool {
     u64::from_le_bytes(word.try_into().expect("packing only checks complete words")) == 0
 }
 
-fn ends_at_flushable_boundary(input: &[u8]) -> bool {
+fn ends_with_ordinary_word(input: &[u8]) -> bool {
     if input.is_empty() {
         return false;
     }
     let final_word = &input[input.len() - WORD_BYTES..];
     let final_tag = word_tag_slice(final_word);
-    if final_tag != 0 && final_tag != u8::MAX {
-        return true;
+    final_tag != 0 && final_tag != u8::MAX
+}
+
+fn pack_complete_run_chunk(
+    input: &[u8],
+    output: &mut Vec<u8>,
+    max_output_bytes: usize,
+) -> Result<bool, PackedError> {
+    if input.len() != (MAX_RUN_WORDS + 1) * WORD_BYTES {
+        return Ok(false);
     }
-    let run_bytes = (MAX_RUN_WORDS + 1) * WORD_BYTES;
-    if input.len() < run_bytes {
-        return false;
+    if input.iter().all(|byte| *byte == 0) {
+        check_output_limit(output.len(), 2, max_output_bytes)?;
+        output.extend_from_slice(&[0, u8::MAX]);
+        return Ok(true);
     }
-    let trailing_run = &input[input.len() - run_bytes..];
-    if final_tag == 0 {
-        trailing_run.chunks_exact(WORD_BYTES).all(word_is_zero)
-    } else {
-        trailing_run
-            .chunks_exact(WORD_BYTES)
-            .all(|word| word.iter().all(|byte| *byte != 0))
+    if input.iter().all(|byte| *byte != 0) {
+        let encoded_len = 2 + input.len();
+        check_raw_output_limit(output.len(), encoded_len, max_output_bytes)?;
+        output.reserve(encoded_len);
+        output.push(u8::MAX);
+        output.extend_from_slice(&input[..WORD_BYTES]);
+        output.push(u8::MAX);
+        output.extend_from_slice(&input[WORD_BYTES..]);
+        return Ok(true);
     }
+    Ok(false)
 }
 
 fn zero_byte_count(word: &[u8; WORD_BYTES]) -> usize {
