@@ -346,3 +346,29 @@ improves on the paired direct-runtime ratio. The direct ratio permits a 0.815
 cumulative ceiling with tolerance; generated access reaches 0.774. Its native
 generated-minus-direct median is again below timer resolution. The old-reader
 over new-writer schema-evolution reader gate is closed.
+
+## Borrowed pointer-default gate
+
+Borrowed generated readers now emit a constant-layout accessor for non-empty
+Text schema defaults. The generated default is a static, terminated byte
+literal; the checked runtime selects it only for an absent or null field and
+otherwise follows and charges the message pointer normally. This avoids
+schema lookup, allocation, and owned-string conversion while preserving the
+wire-level distinction needed to apply pointer defaults correctly.
+
+The benchmark uses the byte-identical minimal one-segment message in both
+languages, whose root pointer is null, then observes the `defaultText` bytes.
+Final five-million-operation evidence at native commit `b5f0fd7` is in
+[`benchmarks/results/2026-09-03-m55-generated-reader-defaults-final-5m-g-drive-docker`](../../benchmarks/results/2026-09-03-m55-generated-reader-defaults-final-5m-g-drive-docker).
+
+| Operation | C++ ns/op | Native ns/op | Native / C++ |
+| --- | ---: | ---: | ---: |
+| borrowed direct missing Text default | 2.8202 | 1.1272 | 0.400 |
+| borrowed generated missing Text default | 5.6034 | 1.1538 | 0.206 |
+
+Generated native pointer-default access is 79.4% faster than generated C++
+and preserves substantially more than the paired direct-runtime advantage.
+The direct ratio permits a 0.412 cumulative ceiling with tolerance; generated
+access reaches 0.206. Native generated wrapping adds only 0.03 ns versus
+2.78 ns for C++. Together with scalar default-XOR coverage, the generated
+reader default gate is closed.
