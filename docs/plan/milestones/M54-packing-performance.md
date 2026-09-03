@@ -1,6 +1,6 @@
 # M54 — Packing performance
 
-- Status: in-progress
+- Status: complete
 - Phase: 8
 - Depends on: M50, M51, M53
 
@@ -67,7 +67,7 @@ that both decoders necessarily perform and is not a valid lower-layer case.
   and deterministic output.
 - [x] Record final cumulative and incremental comparisons for every required
   direction, distribution, and ownership model.
-- [ ] Add Bazel evidence gates and pass full Cargo/MSRV/Bazel/Miri validation.
+- [x] Add Bazel evidence gates and pass full Cargo/MSRV/Bazel/Miri validation.
 
 ## Required exit evidence
 
