@@ -171,3 +171,28 @@ The borrowed blob operation remains 35.2% faster end to end, but its generated
 pointer/blob increment is about 4.06 ns versus 1.18 ns in C++. That incremental
 gate remains open; the next reader work isolates pointer following, text NUL
 adjustment, and data view construction before moving to lists and structs.
+
+## Borrowed scalar and blob gate
+
+Evidence:
+[`benchmarks/results/2026-09-03-m55-generated-reader-pointer-section-g-drive-docker`](../../benchmarks/results/2026-09-03-m55-generated-reader-pointer-section-g-drive-docker)
+at native commit `e2a0fba`, with one million operations per sample.
+
+The generated blob overhead was not in pointer validation or the borrowed
+views. Caching the pointer-section base alone left the smoke result near 13 ns.
+The material cost was widening each successful generated getter from the
+runtime's `StructReadError` to reflection-oriented `DynamicError`. Returning
+the precise runtime error type reduced the generated blob sequence to 8.5349
+ns without changing validation, traversal charging, or failure behavior.
+
+| Operation | Direct native / C++ | Generated native / C++ | Inherited ceiling |
+| --- | ---: | ---: | ---: |
+| borrowed scalars/ordinal | 0.778 | 0.782 | 0.801 |
+| borrowed text/data | 0.493 | 0.443 | 0.508 |
+
+Both complete generated operations are faster than C++ and preserve their
+paired direct-runtime advantage within the 3% tolerance. The native generated
+minus direct medians are negative for both shapes, so there is no resolvable
+incremental generated cost. These scalar/ordinal and text/data borrowed-reader
+gates are closed. Typed lists, nested structs/groups, unions, and evolution
+remain open reader work; retained ownership remains reported separately.
