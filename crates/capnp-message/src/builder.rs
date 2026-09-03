@@ -518,10 +518,7 @@ impl ExclusiveArena {
         let reference = self.allocate_struct_list(element_count, data_words, pointer_count)?;
         self.emit_list(root_offset(), reference)?;
         self.root_initialized = true;
-        Ok(StructListBuilder {
-            arena: self,
-            reference,
-        })
+        Ok(StructListBuilder::new(self, reference))
     }
 
     #[inline]
@@ -1995,10 +1992,7 @@ impl StructBuilder<'_> {
             self.arena
                 .allocate_struct_list(element_count, data_words, pointer_count)?;
         self.arena.emit_list(slot, reference)?;
-        Ok(StructListBuilder {
-            arena: self.arena,
-            reference,
-        })
+        Ok(StructListBuilder::new(self.arena, reference))
     }
 
     #[inline]
@@ -2313,10 +2307,7 @@ impl PointerListBuilder<'_> {
             self.arena
                 .allocate_struct_list(element_count, data_words, pointer_count)?;
         self.arena.emit_list(slot, reference)?;
-        Ok(StructListBuilder {
-            arena: self.arena,
-            reference,
-        })
+        Ok(StructListBuilder::new(self.arena, reference))
     }
 
     #[inline]
@@ -2390,9 +2381,25 @@ impl PointerListBuilder<'_> {
 pub struct StructListBuilder<'arena> {
     arena: &'arena mut ExclusiveArena,
     reference: ListOffset,
+    element_data_words: u16,
+    element_pointer_count: u16,
+    element_stride_words: u32,
 }
 
-impl StructListBuilder<'_> {
+impl<'arena> StructListBuilder<'arena> {
+    fn new(arena: &'arena mut ExclusiveArena, reference: ListOffset) -> Self {
+        let Some((element_data_words, element_pointer_count)) = reference.inline_struct_size else {
+            unreachable!("struct-list builders require an inline-composite reference");
+        };
+        Self {
+            arena,
+            reference,
+            element_data_words,
+            element_pointer_count,
+            element_stride_words: u32::from(element_data_words) + u32::from(element_pointer_count),
+        }
+    }
+
     pub const fn offset(&self) -> ListOffset {
         self.reference
     }
@@ -2408,24 +2415,20 @@ impl StructListBuilder<'_> {
     #[inline(always)]
     pub fn get(&mut self, index: u32) -> Result<StructBuilder<'_>, ArenaError> {
         check_index(index, self.len())?;
-        let (data_words, pointer_count) = self
-            .reference
-            .inline_struct_size
-            .ok_or(ArenaError::AllocationOverflow)?;
-        let step = u64::from(data_words) + u64::from(pointer_count);
-        let content = add_words(
-            self.reference.content,
-            u64::from(index)
-                .checked_mul(step)
-                .ok_or(ArenaError::AllocationOverflow)?,
-        )?;
+        // Allocation validated the complete inline-composite extent. Therefore
+        // an in-range index cannot overflow either operation below.
+        let word_offset = self.reference.content.word_offset + index * self.element_stride_words;
+        let content = WordOffset {
+            segment_id: self.reference.content.segment_id,
+            word_offset,
+        };
         Ok(StructBuilder {
             arena: self.arena,
             reference: StructOffset {
                 arena_id: self.reference.arena_id,
                 content,
-                data_words,
-                pointer_count,
+                data_words: self.element_data_words,
+                pointer_count: self.element_pointer_count,
             },
         })
     }
