@@ -550,6 +550,14 @@ mod tests {
         assert_eq!(reader.defaulted(), 123_456);
         assert_eq!(reader.color(), Color::Red);
         assert_eq!(reader.color_ordinal(), 0);
+        assert_eq!(
+            reader
+                .default_text()
+                .expect("missing pointer uses schema default")
+                .to_str()
+                .expect("default is UTF-8"),
+            "default text"
+        );
         assert!(
             reader
                 .uint16s()

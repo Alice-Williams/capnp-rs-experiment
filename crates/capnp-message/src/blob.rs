@@ -174,6 +174,20 @@ impl<'a> MessageSegments<'a> {
     }
 
     #[inline(always)]
+    pub(crate) fn read_text_or<B: TraversalBudget>(
+        &self,
+        location: WireLocation,
+        budget: &B,
+        nesting: NestingLimit,
+        default: TextReader<'a>,
+    ) -> Result<TextReader<'a>, BlobError> {
+        match self.byte_list(location, budget, nesting)? {
+            Some(bytes) => TextReader::from_bytes_with_nul(bytes),
+            None => Ok(default),
+        }
+    }
+
+    #[inline(always)]
     fn byte_list<B: TraversalBudget>(
         &self,
         location: WireLocation,

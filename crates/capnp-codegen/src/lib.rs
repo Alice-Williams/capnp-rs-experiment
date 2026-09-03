@@ -1374,10 +1374,17 @@ fn emit_borrowed_reader_field(
         .map_err(|_| GenerateError::Format);
     }
     let body = match (ty, default_value) {
-        (Type::Text, Value::Text(value)) if value.is_empty() => Some((
-            "capnp_message::TextReader<'data>".to_owned(),
-            format!("self.pointers.read_text({offset})"),
-        )),
+        (Type::Text, Value::Text(value)) => {
+            let expression = if value.is_empty() {
+                format!("self.pointers.read_text({offset})")
+            } else {
+                let literal = format!("{value:?}");
+                format!(
+                    "self.pointers.read_text_with_default({offset}, concat!({literal}, \"\\0\").as_bytes())"
+                )
+            };
+            Some(("capnp_message::TextReader<'data>".to_owned(), expression))
+        }
         (Type::Data, Value::Data(value)) if value.is_empty() => Some((
             "capnp_message::DataReader<'data>".to_owned(),
             format!("self.pointers.read_data({offset})"),
@@ -2955,6 +2962,9 @@ mod tests {
                 .source
                 .contains("Result<capnp_message::TextReader<'data>")
         );
+        assert!(generated.source.contains(
+            "self.pointers.read_text_with_default(25, concat!(\"default text\", \"\\0\").as_bytes())"
+        ));
         assert!(
             generated
                 .source

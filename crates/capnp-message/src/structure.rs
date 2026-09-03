@@ -158,6 +158,26 @@ impl<'context, 'data, B: TraversalBudget> PointerSection<'context, 'data, B> {
         }
     }
 
+    /// Reads a Text field, substituting a schema default when the pointer is
+    /// absent or null. `default_with_nul` includes the mandatory Text
+    /// terminator.
+    #[inline(always)]
+    pub fn read_text_with_default(
+        self,
+        index: u16,
+        default_with_nul: &'data [u8],
+    ) -> Result<TextReader<'data>, StructReadError> {
+        let default = TextReader::from_bytes_with_nul(default_with_nul)?;
+        match self.location(index)? {
+            Some(location) => {
+                Ok(self
+                    .segments
+                    .read_text_or(location, self.budget, self.nesting, default)?)
+            }
+            None => Ok(default),
+        }
+    }
+
     #[inline(always)]
     pub fn read_data(self, index: u16) -> Result<DataReader<'data>, StructReadError> {
         match self.location(index)? {
