@@ -486,6 +486,7 @@ mod tests {
         let metadata = reader.metadata();
         assert_eq!(metadata.created(), 9_876_543_210);
         assert!(metadata.valid());
+        assert_eq!(reader.node().expect("borrowed node").value(), 10);
         assert!(
             reader
                 .text()

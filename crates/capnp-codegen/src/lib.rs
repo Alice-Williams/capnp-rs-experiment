@@ -1181,7 +1181,7 @@ fn emit_borrowed_reader(
         .map_err(|_| GenerateError::Format)?;
     writeln!(output, "    impl<'context, 'data, B: capnp_message::TraversalBudget> BorrowedReader<'context, 'data, B> {{")
         .map_err(|_| GenerateError::Format)?;
-    writeln!(output, "        #[doc(hidden)]\n        pub fn from_reader(inner: capnp_message::StructReader<'context, 'data, B>) -> Result<Self, capnp_schema::DynamicError> {{ let data = inner.data_section()?; Ok(Self::from_sections(inner.pointer_section()?, data)) }}")
+    writeln!(output, "        #[doc(hidden)]\n        pub fn from_reader(inner: capnp_message::StructReader<'context, 'data, B>) -> Result<Self, capnp_message::StructReadError> {{ let data = inner.data_section()?; Ok(Self::from_sections(inner.pointer_section()?, data)) }}")
         .map_err(|_| GenerateError::Format)?;
     writeln!(output, "        #[doc(hidden)]\n        pub(super) fn from_sections(pointers: capnp_message::PointerSection<'context, 'data, B>, data: capnp_message::DataSection<'data>) -> Self {{ let full_data = data.as_bytes().get(..{data_bytes}).and_then(|bytes| bytes.try_into().ok()); Self {{ pointers, data, full_data }} }}")
         .map_err(|_| GenerateError::Format)?;
@@ -1218,7 +1218,7 @@ fn emit_borrowed_reader(
     writeln!(output, "    }}").map_err(|_| GenerateError::Format)?;
     writeln!(output, "    impl<'context, 'data> BorrowedReader<'context, 'data, capnp_message::LocalTraversalBudget> {{")
         .map_err(|_| GenerateError::Format)?;
-    writeln!(output, "        pub fn from_root(message: &'context capnp_message::BorrowedMessage<'data>) -> Result<Self, capnp_schema::DynamicError> {{ Self::from_reader(message.root_struct()?) }}")
+    writeln!(output, "        pub fn from_root(message: &'context capnp_message::BorrowedMessage<'data>) -> Result<Self, capnp_message::StructReadError> {{ Self::from_reader(message.root_struct()?) }}")
         .map_err(|_| GenerateError::Format)?;
     writeln!(output, "    }}").map_err(|_| GenerateError::Format)?;
     Ok(())
@@ -1273,6 +1273,17 @@ fn emit_borrowed_reader_field(
             "        pub fn {method}(&self) -> {name} {{ {name}::from_ordinal(self.{ordinal_method}()) }}"
         )
         .map_err(|_| GenerateError::Format);
+    }
+    if let (Type::Struct { type_id, brand }, Value::Struct(default)) = (ty, default_value) {
+        if matches!(default.kind, capnp_schema::OpaquePointerKind::Null) && brand.scopes.is_empty()
+        {
+            let target = names.reference(*type_id, true)?;
+            return writeln!(
+                output,
+                "        pub fn {method}(&self) -> Result<{target}::BorrowedReader<'context, 'data, B>, capnp_message::StructReadError> {{ {target}::BorrowedReader::from_reader(self.pointers.read_struct({offset})?) }}"
+            )
+            .map_err(|_| GenerateError::Format);
+        }
     }
     if let Some((return_type, fallback)) =
         borrowed_total_data_value(ty, default_value, *offset, names)?
@@ -2749,6 +2760,11 @@ mod tests {
             generated
                 .source
                 .contains("Result<capnp_message::TextReader<'data>")
+        );
+        assert!(
+            generated
+                .source
+                .contains("BorrowedReader::from_reader(self.pointers.read_struct(22)?)")
         );
     }
 

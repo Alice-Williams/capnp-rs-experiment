@@ -151,6 +151,23 @@ impl<'context, 'data, B: TraversalBudget> PointerSection<'context, 'data, B> {
             None => Ok(DataReader::empty()),
         }
     }
+
+    #[inline]
+    pub fn read_struct(
+        self,
+        index: u16,
+    ) -> Result<StructReader<'context, 'data, B>, StructReadError> {
+        match self.location(index)? {
+            Some(location) => self
+                .segments
+                .read_struct(location, self.budget, self.nesting),
+            None => Ok(StructReader::empty_from_context(
+                self.segments,
+                self.budget,
+                self.nesting,
+            )),
+        }
+    }
 }
 
 impl<'context, 'data, B> Clone for StructReader<'context, 'data, B> {
