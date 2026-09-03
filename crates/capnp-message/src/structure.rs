@@ -387,7 +387,7 @@ impl<'context, 'data, B: TraversalBudget> StructReader<'context, 'data, B> {
         self.read_text_with_default(index, default)
     }
 
-    #[inline(never)]
+    #[inline(always)]
     fn read_text_at(&self, location: WireLocation) -> Result<TextReader<'data>, StructReadError> {
         Ok(self
             .segments
@@ -429,7 +429,7 @@ impl<'context, 'data, B: TraversalBudget> StructReader<'context, 'data, B> {
         self.read_data_with_default(index, default)
     }
 
-    #[inline(never)]
+    #[inline(always)]
     fn read_data_at(&self, location: WireLocation) -> Result<DataReader<'data>, StructReadError> {
         Ok(self
             .segments

@@ -10,7 +10,7 @@ use core::fmt;
 
 use capnp_wire::ElementSize;
 
-use crate::validation::ValidatedByteList;
+use crate::validation::FastByteList;
 use crate::{
     MessageSegments, NestingLimit, ResolvedPointer, TraversalBudget, TraversalError, WireLocation,
 };
@@ -180,12 +180,21 @@ impl<'a> MessageSegments<'a> {
         budget: &B,
         nesting: NestingLimit,
     ) -> Result<Option<&'a [u8]>, BlobError> {
-        let bounded =
-            match self.validate_byte_list_pointer_with_limits(location, budget, nesting)? {
-                ValidatedByteList::Null => return Ok(None),
-                ValidatedByteList::Bytes(bytes) => return Ok(Some(bytes)),
-                ValidatedByteList::Other(bounded) => bounded,
-            };
+        match self.try_read_byte_list_fast(location, budget, nesting) {
+            FastByteList::Null => Ok(None),
+            FastByteList::Bytes(bytes) => Ok(Some(bytes)),
+            FastByteList::Slow => self.byte_list_slow(location, budget, nesting),
+        }
+    }
+
+    #[inline(never)]
+    fn byte_list_slow<B: TraversalBudget>(
+        &self,
+        location: WireLocation,
+        budget: &B,
+        nesting: NestingLimit,
+    ) -> Result<Option<&'a [u8]>, BlobError> {
+        let bounded = self.validate_pointer_with_limits(location, budget, nesting)?;
         let list = match bounded.pointer {
             ResolvedPointer::Null => return Ok(None),
             ResolvedPointer::List(list) => list,
@@ -320,5 +329,28 @@ mod tests {
             ),
             Err(BlobError::TextMissingNul)
         );
+    }
+
+    #[test]
+    fn far_byte_lists_use_the_full_validator_and_exact_charge() {
+        let mut source = vec![0u8; 8];
+        WirePointer::new_far(false, 0, 1)
+            .expect("far pointer fits")
+            .write_to(&mut source, 0)
+            .expect("source pointer fits");
+        let mut target = vec![0u8; 16];
+        WirePointer::new_list(0, ElementSize::Byte, 3)
+            .expect("byte-list pointer fits")
+            .write_to(&mut target, 0)
+            .expect("landing pad fits");
+        target[8..11].copy_from_slice(b"abc");
+
+        let segments = MessageSegments::new(&[&source, &target]).expect("segments are aligned");
+        let budget = LocalTraversalBudget::new(2);
+        let data = segments
+            .read_data(WireLocation::ROOT, &budget, NestingLimit::new(1))
+            .expect("single-far byte list reads");
+        assert_eq!(data.as_bytes(), b"abc");
+        assert_eq!(budget.remaining_words(), 0);
     }
 }

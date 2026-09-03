@@ -72,10 +72,10 @@ pub struct BoundedPointer {
     pub charged_words: u64,
 }
 
-pub(crate) enum ValidatedByteList<'a> {
+pub(crate) enum FastByteList<'a> {
     Null,
     Bytes(&'a [u8]),
-    Other(BoundedPointer),
+    Slow,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -259,6 +259,76 @@ impl<'a> MessageSegments<'a> {
         }
     }
 
+    #[inline(always)]
+    pub(crate) fn try_read_byte_list_fast<B: TraversalBudget>(
+        &self,
+        location: WireLocation,
+        budget: &B,
+        nesting: NestingLimit,
+    ) -> FastByteList<'a> {
+        let Some(source_segment) = self.segment(location.segment_id) else {
+            return FastByteList::Slow;
+        };
+        let Some(byte_offset) = usize::try_from(location.word_offset)
+            .ok()
+            .and_then(|offset| offset.checked_mul(8))
+        else {
+            return FastByteList::Slow;
+        };
+        let Some(pointer_bytes) = byte_offset
+            .checked_add(8)
+            .and_then(|end| source_segment.get(byte_offset..end))
+        else {
+            return FastByteList::Slow;
+        };
+        let wire_pointer = WirePointer::from_le_bytes(
+            pointer_bytes
+                .try_into()
+                .expect("a checked wire-word range is exactly eight bytes"),
+        );
+        if wire_pointer.is_null() {
+            return FastByteList::Null;
+        }
+        if wire_pointer.kind() != PointerKind::List {
+            return FastByteList::Slow;
+        }
+        let fields = wire_pointer
+            .list_fields()
+            .expect("list discriminator was checked");
+        if fields.element_size != ElementSize::Byte {
+            return FastByteList::Slow;
+        }
+
+        let target = i64::from(location.word_offset) + 1 + i64::from(fields.offset);
+        let Ok(target_word) = u32::try_from(target) else {
+            return FastByteList::Slow;
+        };
+        let charged_words = u64::from(fields.count).div_ceil(8);
+        let Some(target_end) = u64::from(target_word).checked_add(charged_words) else {
+            return FastByteList::Slow;
+        };
+        if target_end > source_segment.len() as u64 / 8 {
+            return FastByteList::Slow;
+        }
+        let Some(start) = usize::try_from(target_word)
+            .ok()
+            .and_then(|offset| offset.checked_mul(8))
+        else {
+            return FastByteList::Slow;
+        };
+        let Some(bytes) = usize::try_from(fields.count)
+            .ok()
+            .and_then(|count| start.checked_add(count))
+            .and_then(|end| source_segment.get(start..end))
+        else {
+            return FastByteList::Slow;
+        };
+        if nesting.remaining() == 0 || budget.try_charge(charged_words).is_err() {
+            return FastByteList::Slow;
+        }
+        FastByteList::Bytes(bytes)
+    }
+
     /// Validates and follows a pointer, returning coordinates rather than native pointers.
     #[inline]
     pub fn validate_pointer(
@@ -362,69 +432,6 @@ impl<'a> MessageSegments<'a> {
             child_nesting,
             charged_words,
         })
-    }
-
-    #[inline(always)]
-    pub(crate) fn validate_byte_list_pointer_with_limits<B: TraversalBudget>(
-        &self,
-        location: WireLocation,
-        budget: &B,
-        nesting: NestingLimit,
-    ) -> Result<ValidatedByteList<'a>, TraversalError> {
-        let (wire_pointer, source_segment) = self.read_pointer_and_segment(location)?;
-        if wire_pointer.is_null() {
-            return Ok(ValidatedByteList::Null);
-        }
-        if wire_pointer.kind() == PointerKind::List {
-            let fields = wire_pointer
-                .list_fields()
-                .expect("list discriminator was checked");
-            if fields.element_size == ElementSize::Byte {
-                let content = positional_target(location, fields.offset)?;
-                let byte_count = usize::try_from(fields.count)
-                    .map_err(|_| ValidationError::TargetWordOverflow)?;
-                let charged_words = list_word_count(ElementSize::Byte, fields.count)?;
-                check_range_in_segment(content, charged_words, source_segment)?;
-                let start = usize::try_from(content.word_offset)
-                    .map_err(|_| ValidationError::TargetWordOverflow)?
-                    .checked_mul(8)
-                    .ok_or(ValidationError::TargetWordOverflow)?;
-                let end = start
-                    .checked_add(byte_count)
-                    .ok_or(ValidationError::TargetWordOverflow)?;
-                let bytes = source_segment
-                    .get(start..end)
-                    .expect("the enclosing checked word range contains the byte list");
-                nesting.descend()?;
-                budget.try_charge(charged_words)?;
-                return Ok(ValidatedByteList::Bytes(bytes));
-            }
-        }
-
-        self.validate_byte_list_pointer_fallback(location, wire_pointer, budget, nesting)
-    }
-
-    #[cold]
-    #[inline(never)]
-    fn validate_byte_list_pointer_fallback<B: TraversalBudget>(
-        &self,
-        location: WireLocation,
-        wire_pointer: WirePointer,
-        budget: &B,
-        nesting: NestingLimit,
-    ) -> Result<ValidatedByteList<'a>, TraversalError> {
-        let pointer = self.validate_wire_pointer(location, wire_pointer)?;
-        let child_nesting = match pointer {
-            ResolvedPointer::Struct(_) | ResolvedPointer::List(_) => nesting.descend()?,
-            ResolvedPointer::Null | ResolvedPointer::Capability(_) => nesting,
-        };
-        let charged_words = traversal_charge(wire_pointer, pointer)?;
-        budget.try_charge(charged_words)?;
-        Ok(ValidatedByteList::Other(BoundedPointer {
-            pointer,
-            child_nesting,
-            charged_words,
-        }))
     }
 
     #[inline(always)]
