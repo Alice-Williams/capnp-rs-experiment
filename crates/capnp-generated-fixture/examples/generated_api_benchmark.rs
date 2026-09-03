@@ -2,6 +2,7 @@ use std::hint::black_box;
 use std::sync::Arc;
 use std::time::Instant;
 
+use capnp_generated_fixture::evolution_v1;
 use capnp_generated_fixture::wire::{Color, choice, wire_fixture};
 use capnp_io::{FrameLimits, FrameRead, parse_frame};
 use capnp_message::{BorrowedMessage, OwnedMessage, ReaderLimits, StructReadError};
@@ -20,11 +21,17 @@ const FRAME: &[u8] = include_bytes!(concat!(
     "e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/",
     "wire-unpacked.bin"
 ));
+const EVOLUTION_FRAME: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../conformance/fixtures/cpp/",
+    "e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/",
+    "evolution-v2-unpacked.bin"
+));
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let mode = args.next().ok_or(
-        "usage: generated_api_benchmark direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups|borrowed-direct-lists|borrowed-lists|borrowed-direct-nested|borrowed-nested|borrowed-direct-struct-lists|borrowed-struct-lists PASSES",
+        "usage: generated_api_benchmark direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups|borrowed-direct-lists|borrowed-lists|borrowed-direct-nested|borrowed-nested|borrowed-direct-struct-lists|borrowed-struct-lists|borrowed-direct-evolution|borrowed-evolution PASSES",
     )?;
     let passes = args.next().ok_or("missing passes")?.parse::<usize>()?;
     if args.next().is_some()
@@ -47,6 +54,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 | "borrowed-nested"
                 | "borrowed-direct-struct-lists"
                 | "borrowed-struct-lists"
+                | "borrowed-direct-evolution"
+                | "borrowed-evolution"
         )
     {
         return Err("expected a known mode and positive PASSES".into());
@@ -77,6 +86,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     let borrowed_direct = borrowed_message.root_struct()?;
     let borrowed = wire_fixture::BorrowedReader::from_root(&borrowed_message)?;
+    let evolution_message = parse_borrowed_message(EVOLUTION_FRAME)?;
+    let evolution_direct = evolution_message.root_struct()?;
+    let evolution = evolution_v1::record::BorrowedReader::from_root(&evolution_message)?;
     let message = owned_frame()?;
     let direct = message.root_struct()?.into_root();
     let generated = wire_fixture::Reader::from_root(schema, Arc::clone(&message))?;
@@ -119,6 +131,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             measure(passes, || direct_struct_list_fingerprint(borrowed_direct))?
         }
         "borrowed-struct-lists" => measure(passes, || borrowed_struct_list_fingerprint(&borrowed))?,
+        "borrowed-direct-evolution" => {
+            measure(passes, || direct_evolution_fingerprint(evolution_direct))?
+        }
+        "borrowed-evolution" => measure(passes, || borrowed_evolution_fingerprint(&evolution))?,
         _ => unreachable!(),
     };
     println!("{}\t{}", started.elapsed().as_nanos(), checksum);
@@ -360,6 +376,68 @@ fn borrowed_struct_list_fingerprint<B: capnp_message::TraversalBudget>(
 ) -> Result<u64, Box<dyn std::error::Error>> {
     let reader = black_box(reader);
     Ok(u64::from(reader.structs()?.get(1)?.value()))
+}
+
+fn direct_evolution_fingerprint<B: capnp_message::TraversalBudget>(
+    reader: capnp_message::StructReader<'_, '_, B>,
+) -> Result<u64, Box<dyn std::error::Error>> {
+    let reader = black_box(reader);
+    let data = reader.data_section()?;
+    let pointers = reader.pointer_section()?;
+    evolution_fingerprint(
+        data.get_u32(0, 0),
+        data.get_u16(2, 0),
+        pointers.read_text(0)?.as_bytes(),
+        pointers.read_list(1)?.as_primitive::<u32>()?.get(1)?,
+    )
+}
+
+fn borrowed_evolution_fingerprint<B: capnp_message::TraversalBudget>(
+    reader: &evolution_v1::record::BorrowedReader<'_, '_, B>,
+) -> Result<u64, Box<dyn std::error::Error>> {
+    let reader = black_box(reader);
+    evolution_fingerprint(
+        reader.id(),
+        reader.state_ordinal(),
+        reader.name()?.as_bytes(),
+        reader.values()?.get(1)?,
+    )
+}
+
+fn evolution_fingerprint(
+    id: u32,
+    state: u16,
+    name: &[u8],
+    second_value: u32,
+) -> Result<u64, Box<dyn std::error::Error>> {
+    let mut value = u64::from(id);
+    value = value.rotate_left(13) ^ u64::from(state);
+    value = value.rotate_left(19) ^ name.len() as u64;
+    value = value.rotate_left(23) ^ u64::from(name.last().copied().unwrap_or_default());
+    Ok(value.rotate_left(29) ^ u64::from(second_value))
+}
+
+fn parse_borrowed_message(bytes: &[u8]) -> Result<BorrowedMessage<'_>, Box<dyn std::error::Error>> {
+    let FrameRead::Message { frame, remaining } = parse_frame(bytes, FrameLimits::default())?
+    else {
+        return Err("fixture is empty".into());
+    };
+    if !remaining.is_empty() {
+        return Err("fixture has trailing bytes".into());
+    }
+    let segments = frame
+        .segments()
+        .iter()
+        .map(|segment| segment.bytes())
+        .collect::<Vec<_>>();
+    BorrowedMessage::new(
+        &segments,
+        ReaderLimits {
+            traversal_words: u64::MAX,
+            nesting_levels: 64,
+        },
+    )
+    .map_err(Into::into)
 }
 
 fn owned_frame() -> Result<Arc<OwnedMessage>, Box<dyn std::error::Error>> {

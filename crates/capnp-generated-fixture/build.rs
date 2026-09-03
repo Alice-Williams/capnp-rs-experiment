@@ -15,6 +15,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut sources = ModuleSources::default();
     for name in [
         "wire-fixture",
+        "evolution-v1",
         "evolution-v2",
         "import-fixture",
         "language-fixture",
@@ -28,6 +29,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let output = PathBuf::from(env::var_os("OUT_DIR").ok_or("missing output dir")?);
     for (schema, destination) in [
         ("wire-fixture", "wire_fixture.rs"),
+        ("evolution-v1", "evolution_v1.rs"),
         ("evolution-v2", "evolution_v2.rs"),
         ("import-fixture", "import_fixture.rs"),
         ("language-fixture", "language_fixture.rs"),

@@ -28,10 +28,15 @@ mkdir -p -- "$cpp_build"
     -I"$cpp_root/install/include" \
     -o"$cpp_root/install/bin/capnpc-c++:$cpp_build" \
     conformance/schemas/wire-fixture.capnp
+"$cpp_root/install/bin/capnp" compile \
+    -I"$cpp_root/install/include" \
+    -o"$cpp_root/install/bin/capnpc-c++:$cpp_build" \
+    conformance/schemas/evolution-v1.capnp
 clang++ -std=c++23 -O3 -DNDEBUG -pthread \
     -I"$cpp_root/install/include" -I"$cpp_build" \
     "$repo_root/benchmarks/generated-api/cpp/main.c++" \
     "$cpp_build/conformance/schemas/wire-fixture.capnp.c++" \
+    "$cpp_build/conformance/schemas/evolution-v1.capnp.c++" \
     -L"$cpp_root/install/lib" -lcapnp-rpc -lcapnp -lkj-async -lkj \
     -o "$cpp_build/cpp-generated-api"
 cargo build --locked --manifest-path "$repo_root/Cargo.toml" \
@@ -40,6 +45,7 @@ cargo build --locked --manifest-path "$repo_root/Cargo.toml" \
 cpp_benchmark="$cpp_build/cpp-generated-api"
 native_benchmark="$repo_root/target/release/examples/generated_api_benchmark"
 fixture="$repo_root/conformance/fixtures/cpp/$cpp_commit/wire-unpacked.bin"
+evolution_fixture="$repo_root/conformance/fixtures/cpp/$cpp_commit/evolution-v2-unpacked.bin"
 native_commit=$(git -C "$repo_root" rev-parse HEAD)
 mkdir -p -- "$output"
 {
@@ -54,6 +60,7 @@ mkdir -p -- "$output"
     printf 'cpp_oracle_commit=%s\n' "$cpp_commit"
     printf 'schema=conformance/schemas/wire-fixture.capnp\n'
     printf 'fixture=wire-unpacked.bin\n'
+    printf 'evolution_fixture=evolution-v2-unpacked.bin read through evolution-v1 schema\n'
     printf 'cpp_primitive=generated WireFixture::Reader paired with AnyStruct::Reader\n'
     printf 'native_retained_primitive=generated wire_fixture::Reader paired with retained StructReader\n'
     printf 'native_borrowed_primitive=generated wire_fixture::BorrowedReader paired with BorrowedMessage root StructReader\n'
@@ -82,13 +89,17 @@ workloads=(
     borrowed-nested
     borrowed-direct-struct-lists
     borrowed-struct-lists
+    borrowed-direct-evolution
+    borrowed-evolution
 )
 
 run_workload() {
-    local implementation=$1 case_name=$2 run=$3 executable measurement elapsed_ns checksum
+    local implementation=$1 case_name=$2 run=$3 executable measurement elapsed_ns checksum case_fixture
     if [[ "$implementation" == cpp ]]; then
         executable=$cpp_benchmark
-        measurement=$("$executable" "$case_name" "$passes" "$fixture")
+        case_fixture=$fixture
+        if [[ "$case_name" == *-evolution ]]; then case_fixture=$evolution_fixture; fi
+        measurement=$("$executable" "$case_name" "$passes" "$case_fixture")
     else
         executable=$native_benchmark
         measurement=$("$executable" "$case_name" "$passes")

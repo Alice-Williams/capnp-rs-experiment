@@ -1,4 +1,5 @@
 #include "conformance/schemas/wire-fixture.capnp.h"
+#include "conformance/schemas/evolution-v1.capnp.h"
 
 #include <capnp/any.h>
 #include <capnp/endian.h>
@@ -204,6 +205,32 @@ uint64_t generatedStructListFingerprint(WireFixture::Reader root) {
   return root.getStructs()[1].getValue();
 }
 
+uint64_t evolutionFingerprint(
+    uint32_t id, uint16_t state, kj::ArrayPtr<const capnp::byte> name,
+    uint32_t secondValue) {
+  uint64_t value = id;
+  value = std::rotl(value, 13) ^ state;
+  value = std::rotl(value, 19) ^ uint64_t{name.size()};
+  value = std::rotl(value, 23)
+      ^ static_cast<uint64_t>(name.size() == 0 ? 0 : name[name.size() - 1]);
+  return std::rotl(value, 29) ^ secondValue;
+}
+
+uint64_t directEvolutionFingerprint(capnp::AnyStruct::Reader root) {
+  auto data = root.getDataSection();
+  auto pointers = root.getPointerSection();
+  return evolutionFingerprint(
+      readData<uint32_t>(data, 0), readData<uint16_t>(data, 2),
+      pointers[0].getAs<capnp::Text>().asBytes(),
+      pointers[1].getAs<capnp::List<uint32_t>>()[1]);
+}
+
+uint64_t generatedEvolutionFingerprint(Record::Reader root) {
+  return evolutionFingerprint(
+      root.getId(), static_cast<uint16_t>(root.getState()),
+      root.getName().asBytes(), root.getValues()[1]);
+}
+
 template <typename Root, typename Fingerprint>
 uint64_t measure(Root root, Fingerprint fingerprint, size_t passes) {
   uint64_t checksum = SEED;
@@ -219,7 +246,7 @@ uint64_t measure(Root root, Fingerprint fingerprint, size_t passes) {
 
 int main(int argc, char** argv) {
   if (argc != 4) {
-    std::cerr << "usage: cpp-generated-api direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups|borrowed-direct-lists|borrowed-lists|borrowed-direct-nested|borrowed-nested|borrowed-direct-struct-lists|borrowed-struct-lists PASSES FIXTURE\n";
+    std::cerr << "usage: cpp-generated-api direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups|borrowed-direct-lists|borrowed-lists|borrowed-direct-nested|borrowed-nested|borrowed-direct-struct-lists|borrowed-struct-lists|borrowed-direct-evolution|borrowed-evolution PASSES FIXTURE\n";
     return 2;
   }
   auto mode = std::string_view(argv[1]);
@@ -255,6 +282,10 @@ int main(int argc, char** argv) {
     checksum = measure(message.getRoot<capnp::AnyStruct>(), directStructListFingerprint, passes);
   } else if (mode == "borrowed-struct-lists") {
     checksum = measure(message.getRoot<WireFixture>(), generatedStructListFingerprint, passes);
+  } else if (mode == "borrowed-direct-evolution") {
+    checksum = measure(message.getRoot<capnp::AnyStruct>(), directEvolutionFingerprint, passes);
+  } else if (mode == "borrowed-evolution") {
+    checksum = measure(message.getRoot<Record>(), generatedEvolutionFingerprint, passes);
   } else {
     std::cerr << "unknown benchmark mode\n";
     return 2;

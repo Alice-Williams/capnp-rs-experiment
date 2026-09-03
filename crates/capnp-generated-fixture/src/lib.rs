@@ -4,6 +4,10 @@ pub mod wire {
     include!(concat!(env!("OUT_DIR"), "/wire_fixture.rs"));
 }
 
+pub mod evolution_v1 {
+    include!(concat!(env!("OUT_DIR"), "/evolution_v1.rs"));
+}
+
 pub mod evolution_v2 {
     include!(concat!(env!("OUT_DIR"), "/evolution_v2.rs"));
 }
