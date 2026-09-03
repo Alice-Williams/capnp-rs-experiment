@@ -6,8 +6,8 @@ result_dir=${1:-"$repo_root/benchmarks/results/2026-09-03-m55-generated-reader-b
 expected_passes=${2:-100000}
 expected_cases=${3:-4}
 
-if [[ "$expected_cases" != 4 && "$expected_cases" != 6 && "$expected_cases" != 8 && "$expected_cases" != 10 && "$expected_cases" != 12 ]]; then
-    printf 'expected case count must be 4, 6, 8, 10, or 12\n' >&2
+if [[ "$expected_cases" != 4 && "$expected_cases" != 6 && "$expected_cases" != 8 && "$expected_cases" != 10 && "$expected_cases" != 12 && "$expected_cases" != 14 ]]; then
+    printf 'expected case count must be 4, 6, 8, 10, 12, or 14\n' >&2
     exit 2
 fi
 expected_raw_lines=$((1 + expected_cases * 2 * 11))
@@ -42,7 +42,8 @@ awk -F '\t' -v passes="$expected_passes" -v cases="$expected_cases" -v expected_
       !(cases >= 6 && ($2 == "borrowed-scalars" || $2 == "borrowed-blobs")) &&
       !(cases >= 8 && ($2 == "borrowed-direct-scalars" || $2 == "borrowed-direct-blobs")) &&
       !(cases >= 10 && ($2 == "borrowed-direct-groups" || $2 == "borrowed-groups")) &&
-      !(cases == 12 && ($2 == "borrowed-direct-lists" || $2 == "borrowed-lists")) { exit 1 }
+      !(cases >= 12 && ($2 == "borrowed-direct-lists" || $2 == "borrowed-lists")) &&
+      !(cases == 14 && ($2 == "borrowed-direct-nested" || $2 == "borrowed-nested")) { exit 1 }
   {
     shape = $2
     sub(/^(borrowed-direct|direct|generated|borrowed)-/, "", shape)

@@ -78,6 +78,8 @@ workloads=(
     borrowed-groups
     borrowed-direct-lists
     borrowed-lists
+    borrowed-direct-nested
+    borrowed-nested
 )
 
 run_workload() {

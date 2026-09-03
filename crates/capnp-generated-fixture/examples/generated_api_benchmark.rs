@@ -24,7 +24,7 @@ const FRAME: &[u8] = include_bytes!(concat!(
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let mode = args.next().ok_or(
-        "usage: generated_api_benchmark direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups|borrowed-direct-lists|borrowed-lists PASSES",
+        "usage: generated_api_benchmark direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups|borrowed-direct-lists|borrowed-lists|borrowed-direct-nested|borrowed-nested PASSES",
     )?;
     let passes = args.next().ok_or("missing passes")?.parse::<usize>()?;
     if args.next().is_some()
@@ -43,6 +43,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 | "borrowed-groups"
                 | "borrowed-direct-lists"
                 | "borrowed-lists"
+                | "borrowed-direct-nested"
+                | "borrowed-nested"
         )
     {
         return Err("expected a known mode and positive PASSES".into());
@@ -105,6 +107,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "borrowed-groups" => measure(passes, || Ok(borrowed_group_fingerprint(&borrowed)))?,
         "borrowed-direct-lists" => measure(passes, || direct_list_fingerprint(borrowed_direct))?,
         "borrowed-lists" => measure(passes, || borrowed_list_fingerprint(&borrowed))?,
+        "borrowed-direct-nested" => measure(passes, || {
+            direct_nested_fingerprint(borrowed_direct).map_err(Into::into)
+        })?,
+        "borrowed-nested" => measure(passes, || {
+            borrowed_nested_fingerprint(&borrowed).map_err(Into::into)
+        })?,
         _ => unreachable!(),
     };
     println!("{}\t{}", started.elapsed().as_nanos(), checksum);
@@ -312,6 +320,21 @@ fn list_fingerprint(integer: u16, color: u16, text: &[u8], data: &[u8], nested: 
     value = value.rotate_left(29) ^ data.len() as u64;
     value = value.rotate_left(31) ^ u64::from(data.last().copied().unwrap_or_default());
     value.rotate_left(37) ^ u64::from(nested)
+}
+
+fn direct_nested_fingerprint<B: capnp_message::TraversalBudget>(
+    reader: capnp_message::StructReader<'_, '_, B>,
+) -> Result<u64, StructReadError> {
+    let reader = black_box(reader);
+    let nested = reader.pointer_section()?.read_struct(22)?;
+    Ok(u64::from(nested.data_section()?.get_u32(0, 0)))
+}
+
+fn borrowed_nested_fingerprint<B: capnp_message::TraversalBudget>(
+    reader: &wire_fixture::BorrowedReader<'_, '_, B>,
+) -> Result<u64, StructReadError> {
+    let reader = black_box(reader);
+    Ok(u64::from(reader.node()?.value()))
 }
 
 fn owned_frame() -> Result<Arc<OwnedMessage>, Box<dyn std::error::Error>> {
