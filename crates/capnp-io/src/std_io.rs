@@ -79,15 +79,15 @@ pub fn read_frame<R: Read>(
     reader: &mut R,
     limits: FrameLimits,
 ) -> Result<Option<Vec<u8>>, IoFrameError> {
-    let mut header = [0_u8; 4];
-    let read = read_until_full(reader, &mut header)?;
+    let mut prefix = [0_u8; 8];
+    let read = read_until_full(reader, &mut prefix)?;
     if read == 0 {
         return Ok(None);
     }
-    if read != header.len() {
+    if read < 4 {
         return Err(FrameError::TruncatedHeader { available: read }.into());
     }
-    let count = read_u32_le(&header, 0)
+    let count = read_u32_le(&prefix, 0)
         .expect("complete header")
         .checked_add(1)
         .ok_or(FrameError::SegmentCountOverflow)?;
@@ -103,39 +103,36 @@ pub fn read_frame<R: Read>(
     let table_len = (count_usize / 2 + 1)
         .checked_mul(8)
         .ok_or(FrameError::BodyLengthOverflow)?;
-    if table_len == 8 {
-        let mut table = [0_u8; 8];
-        table[..4].copy_from_slice(&header);
-        let table_read = read_until_full(reader, &mut table[4..])?;
-        if table_read != 4 {
-            return Err(FrameError::TruncatedSegmentTable {
-                expected: 8,
-                available: table_read + 4,
-            }
-            .into());
+    if read < prefix.len() {
+        return Err(FrameError::TruncatedSegmentTable {
+            expected: table_len,
+            available: read,
         }
-        return finish_read_frame(reader, &table, count_usize, limits).map(Some);
+        .into());
+    }
+    if table_len == 8 {
+        return finish_read_frame(reader, &prefix, count_usize, limits).map(Some);
     }
     const STACK_TABLE_SEGMENTS: usize = 64;
     const STACK_TABLE_LEN: usize = (STACK_TABLE_SEGMENTS / 2 + 1) * 8;
     let mut stack_table = [0_u8; STACK_TABLE_LEN];
     let mut heap_table = Vec::new();
     let table = if table_len <= STACK_TABLE_LEN {
-        stack_table[..4].copy_from_slice(&header);
+        stack_table[..8].copy_from_slice(&prefix);
         &mut stack_table[..table_len]
     } else {
         heap_table
             .try_reserve_exact(table_len)
             .map_err(|_| io::Error::other("frame table allocation failed"))?;
-        heap_table.extend_from_slice(&header);
+        heap_table.extend_from_slice(&prefix);
         heap_table.resize(table_len, 0);
         heap_table.as_mut_slice()
     };
-    let table_read = read_until_full(reader, &mut table[4..])?;
-    if table_read != table_len - 4 {
+    let table_read = read_until_full(reader, &mut table[8..])?;
+    if table_read != table_len - 8 {
         return Err(FrameError::TruncatedSegmentTable {
             expected: table_len,
-            available: table_read + 4,
+            available: table_read + 8,
         }
         .into());
     }
@@ -179,8 +176,10 @@ fn finish_read_frame<R: Read>(
         .try_reserve_exact(encoded_len)
         .map_err(|_| io::Error::other("frame allocation failed"))?;
     frame.extend_from_slice(table);
-    frame.resize(encoded_len, 0);
-    let body_read = read_until_full(reader, &mut frame[table.len()..])?;
+    let body_read = reader
+        .take(body_len as u64)
+        .read_to_end(&mut frame)
+        .map_err(IoFrameError::from)?;
     if body_read != body_len {
         return Err(FrameError::TruncatedBody {
             expected: body_len,
