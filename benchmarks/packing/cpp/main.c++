@@ -16,6 +16,7 @@
 namespace {
 
 constexpr uint64_t SEED = 0x4d595df4d0f33173ull;
+constexpr size_t STREAM_DECODE_CHUNK_BYTES = 257;
 
 size_t parseSize(const char* text) {
   size_t result = 0;
@@ -125,7 +126,7 @@ std::vector<uint8_t> unpackStreaming(
     const std::vector<uint8_t>& packed, size_t outputSize) {
   kj::ArrayInputStream input(kj::arrayPtr(
       reinterpret_cast<const kj::byte*>(packed.data()), packed.size()));
-  std::array<kj::byte, 7> inputBuffer;
+  std::array<kj::byte, STREAM_DECODE_CHUNK_BYTES> inputBuffer;
   kj::BufferedInputStreamWrapper buffered(
       input, kj::arrayPtr(inputBuffer.data(), inputBuffer.size()));
   capnp::_::PackedInputStream unpacked(buffered);
