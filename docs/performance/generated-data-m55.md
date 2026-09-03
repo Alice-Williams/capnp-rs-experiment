@@ -400,3 +400,40 @@ access remains 40.9% slower than generated C++ in absolute terms, it easily
 preserves the ownership model's paired 6.267 cumulative ceiling and adds no
 resolvable generated overhead. The retained scalar generated-API gate is
 closed; reducing the retained ownership floor itself remains lower-layer work.
+
+## Scalar-builder gate
+
+Generated scalar and enum setters now embed their wire offsets and defaults and
+call the checked `StructBuilder` primitives directly. They no longer resolve a
+field name, clone schema metadata, or dispatch through `DynamicInput` for an
+ordinary non-union field. Union setters retain the dynamic activation path so
+that writing a member still updates its discriminant.
+
+The paired workload mutates every scalar and enum field plus the scalar-default
+field on one preallocated `WireFixture` root. Values vary on every iteration,
+both implementations place an optimizer barrier around the mutable builder,
+and all four paths produce the same checksum. Root construction and allocation
+are outside this hot-setter timing; cold construction remains a separate gate.
+
+Final five-million-operation evidence at native commit `0a1c550` is in
+[`benchmarks/results/2026-09-03-m55-generated-builder-scalars-final-5m-g-drive-docker`](../../benchmarks/results/2026-09-03-m55-generated-builder-scalars-final-5m-g-drive-docker).
+
+| Operation | C++ ns/op | Native ns/op | Native / C++ |
+| --- | ---: | ---: | ---: |
+| direct scalar writes | 15.5077 | 36.7342 | 2.369 |
+| generated scalar writes | 17.6091 | 38.6834 | 2.197 |
+
+Generated Rust improves on the paired direct-runtime ratio and stays beneath
+its 2.440 cumulative ceiling after the 3% tolerance. The paired incremental
+generated cost is 1.13 ns in Rust versus 1.79 ns in C++, an incremental ratio
+of 0.631. The generated scalar-builder layer therefore closes its M55 gate.
+
+Inlining the small checked write path across the wire, message, and generated
+crates materially reduced native setter cost. The remaining roughly 2.2x
+absolute gap is shared lower-layer work: Rust revalidates the data-section
+coordinate, segment, and byte range on each safe setter, while generated C++
+retains a direct data pointer and emits a bounds-specialized store. It does not
+come from generated lookup or metadata work. A future safe direct-data builder
+view may reduce this floor, but it must not hold an invalidatable slice across
+arena growth. Blob, struct, list, union, default, and evolution builder gates
+remain open.
