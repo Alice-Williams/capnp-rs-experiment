@@ -267,34 +267,10 @@ impl<'context, 'data, B: TraversalBudget> ListReader<'context, 'data, B> {
     }
 
     pub fn as_pointers(self) -> Result<PointerListReader<'context, 'data, B>, ListReadError> {
-        let layout = self.layout()?;
         if self.reference.is_some() {
-            compatible(layout, ElementSize::Pointer)?;
+            compatible(self.layout()?, ElementSize::Pointer)?;
         }
-        let (first, step_words, inline) = match self.reference {
-            None => (None, 0, false),
-            Some(reference) if reference.element_size == ElementSize::Pointer => {
-                (Some(reference.content), 1, false)
-            }
-            Some(reference) => {
-                let data_words = layout.data_bits / 64;
-                (
-                    Some(add_words(reference.content, data_words)?),
-                    u32::try_from(layout.step_bits / 64)
-                        .map_err(|_| ListReadError::RangeOverflow)?,
-                    true,
-                )
-            }
-        };
-        Ok(PointerListReader {
-            segments: self.segments,
-            budget: self.budget,
-            first,
-            len: self.len(),
-            step_words,
-            nesting: self.nesting,
-            inline,
-        })
+        Ok(PointerListReader { list: self })
     }
 
     pub fn as_structs(self) -> Result<StructListReader<'context, 'data, B>, ListReadError> {
@@ -552,13 +528,7 @@ impl<B: TraversalBudget, E: TryFrom<u16>> Iterator for EnumListIter<'_, '_, B, E
 
 #[derive(Debug)]
 pub struct PointerListReader<'context, 'data, B> {
-    segments: &'context MessageSegments<'data>,
-    budget: &'context B,
-    first: Option<WireLocation>,
-    len: u32,
-    step_words: u32,
-    nesting: NestingLimit,
-    inline: bool,
+    list: ListReader<'context, 'data, B>,
 }
 
 impl<'context, 'data, B> Clone for PointerListReader<'context, 'data, B> {
@@ -570,7 +540,7 @@ impl<'context, 'data, B> Copy for PointerListReader<'context, 'data, B> {}
 
 impl<'context, 'data, B: TraversalBudget> PointerListReader<'context, 'data, B> {
     pub const fn len(self) -> u32 {
-        self.len
+        self.list.len()
     }
 
     pub const fn is_empty(self) -> bool {
@@ -580,31 +550,44 @@ impl<'context, 'data, B: TraversalBudget> PointerListReader<'context, 'data, B> 
     pub fn get(self, index: u32) -> Result<ResolvedPointerField<'context, 'data>, ListReadError> {
         let (location, nesting) = self.element_location(index)?;
         Ok(ResolvedPointerField {
-            source: self.segments,
-            value: self
-                .segments
-                .validate_pointer_with_limits(location, self.budget, nesting)?,
+            source: self.list.segments,
+            value: self.list.segments.validate_pointer_with_limits(
+                location,
+                self.list.budget,
+                nesting,
+            )?,
         })
     }
 
     pub fn get_list(self, index: u32) -> Result<ListReader<'context, 'data, B>, ListReadError> {
         let (location, nesting) = self.element_location(index)?;
-        self.segments.read_list(location, self.budget, nesting)
+        self.list
+            .segments
+            .read_list(location, self.list.budget, nesting)
     }
 
     pub fn get_struct(self, index: u32) -> Result<StructReader<'context, 'data, B>, ListReadError> {
         let (location, nesting) = self.element_location(index)?;
-        Ok(self.segments.read_struct(location, self.budget, nesting)?)
+        Ok(self
+            .list
+            .segments
+            .read_struct(location, self.list.budget, nesting)?)
     }
 
     pub fn read_text(self, index: u32) -> Result<TextReader<'data>, ListReadError> {
         let (location, nesting) = self.element_location(index)?;
-        Ok(self.segments.read_text(location, self.budget, nesting)?)
+        Ok(self
+            .list
+            .segments
+            .read_text(location, self.list.budget, nesting)?)
     }
 
     pub fn read_data(self, index: u32) -> Result<DataReader<'data>, ListReadError> {
         let (location, nesting) = self.element_location(index)?;
-        Ok(self.segments.read_data(location, self.budget, nesting)?)
+        Ok(self
+            .list
+            .segments
+            .read_data(location, self.list.budget, nesting)?)
     }
 
     pub const fn iter(self) -> PointerListIter<'context, 'data, B> {
@@ -619,17 +602,34 @@ impl<'context, 'data, B: TraversalBudget> PointerListReader<'context, 'data, B> 
         index: u32,
     ) -> Result<(WireLocation, NestingLimit), ListReadError> {
         check_index(index, self.len())?;
-        let first = self.first.ok_or(ListReadError::RangeOverflow)?;
+        let reference = self.list.reference.ok_or(ListReadError::RangeOverflow)?;
+        if reference.element_size == ElementSize::Pointer {
+            return Ok((
+                add_words(reference.content, u64::from(index))?,
+                self.list.nesting,
+            ));
+        }
+        let (data_words, pointer_count) =
+            reference
+                .inline_struct_size
+                .ok_or(ListReadError::IncompatibleElementSize {
+                    actual: reference.element_size,
+                    expected: ElementSize::Pointer,
+                })?;
+        if pointer_count == 0 {
+            return Err(ListReadError::IncompatibleElementSize {
+                actual: reference.element_size,
+                expected: ElementSize::Pointer,
+            });
+        }
+        let step = u64::from(data_words) + u64::from(pointer_count);
         let offset = u64::from(index)
-            .checked_mul(u64::from(self.step_words))
+            .checked_mul(step)
+            .and_then(|value| value.checked_add(u64::from(data_words)))
             .ok_or(ListReadError::RangeOverflow)?;
         Ok((
-            add_words(first, offset)?,
-            if self.inline {
-                self.nesting.descend()?
-            } else {
-                self.nesting
-            },
+            add_words(reference.content, offset)?,
+            self.list.nesting.descend()?,
         ))
     }
 }
