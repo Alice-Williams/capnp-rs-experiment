@@ -1,0 +1,4 @@
+segments	cpp_scalar_only_ns	native_scalar_only_ns	scalar_only_native_over_cpp	scalars_native_over_cpp	paired_cpp_scalars_minus_root_ns	paired_native_scalars_minus_root_ns
+1	4.7301	3.8703	0.818	0.288	4.1277	2.2668
+2	3.5185	4.9786	1.415	0.134	10.0029	2.6588
+64	2.0341	1.8254	0.897	0.337	-1.3817	-1.8288

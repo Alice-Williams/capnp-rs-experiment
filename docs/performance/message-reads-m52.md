@@ -278,3 +278,35 @@ cross-crate inline annotations needed by such small checked accessors.
 
 Evidence:
 `benchmarks/results/2026-09-03-m52-blobs-baseline-g-drive-docker/`.
+
+## Final borrowed text/data result
+
+The no-schema-default field path now avoids validating a pointer merely to
+select that same pointer a second time. Direct byte-list pointers use a compact
+success/slow-path discriminator: the success path decodes the pointer once,
+checks its source and target ranges, verifies byte element size and nesting,
+applies the exact traversal charge, and returns the borrowed slice. Nulls stay
+empty. Far pointers, other pointer kinds, malformed targets, and failed limits
+fall back to the general validator, which retains the detailed error behavior.
+No native pointer is cached and no unsafe code is used.
+
+The common successful accessors inline only this compact checked path. Rich
+error construction and schema-default selection remain out of line, preventing
+the general far/error machinery from expanding twice into each caller. The
+benchmark also checks the encoded pointer count once before the two field reads,
+matching C++ `AnyStruct::Reader::getPointerSection()` for the empty-root case.
+
+| Segments | Cumulative C++ ns | Cumulative Rust ns | Rust / C++ | Ceiling | Blob-only Rust / C++ |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 63.1261 | 19.5834 | 0.310 | 0.331 | 0.696 |
+| 2 | 202.8314 | 30.2811 | 0.149 | 0.172 | 0.779 |
+| 64 | 570.5540 | 177.0350 | 0.310 | 0.349 | 0.650 |
+
+Every cumulative and direct component gate passes. The independently isolated
+parse-free blob workloads report Rust/C++ ratios of 0.318, 0.145, and 0.087,
+corroborating the composition result. The regression suite also exercises the
+slow-path single-far byte list and verifies its landing-pad-plus-target charge.
+Retained/owned reopening remains the final open read category.
+
+Evidence:
+`benchmarks/results/2026-09-03-m52-blobs-final-direct-fast-g-drive-docker/`.
