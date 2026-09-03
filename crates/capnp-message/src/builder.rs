@@ -320,6 +320,32 @@ impl ExclusiveArena {
         self.segments.iter().map(|segment| segment.bytes.as_slice())
     }
 
+    /// Clears all used storage and retains the first segment for another message.
+    ///
+    /// Resetting requires exclusive access, so no builder can remain live. Every
+    /// previously used byte is zeroed before additional segments are released,
+    /// and the arena identity changes so copied offsets cannot be reused with the
+    /// next message.
+    #[inline]
+    pub fn reset(&mut self) -> Result<(), ArenaError> {
+        let arena_id = NEXT_ARENA_ID.fetch_add(1, Ordering::Relaxed);
+        if arena_id == u64::MAX {
+            return Err(ArenaError::AllocationOverflow);
+        }
+        for segment in &mut self.segments {
+            segment.bytes.fill(0);
+        }
+        let first = self
+            .segments
+            .first_mut()
+            .expect("an arena always has segment zero");
+        first.bytes.truncate(8);
+        self.segments.truncate(1);
+        self.arena_id = arena_id;
+        self.root_initialized = false;
+        Ok(())
+    }
+
     pub fn as_segment(&self) -> &[u8] {
         self.segment(0).expect("an arena always has segment zero")
     }
@@ -2733,6 +2759,33 @@ mod tests {
                 .map(|_| ()),
             Err(ArenaError::AllocationOverflow)
         );
+    }
+
+    #[test]
+    fn reset_zeroes_storage_drops_extra_segments_and_invalidates_offsets() {
+        let mut arena = ExclusiveArena::new_segmented(1, 2, 3, 5).expect("arena initializes");
+        let old = {
+            let mut root = arena.init_root_struct(2, 0).expect("root initializes");
+            root.set_u64(0, u64::MAX, 0).expect("field writes");
+            root.offset()
+        };
+        assert_eq!(arena.segment_count(), 3);
+        assert!(
+            arena
+                .segments()
+                .any(|segment| segment.iter().any(|byte| *byte != 0))
+        );
+
+        arena.reset().expect("arena resets");
+        assert_eq!(arena.segment_count(), 1);
+        assert_eq!(arena.word_len(), 1);
+        assert_eq!(arena.as_segment(), &[0; 8]);
+
+        let new = arena
+            .init_root_struct(2, 0)
+            .expect("a new root initializes after reset")
+            .offset();
+        assert_ne!(old.arena_id, new.arena_id);
     }
 
     #[test]
