@@ -249,7 +249,9 @@ impl<'context, 'data, B: TraversalBudget> ListReader<'context, 'data, B> {
             compatible(layout, T::ELEMENT_SIZE)?;
         }
         Ok(PrimitiveListReader {
-            list: self,
+            bytes: self.segment()?,
+            len: self.len(),
+            content_start_bits: self.content_start_bits()?,
             step_bits: layout.step_bits,
             marker: PhantomData,
         })
@@ -393,9 +395,11 @@ fn compatible(layout: ElementLayout, expected: ElementSize) -> Result<(), ListRe
 
 #[derive(Debug)]
 pub struct PrimitiveListReader<'context, 'data, B, T> {
-    list: ListReader<'context, 'data, B>,
+    bytes: &'data [u8],
+    len: u32,
+    content_start_bits: u64,
     step_bits: u64,
-    marker: PhantomData<T>,
+    marker: PhantomData<(&'context B, T)>,
 }
 
 impl<'context, 'data, B, T> Clone for PrimitiveListReader<'context, 'data, B, T> {
@@ -410,20 +414,20 @@ impl<'context, 'data, B: TraversalBudget, T: PrimitiveListElement>
     PrimitiveListReader<'context, 'data, B, T>
 {
     pub const fn len(self) -> u32 {
-        self.list.len()
+        self.len
     }
 
     pub const fn is_empty(self) -> bool {
-        self.list.is_empty()
+        self.len == 0
     }
 
     pub fn get(self, index: u32) -> Result<T, ListReadError> {
         check_index(index, self.len())?;
         let bit_offset = u64::from(index)
             .checked_mul(self.step_bits)
-            .and_then(|offset| self.list.content_start_bits().ok()?.checked_add(offset))
+            .and_then(|offset| self.content_start_bits.checked_add(offset))
             .ok_or(ListReadError::RangeOverflow)?;
-        T::read_at(self.list.segment()?, bit_offset)
+        T::read_at(self.bytes, bit_offset)
     }
 
     pub const fn iter(self) -> PrimitiveListIter<'context, 'data, B, T> {
