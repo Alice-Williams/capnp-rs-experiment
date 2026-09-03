@@ -188,16 +188,16 @@ pub fn parse_frame_into<'input, 'storage>(
         .checked_add(1)
         .ok_or(FrameError::SegmentCountOverflow)?;
     check_segment_count(segment_count, limits)?;
-    let count = usize::try_from(segment_count).map_err(|_| FrameError::BodyLengthOverflow)?;
+    // `check_segment_count()` caps this at 512, so conversion and table-size
+    // arithmetic cannot overflow on any supported Rust target.
+    let count = segment_count as usize;
     if count > storage.len() {
         return Err(FrameError::SegmentBufferTooSmall {
             required: count,
             available: storage.len(),
         });
     }
-    let table_len = (count / 2 + 1)
-        .checked_mul(8)
-        .ok_or(FrameError::BodyLengthOverflow)?;
+    let table_len = (count / 2 + 1) * 8;
     if input.len() < table_len {
         return Err(FrameError::TruncatedSegmentTable {
             expected: table_len,
@@ -280,9 +280,9 @@ pub fn parse_frame_into<'input, 'storage>(
     let mut total_words = 0_u64;
     for encoded_words in size_table.chunks_exact(4) {
         let words = u32::from_le_bytes(encoded_words.try_into().expect("four-byte table entry"));
-        total_words = total_words
-            .checked_add(u64::from(words))
-            .ok_or(FrameError::TotalWordsOverflow)?;
+        // At most 512 u32 word counts are admitted above, so the sum cannot
+        // overflow u64.
+        total_words += u64::from(words);
         if total_words > limits.max_total_words {
             return Err(FrameError::MessageTooLarge {
                 words: total_words,
@@ -290,12 +290,8 @@ pub fn parse_frame_into<'input, 'storage>(
             });
         }
     }
-    let body_len = usize::try_from(
-        total_words
-            .checked_mul(WORD_BYTES as u64)
-            .ok_or(FrameError::BodyLengthOverflow)?,
-    )
-    .map_err(|_| FrameError::BodyLengthOverflow)?;
+    let body_len = usize::try_from(total_words * WORD_BYTES as u64)
+        .map_err(|_| FrameError::BodyLengthOverflow)?;
     let encoded_len = table_len
         .checked_add(body_len)
         .ok_or(FrameError::BodyLengthOverflow)?;
@@ -306,16 +302,14 @@ pub fn parse_frame_into<'input, 'storage>(
         });
     }
 
-    let mut body_offset = table_len;
+    let mut body = &input[table_len..encoded_len];
     for (slot, encoded_words) in storage[..count].iter_mut().zip(size_table.chunks_exact(4)) {
         let word_count =
             u32::from_le_bytes(encoded_words.try_into().expect("four-byte table entry"));
         let byte_len = word_count as usize * WORD_BYTES;
-        let end = body_offset + byte_len;
-        *slot = Segment {
-            bytes: &input[body_offset..end],
-        };
-        body_offset = end;
+        let (segment, remaining) = body.split_at(byte_len);
+        *slot = Segment { bytes: segment };
+        body = remaining;
     }
     Ok(BorrowedFrameRead::Message {
         frame: BorrowedFrame {
@@ -629,10 +623,12 @@ fn append_prepared_sizes(output: &mut Vec<u8>, segments: &[PreparedSegment<'_>])
     }
 }
 
+#[inline(always)]
 fn effective_segment_limit(limits: FrameLimits) -> u32 {
     limits.max_segments.min(MAX_SEGMENTS)
 }
 
+#[inline(always)]
 fn check_segment_count(segment_count: u32, limits: FrameLimits) -> Result<(), FrameError> {
     let limit = effective_segment_limit(limits);
     if segment_count > limit {

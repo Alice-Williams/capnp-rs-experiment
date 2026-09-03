@@ -241,9 +241,9 @@ fn validated_body_len(
                 .try_into()
                 .expect("chunks are exactly four bytes"),
         );
-        total_words = total_words
-            .checked_add(u64::from(words))
-            .ok_or(FrameError::TotalWordsOverflow)?;
+        // The framing parser admits at most 512 u32 entries, so this sum
+        // cannot overflow u64.
+        total_words += u64::from(words);
         if total_words > limits.max_total_words {
             return Err(FrameError::MessageTooLarge {
                 words: total_words,
@@ -252,12 +252,7 @@ fn validated_body_len(
             .into());
         }
     }
-    usize::try_from(
-        total_words
-            .checked_mul(8)
-            .ok_or(FrameError::BodyLengthOverflow)?,
-    )
-    .map_err(|_| FrameError::BodyLengthOverflow.into())
+    usize::try_from(total_words * 8).map_err(|_| FrameError::BodyLengthOverflow.into())
 }
 
 #[inline]

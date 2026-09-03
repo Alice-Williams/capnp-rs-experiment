@@ -111,7 +111,9 @@ fn parse_many<'input>(
         else {
             unreachable!();
         };
-        let segments = frame.segments();
+        // Make descriptor materialization observable across the benchmark
+        // boundary; the checksum below then verifies every descriptor.
+        let segments = black_box(frame.segments());
         let mut fingerprint = (segments.len() as u64)
             ^ (frame.table_len() as u64).rotate_left(11)
             ^ (frame.encoded_len() as u64).rotate_left(23)

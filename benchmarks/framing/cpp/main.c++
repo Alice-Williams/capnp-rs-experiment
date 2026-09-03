@@ -110,6 +110,9 @@ uint64_t parseNoAllocMany(
       segments[index] = encoded.slice(offset, offset + words);
       offset += words;
     }
+    // Match Rust's black_box barrier: caller-storage descriptor writes must
+    // materialize before the consuming checksum loop.
+    asm volatile("" : : "r"(segments.data()) : "memory");
     auto fingerprint = uint64_t{segmentCount}
         ^ std::rotl(uint64_t{segmentCount / 2 + 1} * 8, 11)
         ^ std::rotl(uint64_t{offset * 8}, 23);
