@@ -1,7 +1,9 @@
 #include <capnp/serialize-packed.h>
 #include <kj/io.h>
 
+#include <algorithm>
 #include <bit>
+#include <array>
 #include <charconv>
 #include <chrono>
 #include <cstdint>
@@ -98,6 +100,41 @@ std::vector<uint8_t> unpackOnce(
   return output;
 }
 
+size_t streamChunkWords(std::string_view shape) {
+  if (shape == "zero" || shape == "raw") return 256;
+  if (shape == "mixed") return 8;
+  if (shape == "realistic") return 100;
+  throw std::invalid_argument("unknown shape");
+}
+
+std::vector<uint8_t> packStreaming(
+    const std::vector<uint8_t>& input, std::string_view shape) {
+  kj::VectorOutputStream output(8);
+  capnp::_::PackedOutputStream packed(output);
+  auto chunkBytes = streamChunkWords(shape) * 8;
+  for (size_t offset = 0; offset < input.size(); offset += chunkBytes) {
+    auto size = std::min(chunkBytes, input.size() - offset);
+    packed.write(kj::arrayPtr(
+        reinterpret_cast<const kj::byte*>(input.data() + offset), size));
+  }
+  auto bytes = output.getArray();
+  return std::vector<uint8_t>(bytes.begin(), bytes.end());
+}
+
+std::vector<uint8_t> unpackStreaming(
+    const std::vector<uint8_t>& packed, size_t outputSize) {
+  kj::ArrayInputStream input(kj::arrayPtr(
+      reinterpret_cast<const kj::byte*>(packed.data()), packed.size()));
+  std::array<kj::byte, 7> inputBuffer;
+  kj::BufferedInputStreamWrapper buffered(
+      input, kj::arrayPtr(inputBuffer.data(), inputBuffer.size()));
+  capnp::_::PackedInputStream unpacked(buffered);
+  std::vector<uint8_t> output(outputSize);
+  unpacked.read(kj::arrayPtr(
+      reinterpret_cast<kj::byte*>(output.data()), output.size()));
+  return output;
+}
+
 void blackBox(const void* value) {
   asm volatile("" : : "r"(value) : "memory");
 }
@@ -137,6 +174,12 @@ int main(int argc, char** argv) {
   if (unpackOnce(packed, input.size()) != input) {
     throw std::invalid_argument("packing fixture did not round trip");
   }
+  if (packStreaming(input, shape) != packed) {
+    throw std::invalid_argument("stream chunks changed the canonical packed bytes");
+  }
+  if (unpackStreaming(packed, input.size()) != input) {
+    throw std::invalid_argument("streaming packing fixture did not round trip");
+  }
 
   uint64_t checksum = SEED;
   auto started = std::chrono::steady_clock::now();
@@ -169,13 +212,36 @@ int main(int argc, char** argv) {
       blackBox(output.data());
       checksum = observe(checksum, output);
     }
+  } else if (mode == "pack-stream") {
+    auto chunkBytes = streamChunkWords(shape) * 8;
+    for (size_t pass = 0; pass < passes; ++pass) {
+      kj::VectorOutputStream output(8);
+      capnp::_::PackedOutputStream encoder(output);
+      for (size_t offset = 0; offset < input.size(); offset += chunkBytes) {
+        auto size = std::min(chunkBytes, input.size() - offset);
+        encoder.write(kj::arrayPtr(
+            reinterpret_cast<const kj::byte*>(input.data() + offset), size));
+      }
+      auto bytes = output.getArray();
+      blackBox(bytes.begin());
+      checksum = observe(
+          checksum, reinterpret_cast<const uint8_t*>(bytes.begin()), bytes.size());
+    }
+  } else if (mode == "unpack-stream") {
+    for (size_t pass = 0; pass < passes; ++pass) {
+      auto output = unpackStreaming(packed, input.size());
+      blackBox(output.data());
+      checksum = observe(checksum, output);
+    }
   } else {
     std::cerr << "unknown benchmark mode\n";
     return 2;
   }
   auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
       std::chrono::steady_clock::now() - started);
-  const auto& canonical = mode == "copy-packed" || mode == "pack" ? packed : input;
+  const auto& canonical =
+      mode == "copy-packed" || mode == "pack" || mode == "pack-stream"
+      ? packed : input;
   checksum ^= fnv1a(canonical);
   std::cout << elapsed.count() << '\t' << checksum << '\n';
   return 0;

@@ -57,14 +57,16 @@ mkdir -p -- "$output"
     printf 'native_binary_sha256=%s\n' "$(sha256sum "$native_benchmark" | cut -d ' ' -f1)"
     printf 'warmups=%s\nrecorded_runs=%s\nwords=%s\npasses=%s\n' \
         "$warmups" "$runs" "$words" "$passes"
+    printf 'cases=24\n'
     printf 'shapes=long zero runs, long raw runs, deterministic mixed sparse words, repeated pinned C++ wire fixture\n'
+    printf 'stream_chunks=zero/raw 256 words; mixed 8 words; realistic 100 words; decode input buffer 7 bytes\n'
     printf 'allocation=fresh output per pass; C++ packed VectorOutputStream starts at 8 bytes\n'
     printf 'order=alternating C++/native first for every sample\n'
     printf 'timer=steady monotonic clock inside each binary around complete operation loop\n'
 } > "$output/metadata.txt"
 
 printf 'implementation\tcase\tshape\twords\tpasses\trun\telapsed_ns\tchecksum\n' > "$output/results.tsv"
-modes=(copy-unpacked copy-packed pack unpack)
+modes=(copy-unpacked copy-packed pack unpack pack-stream unpack-stream)
 shapes=(zero raw mixed realistic)
 
 run_workload() {

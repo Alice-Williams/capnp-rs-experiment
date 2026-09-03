@@ -1,7 +1,7 @@
 use std::hint::black_box;
 use std::time::Instant;
 
-use capnp_io::{pack, unpack};
+use capnp_io::{PackedDecoder, PackedEncoder, pack, unpack};
 
 const SEED: u64 = 0x4d59_5df4_d0f3_3173;
 const CPP_FIXTURE: &[u8] = include_bytes!(concat!(
@@ -77,6 +77,35 @@ fn fnv1a(bytes: &[u8]) -> u64 {
     })
 }
 
+fn stream_chunk_words(shape: &str) -> usize {
+    match shape {
+        "zero" | "raw" => 256,
+        "mixed" => 8,
+        "realistic" => 100,
+        _ => unreachable!("validated by make_input"),
+    }
+}
+
+fn pack_streaming(
+    input: &[u8],
+    shape: &str,
+    max_packed: usize,
+) -> Result<Vec<u8>, capnp_io::PackedError> {
+    let mut encoder = PackedEncoder::new(max_packed);
+    for chunk in input.chunks(stream_chunk_words(shape) * 8) {
+        encoder.push(chunk)?;
+    }
+    encoder.finish()
+}
+
+fn unpack_streaming(packed: &[u8], max_output: usize) -> Result<Vec<u8>, capnp_io::PackedError> {
+    let mut decoder = PackedDecoder::new(max_output);
+    for chunk in packed.chunks(7) {
+        decoder.push(chunk)?;
+    }
+    decoder.finish()
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let mode = args
@@ -98,6 +127,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let packed = pack(&input, max_packed)?;
     if unpack(&packed, input.len())? != input {
         return Err("packing fixture did not round trip".into());
+    }
+    if pack_streaming(&input, &shape, max_packed)? != packed {
+        return Err("stream chunks changed the canonical packed bytes".into());
+    }
+    if unpack_streaming(&packed, input.len())? != input {
+        return Err("streaming packing fixture did not round trip".into());
     }
 
     let mut checksum = SEED;
@@ -127,10 +162,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 checksum = observe(checksum, &output);
             }
         }
-        _ => return Err("mode must be copy-unpacked, copy-packed, pack, or unpack".into()),
+        "pack-stream" => {
+            for _ in 0..passes {
+                let output = black_box(pack_streaming(black_box(&input), &shape, max_packed)?);
+                checksum = observe(checksum, &output);
+            }
+        }
+        "unpack-stream" => {
+            for _ in 0..passes {
+                let output = black_box(unpack_streaming(black_box(&packed), input.len())?);
+                checksum = observe(checksum, &output);
+            }
+        }
+        _ => return Err("unknown benchmark mode".into()),
     }
     let elapsed = started.elapsed();
-    let canonical = if mode == "copy-packed" || mode == "pack" {
+    let canonical = if mode == "copy-packed" || mode == "pack" || mode == "pack-stream" {
         &packed
     } else {
         &input
