@@ -4,7 +4,7 @@ use std::time::Instant;
 use capnp_io::{PackedDecoder, PackedEncoder, pack, unpack};
 
 const SEED: u64 = 0x4d59_5df4_d0f3_3173;
-const STREAM_DECODE_CHUNK_BYTES: usize = 1_025;
+const STREAM_DECODE_CHUNK_BYTES: usize = 4_097;
 const CPP_FIXTURE: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../conformance/fixtures/cpp/",
