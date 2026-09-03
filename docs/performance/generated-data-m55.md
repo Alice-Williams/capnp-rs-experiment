@@ -269,3 +269,29 @@ adds only 1.08 ns over its direct control versus 4.28 ns for C++, so static
 typing does not consume the lower-layer lead. The primitive, enum, text/data,
 and nested primitive-list gate is closed. Inline-composite struct-list element
 access and ordinary nested struct pointers remain separate gates.
+
+## Borrowed nested-struct gate
+
+The first paired nested-struct run exposed the same cross-crate inlining cliff
+as lists: native generated access took 1.249x C++ even though the operation is
+only a checked pointer dereference followed by one scalar read. Marking the
+small struct-pointer validation and view-construction path for explicit
+inlining removed that boundary cost without changing validation, traversal
+accounting, or generated API semantics.
+
+Final five-million-operation evidence at native commit `253710f` is in
+[`benchmarks/results/2026-09-03-m55-generated-reader-nested-final-5m-g-drive-docker`](../../benchmarks/results/2026-09-03-m55-generated-reader-nested-final-5m-g-drive-docker).
+It uses the same alternating schedule, opaque per-iteration reader inputs,
+unlimited traversal limits, and checksum equality as the hardened list run.
+
+| Operation | C++ ns/op | Native ns/op | Native / C++ |
+| --- | ---: | ---: | ---: |
+| borrowed direct nested struct | 8.3819 | 5.5495 | 0.662 |
+| borrowed generated nested struct | 10.4038 | 5.4399 | 0.523 |
+
+Generated native nested-struct access is 47.7% faster than generated C++ and
+comfortably preserves the paired direct-runtime ratio, whose 3% tolerance
+allows a 0.682 cumulative ceiling. C++ adds 2.02 ns for its generated wrapper;
+the native generated-minus-direct median is below timer resolution. Ordinary
+nested struct pointers are therefore closed. Inline-composite struct-list
+element access remains a separate reader gate.
