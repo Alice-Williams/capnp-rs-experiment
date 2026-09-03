@@ -1196,18 +1196,12 @@ fn emit_borrowed_reader(
             "        #[inline(always)]\n        pub fn which(&self) -> Which {{"
         )
         .map_err(|_| GenerateError::Format)?;
-        let discriminant_byte = usize::try_from(structure.discriminant_offset)
-            .ok()
-            .and_then(|offset| offset.checked_mul(2))
-            .ok_or(GenerateError::PointerOffset(structure.discriminant_offset))?;
         writeln!(
             output,
-            "            let discriminant = if let Some(data) = self.full_data {{ u16::from_le_bytes([data[{discriminant_byte}], data[{}]]) }} else {{ self.data.get_u16({}, 0) }};",
-            discriminant_byte + 1,
-            structure.discriminant_offset,
+            "            match self.data.get_u16({}, 0) {{",
+            structure.discriminant_offset
         )
         .map_err(|_| GenerateError::Format)?;
-        writeln!(output, "            match discriminant {{").map_err(|_| GenerateError::Format)?;
         for field in &structure.fields {
             if let Some(discriminant) = field.discriminant_value {
                 writeln!(
@@ -2955,11 +2949,6 @@ mod tests {
             generated
                 .source
                 .contains("if let Some(data) = self.full_data")
-        );
-        assert!(
-            generated
-                .source
-                .contains("let discriminant = if let Some(data) = self.full_data")
         );
         assert!(
             generated
