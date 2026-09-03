@@ -859,7 +859,10 @@ impl ExclusiveArena {
         while let Some(task) = tasks.pop() {
             if task.source != WireLocation::ROOT {
                 match source.try_read_byte_list_fast(task.source, budget, task.nesting) {
-                    FastByteList::Null => {}
+                    FastByteList::Null => {
+                        self.write_pointer(task.destination, WirePointer::NULL)?;
+                        continue;
+                    }
                     FastByteList::Bytes(bytes) => {
                         let count = u32::try_from(bytes.len())
                             .map_err(|_| ArenaError::AllocationOverflow)?;

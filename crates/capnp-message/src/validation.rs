@@ -485,6 +485,17 @@ impl<'a> MessageSegments<'a> {
             });
         }
 
+        self.validate_root_pointer_with_limits_slow(wire_pointer, budget, nesting)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn validate_root_pointer_with_limits_slow<B: TraversalBudget>(
+        &self,
+        wire_pointer: WirePointer,
+        budget: &B,
+        nesting: NestingLimit,
+    ) -> Result<BoundedPointer, TraversalError> {
         let pointer = self.validate_wire_pointer(WireLocation::ROOT, wire_pointer)?;
         let child_nesting = match pointer {
             ResolvedPointer::Struct(_) | ResolvedPointer::List(_) => nesting.descend()?,
