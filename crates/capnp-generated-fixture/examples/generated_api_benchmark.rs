@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use capnp_generated_fixture::wire::{Color, wire_fixture};
 use capnp_io::{FrameLimits, FrameRead, parse_frame};
-use capnp_message::{OwnedMessage, ReaderLimits, StructReadError};
+use capnp_message::{BorrowedMessage, OwnedMessage, ReaderLimits, StructReadError};
 use capnp_schema::{CompiledSchema, LoadLimits};
 
 const SEED: u64 = 0x4d59_5df4_d0f3_3173;
@@ -24,14 +24,19 @@ const FRAME: &[u8] = include_bytes!(concat!(
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let mode = args.next().ok_or(
-        "usage: generated_api_benchmark direct-scalars|generated-scalars|direct-blobs|generated-blobs PASSES",
+        "usage: generated_api_benchmark direct-scalars|generated-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-blobs PASSES",
     )?;
     let passes = args.next().ok_or("missing passes")?.parse::<usize>()?;
     if args.next().is_some()
         || passes == 0
         || !matches!(
             mode.as_str(),
-            "direct-scalars" | "generated-scalars" | "direct-blobs" | "generated-blobs"
+            "direct-scalars"
+                | "generated-scalars"
+                | "borrowed-scalars"
+                | "direct-blobs"
+                | "generated-blobs"
+                | "borrowed-blobs"
         )
     {
         return Err("expected a known mode and positive PASSES".into());
@@ -41,6 +46,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         REQUEST,
         LoadLimits::default(),
     )?);
+    let FrameRead::Message { frame, remaining } = parse_frame(FRAME, FrameLimits::default())?
+    else {
+        return Err("fixture is empty".into());
+    };
+    if !remaining.is_empty() {
+        return Err("fixture has trailing bytes".into());
+    }
+    let borrowed_segments = frame
+        .segments()
+        .iter()
+        .map(|segment| segment.bytes())
+        .collect::<Vec<_>>();
+    let borrowed_message = BorrowedMessage::new(
+        &borrowed_segments,
+        ReaderLimits {
+            traversal_words: u64::MAX,
+            nesting_levels: 64,
+        },
+    )?;
+    let borrowed = wire_fixture::BorrowedReader::from_root(&borrowed_message)?;
     let message = owned_frame()?;
     let direct = message.root_struct()?.into_root();
     let generated = wire_fixture::Reader::from_root(schema, Arc::clone(&message))?;
@@ -53,12 +78,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map_err(Into::into)
         })?,
         "generated-scalars" => measure(passes, || generated_scalar_fingerprint(&generated))?,
+        "borrowed-scalars" => measure(passes, || borrowed_scalar_fingerprint(&borrowed))?,
         "direct-blobs" => measure(passes, || {
             direct
                 .with_reader(direct_blob_fingerprint)?
                 .map_err(Into::into)
         })?,
         "generated-blobs" => measure(passes, || generated_blob_fingerprint(&generated))?,
+        "borrowed-blobs" => measure(passes, || borrowed_blob_fingerprint(&borrowed))?,
         _ => unreachable!(),
     };
     println!("{}\t{}", started.elapsed().as_nanos(), checksum);
@@ -121,6 +148,31 @@ fn generated_scalar_fingerprint(
     Ok(value)
 }
 
+fn borrowed_scalar_fingerprint<B: capnp_message::TraversalBudget>(
+    reader: &wire_fixture::BorrowedReader<'_, '_, B>,
+) -> Result<u64, Box<dyn std::error::Error>> {
+    let mut value = u64::from(reader.bool_value()?);
+    value = value.rotate_left(5) ^ u64::from(reader.int8_value()? as u8);
+    value = value.rotate_left(7) ^ u64::from(reader.int16_value()? as u16);
+    value = value.rotate_left(11) ^ u64::from(reader.int32_value()? as u32);
+    value = value.rotate_left(13) ^ reader.int64_value()? as u64;
+    value = value.rotate_left(17) ^ u64::from(reader.uint8_value()?);
+    value = value.rotate_left(19) ^ u64::from(reader.uint16_value()?);
+    value = value.rotate_left(23) ^ u64::from(reader.uint32_value()?);
+    value = value.rotate_left(29) ^ reader.uint64_value()?;
+    value = value.rotate_left(31) ^ u64::from(reader.float32_value()?.to_bits());
+    value = value.rotate_left(37) ^ reader.float64_value()?.to_bits();
+    value = value.rotate_left(41)
+        ^ u64::from(match reader.color()? {
+            Color::Red => 0,
+            Color::Green => 1,
+            Color::Blue => 2,
+            Color::Unrecognized(value) => value,
+        });
+    value = value.rotate_left(43) ^ u64::from(reader.defaulted()?);
+    Ok(value)
+}
+
 fn direct_blob_fingerprint(
     reader: capnp_message::StructReader<'_, '_, capnp_message::SharedTraversalBudget>,
 ) -> Result<u64, StructReadError> {
@@ -135,6 +187,14 @@ fn generated_blob_fingerprint(
     let text = reader.text()?;
     let data = reader.data()?;
     Ok(blob_fingerprint(text.as_bytes(), &data))
+}
+
+fn borrowed_blob_fingerprint<B: capnp_message::TraversalBudget>(
+    reader: &wire_fixture::BorrowedReader<'_, '_, B>,
+) -> Result<u64, Box<dyn std::error::Error>> {
+    let text = reader.text()?;
+    let data = reader.data()?;
+    Ok(blob_fingerprint(text.as_bytes(), data.as_bytes()))
 }
 
 fn blob_fingerprint(text: &[u8], data: &[u8]) -> u64 {

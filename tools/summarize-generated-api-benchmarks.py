@@ -84,37 +84,51 @@ def main() -> None:
                 "generated_native_over_cpp",
             ]
         )
-        for shape in ("scalars", "blobs"):
-            cpp_incremental = paired_median(by_run, "cpp", shape)
-            native_incremental = paired_median(by_run, "native", shape)
-            cpp_direct = medians[("cpp", f"direct-{shape}")]
-            native_direct = medians[("native", f"direct-{shape}")]
-            cpp_generated = medians[("cpp", f"generated-{shape}")]
-            native_generated = medians[("native", f"generated-{shape}")]
-            ratio = (
-                f"{native_incremental / cpp_incremental:.3f}"
-                if cpp_incremental > 0 and native_incremental >= 0
-                else "below-resolution"
-            )
-            writer.writerow(
-                [
-                    shape,
-                    f"{cpp_incremental:.4f}",
-                    f"{native_incremental:.4f}",
-                    ratio,
-                    f"{native_direct / cpp_direct:.3f}",
-                    f"{native_generated / cpp_generated:.3f}",
-                ]
-            )
+        for ownership in ("generated", "borrowed"):
+            for shape in ("scalars", "blobs"):
+                write_incremental(writer, medians, by_run, ownership, shape)
+
+
+def write_incremental(
+    writer: object,
+    medians: dict[tuple[str, str], float],
+    by_run: dict[tuple[str, str, str], float],
+    ownership: str,
+    shape: str,
+) -> None:
+    cpp_incremental = paired_median(by_run, "cpp", ownership, shape)
+    native_incremental = paired_median(by_run, "native", ownership, shape)
+    cpp_direct = medians[("cpp", f"direct-{shape}")]
+    native_direct = medians[("native", f"direct-{shape}")]
+    cpp_generated = medians[("cpp", f"{ownership}-{shape}")]
+    native_generated = medians[("native", f"{ownership}-{shape}")]
+    ratio = (
+        f"{native_incremental / cpp_incremental:.3f}"
+        if cpp_incremental > 0 and native_incremental >= 0
+        else "below-resolution"
+    )
+    writer.writerow(  # type: ignore[attr-defined]
+        [
+            f"{ownership}-{shape}",
+            f"{cpp_incremental:.4f}",
+            f"{native_incremental:.4f}",
+            ratio,
+            f"{native_direct / cpp_direct:.3f}",
+            f"{native_generated / cpp_generated:.3f}",
+        ]
+    )
 
 
 def paired_median(
-    samples: dict[tuple[str, str, str], float], implementation: str, shape: str
+    samples: dict[tuple[str, str, str], float],
+    implementation: str,
+    ownership: str,
+    shape: str,
 ) -> float:
     generated = {
         run: value
         for (impl, case, run), value in samples.items()
-        if impl == implementation and case == f"generated-{shape}"
+        if impl == implementation and case == f"{ownership}-{shape}"
     }
     direct = {
         run: value

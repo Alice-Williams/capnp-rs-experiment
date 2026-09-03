@@ -29,7 +29,7 @@ mod tests {
     use std::task::{Context, Poll, Wake, Waker};
 
     use capnp_io::{FrameLimits, FrameRead, parse_frame};
-    use capnp_message::{ExclusiveArena, OwnedMessage, ReaderLimits};
+    use capnp_message::{BorrowedMessage, ExclusiveArena, OwnedMessage, ReaderLimits};
     use capnp_schema::{CompiledSchema, FieldKind, LoadLimits, NodeKind};
 
     use super::wire::{Color, wire_fixture};
@@ -456,6 +456,39 @@ mod tests {
         assert_eq!(metadata.created().expect("created"), 9_876_543_210);
         assert!(metadata.valid().expect("valid"));
         assert_eq!(ORACLE.len(), 40);
+    }
+
+    #[test]
+    fn borrowed_generated_reader_uses_constant_slots_and_borrowed_blobs()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let FrameRead::Message { frame, remaining } =
+            parse_frame(CPP_FRAME, FrameLimits::default())?
+        else {
+            return Err("fixture is empty".into());
+        };
+        assert!(remaining.is_empty());
+        let segments = frame
+            .segments()
+            .iter()
+            .map(|segment| segment.bytes())
+            .collect::<Vec<_>>();
+        let message = BorrowedMessage::new(&segments, ReaderLimits::default())
+            .expect("borrowed fixture validates");
+        let reader = wire_fixture::BorrowedReader::from_root(&message)
+            .expect("borrowed generated root opens");
+        assert_eq!(reader.uint32_value().expect("u32"), 4_000_000_000);
+        assert_eq!(reader.color().expect("enum"), Color::Blue);
+        assert_eq!(reader.defaulted().expect("default XOR"), 0);
+        assert!(
+            reader
+                .text()
+                .expect("borrowed text")
+                .to_str()
+                .expect("fixture UTF-8")
+                .contains("UTF-8: λ")
+        );
+        assert!(!reader.data().expect("borrowed data").is_empty());
+        Ok(())
     }
 
     #[test]

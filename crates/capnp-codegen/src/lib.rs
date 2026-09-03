@@ -1015,6 +1015,9 @@ fn emit_struct(
         writeln!(output, "        }}").map_err(|_| GenerateError::Format)?;
     }
     writeln!(output, "    }}").map_err(|_| GenerateError::Format)?;
+    if parameters.is_empty() {
+        emit_borrowed_reader(output, structure, names)?;
+    }
     writeln!(
         output,
         "    impl{implementation} ListElement for Reader{arguments} {{"
@@ -1161,6 +1164,160 @@ fn emit_struct(
     }
     writeln!(output, "}}").map_err(|_| GenerateError::Format)?;
     Ok(())
+}
+
+fn emit_borrowed_reader(
+    output: &mut String,
+    structure: &capnp_schema::StructSchema,
+    names: &Names,
+) -> Result<(), GenerateError> {
+    writeln!(
+        output,
+        "    #[allow(dead_code)]\n    #[derive(Clone, Copy, Debug)]"
+    )
+    .map_err(|_| GenerateError::Format)?;
+    writeln!(output, "    pub struct BorrowedReader<'context, 'data, B: capnp_message::TraversalBudget> {{ inner: capnp_message::StructReader<'context, 'data, B>, data: capnp_message::DataSection<'data> }}")
+        .map_err(|_| GenerateError::Format)?;
+    writeln!(output, "    impl<'context, 'data, B: capnp_message::TraversalBudget> BorrowedReader<'context, 'data, B> {{")
+        .map_err(|_| GenerateError::Format)?;
+    writeln!(output, "        #[doc(hidden)]\n        pub fn from_reader(inner: capnp_message::StructReader<'context, 'data, B>) -> Result<Self, capnp_schema::DynamicError> {{ Ok(Self {{ data: inner.data_section()?, inner }}) }}")
+        .map_err(|_| GenerateError::Format)?;
+    for field in &structure.fields {
+        emit_borrowed_reader_field(output, field, names)?;
+    }
+    if structure.discriminant_count > 0 {
+        writeln!(
+            output,
+            "        pub fn which(&self) -> Result<Which, capnp_schema::DynamicError> {{"
+        )
+        .map_err(|_| GenerateError::Format)?;
+        writeln!(
+            output,
+            "            match self.data.read_u16({}, 0)? {{",
+            structure.discriminant_offset
+        )
+        .map_err(|_| GenerateError::Format)?;
+        for field in &structure.fields {
+            if let Some(discriminant) = field.discriminant_value {
+                writeln!(
+                    output,
+                    "                {discriminant} => Ok(Which::{}),",
+                    rust_pascal(&field.name)
+                )
+                .map_err(|_| GenerateError::Format)?;
+            }
+        }
+        let unrecognized = unique_variant(structure.fields.iter().map(|field| field.name.as_str()));
+        writeln!(
+            output,
+            "                value => Ok(Which::{unrecognized}(value)),"
+        )
+        .map_err(|_| GenerateError::Format)?;
+        writeln!(output, "            }}\n        }}").map_err(|_| GenerateError::Format)?;
+    }
+    writeln!(output, "    }}").map_err(|_| GenerateError::Format)?;
+    writeln!(output, "    impl<'context, 'data> BorrowedReader<'context, 'data, capnp_message::LocalTraversalBudget> {{")
+        .map_err(|_| GenerateError::Format)?;
+    writeln!(output, "        pub fn from_root(message: &'context capnp_message::BorrowedMessage<'data>) -> Result<Self, capnp_schema::DynamicError> {{ Self::from_reader(message.root_struct()?) }}")
+        .map_err(|_| GenerateError::Format)?;
+    writeln!(output, "    }}").map_err(|_| GenerateError::Format)?;
+    Ok(())
+}
+
+fn emit_borrowed_reader_field(
+    output: &mut String,
+    field: &Field,
+    names: &Names,
+) -> Result<(), GenerateError> {
+    use capnp_schema::Value;
+
+    if field.discriminant_value.is_some() {
+        return Ok(());
+    }
+    let FieldKind::Slot {
+        offset,
+        ty,
+        default_value,
+        ..
+    } = &field.kind
+    else {
+        return Ok(());
+    };
+    let method = rust_snake(&field.name);
+    let body = match (ty, default_value) {
+        (Type::Void, Value::Void) => Some(("()".to_owned(), "Ok(())".to_owned())),
+        (Type::Bool, Value::Bool(value)) => Some((
+            "bool".to_owned(),
+            format!("Ok(self.data.read_bool({offset}, {value})?)"),
+        )),
+        (Type::Int8, Value::Int8(value)) => Some((
+            "i8".to_owned(),
+            format!("Ok(self.data.read_i8({offset}, {value})?)"),
+        )),
+        (Type::Int16, Value::Int16(value)) => Some((
+            "i16".to_owned(),
+            format!("Ok(self.data.read_i16({offset}, {value})?)"),
+        )),
+        (Type::Int32, Value::Int32(value)) => Some((
+            "i32".to_owned(),
+            format!("Ok(self.data.read_i32({offset}, {value})?)"),
+        )),
+        (Type::Int64, Value::Int64(value)) => Some((
+            "i64".to_owned(),
+            format!("Ok(self.data.read_i64({offset}, {value})?)"),
+        )),
+        (Type::UInt8, Value::UInt8(value)) => Some((
+            "u8".to_owned(),
+            format!("Ok(self.data.read_u8({offset}, {value})?)"),
+        )),
+        (Type::UInt16, Value::UInt16(value)) => Some((
+            "u16".to_owned(),
+            format!("Ok(self.data.read_u16({offset}, {value})?)"),
+        )),
+        (Type::UInt32, Value::UInt32(value)) => Some((
+            "u32".to_owned(),
+            format!("Ok(self.data.read_u32({offset}, {value})?)"),
+        )),
+        (Type::UInt64, Value::UInt64(value)) => Some((
+            "u64".to_owned(),
+            format!("Ok(self.data.read_u64({offset}, {value})?)"),
+        )),
+        (Type::Float32, Value::Float32(value)) => Some((
+            "f32".to_owned(),
+            format!(
+                "Ok(self.data.read_f32({offset}, f32::from_bits(0x{:08x}))?)",
+                value.to_bits()
+            ),
+        )),
+        (Type::Float64, Value::Float64(value)) => Some((
+            "f64".to_owned(),
+            format!(
+                "Ok(self.data.read_f64({offset}, f64::from_bits(0x{:016x}))?)",
+                value.to_bits()
+            ),
+        )),
+        (Type::Enum { type_id, .. }, Value::Enum(value)) => {
+            let name = names.reference(*type_id, true)?;
+            Some((
+                name.clone(),
+                format!("Ok({name}::from_ordinal(self.data.read_u16({offset}, {value})?))"),
+            ))
+        }
+        (Type::Text, Value::Text(value)) if value.is_empty() => Some((
+            "capnp_message::TextReader<'data>".to_owned(),
+            format!("Ok(self.inner.read_text({offset}, None)?)"),
+        )),
+        (Type::Data, Value::Data(value)) if value.is_empty() => Some((
+            "capnp_message::DataReader<'data>".to_owned(),
+            format!("Ok(self.inner.read_data({offset}, None)?)"),
+        )),
+        _ => None,
+    };
+    let Some((return_type, expression)) = body else {
+        return Ok(());
+    };
+    writeln!(output, "        pub fn {method}(&self) -> Result<{return_type}, capnp_schema::DynamicError> {{ {expression} }}")
+        .map_err(|_| GenerateError::Format)
 }
 
 const STREAM_RESULT_TYPE_ID: NodeId = 0x995f_9a33_77c0_b16e;
@@ -2425,6 +2582,13 @@ mod tests {
                 .contains("self.inner.read_u32_slot(16, 123456)")
         );
         assert!(!generated.source.contains("self.inner.get(\"uint32Value\")"));
+        assert!(generated.source.contains("pub struct BorrowedReader"));
+        assert!(generated.source.contains("self.data.read_u32(5, 0)"));
+        assert!(
+            generated
+                .source
+                .contains("Result<capnp_message::TextReader<'data>")
+        );
     }
 
     #[test]

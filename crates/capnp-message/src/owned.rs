@@ -123,6 +123,13 @@ impl<'data> BorrowedMessage<'data> {
             .read_struct(location, &self.budget, self.nesting)
     }
 
+    /// Opens the root struct while borrowing this message context.
+    pub fn root_struct(
+        &self,
+    ) -> Result<StructReader<'_, 'data, crate::LocalTraversalBudget>, StructReadError> {
+        self.segments.read_root_struct(&self.budget, self.nesting)
+    }
+
     pub fn read_list(
         &self,
         location: WireLocation,

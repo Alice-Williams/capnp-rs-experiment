@@ -64,7 +64,14 @@ mkdir -p -- "$output"
 } > "$output/metadata.txt"
 
 printf 'implementation\tcase\tpasses\trun\telapsed_ns\tchecksum\n' > "$output/results.tsv"
-workloads=(direct-scalars generated-scalars direct-blobs generated-blobs)
+workloads=(
+    direct-scalars
+    generated-scalars
+    borrowed-scalars
+    direct-blobs
+    generated-blobs
+    borrowed-blobs
+)
 
 run_workload() {
     local implementation=$1 case_name=$2 run=$3 executable measurement elapsed_ns checksum
