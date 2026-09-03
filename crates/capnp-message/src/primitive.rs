@@ -124,6 +124,7 @@ impl<'a> DataSection<'a> {
 
     pub const fn read_void(self) {}
 
+    #[inline(always)]
     pub fn read_bool(self, bit_offset: u32, default: bool) -> Result<bool, PrimitiveError> {
         let byte_offset =
             usize::try_from(bit_offset / 8).map_err(|_| PrimitiveError::OffsetOverflow)?;
@@ -136,47 +137,57 @@ impl<'a> DataSection<'a> {
         Ok(wire ^ default)
     }
 
+    #[inline(always)]
     pub fn read_u8(self, offset: u32, default: u8) -> Result<u8, PrimitiveError> {
         Ok(u8::from_le_bytes(self.wire_bytes(offset)?) ^ default)
     }
 
+    #[inline(always)]
     pub fn read_i8(self, offset: u32, default: i8) -> Result<i8, PrimitiveError> {
         Ok((self.read_u8(offset, default as u8)?) as i8)
     }
 
+    #[inline(always)]
     pub fn read_u16(self, offset: u32, default: u16) -> Result<u16, PrimitiveError> {
         Ok(u16::from_le_bytes(self.wire_bytes(offset)?) ^ default)
     }
 
+    #[inline(always)]
     pub fn read_i16(self, offset: u32, default: i16) -> Result<i16, PrimitiveError> {
         Ok((self.read_u16(offset, default as u16)?) as i16)
     }
 
+    #[inline(always)]
     pub fn read_u32(self, offset: u32, default: u32) -> Result<u32, PrimitiveError> {
         Ok(u32::from_le_bytes(self.wire_bytes(offset)?) ^ default)
     }
 
+    #[inline(always)]
     pub fn read_i32(self, offset: u32, default: i32) -> Result<i32, PrimitiveError> {
         Ok((self.read_u32(offset, default as u32)?) as i32)
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn read_u64(self, offset: u32, default: u64) -> Result<u64, PrimitiveError> {
         Ok(u64::from_le_bytes(self.wire_bytes(offset)?) ^ default)
     }
 
+    #[inline(always)]
     pub fn read_i64(self, offset: u32, default: i64) -> Result<i64, PrimitiveError> {
         Ok((self.read_u64(offset, default as u64)?) as i64)
     }
 
+    #[inline(always)]
     pub fn read_f32(self, offset: u32, default: f32) -> Result<f32, PrimitiveError> {
         Ok(f32::from_bits(self.read_u32(offset, default.to_bits())?))
     }
 
+    #[inline(always)]
     pub fn read_f64(self, offset: u32, default: f64) -> Result<f64, PrimitiveError> {
         Ok(f64::from_bits(self.read_u64(offset, default.to_bits())?))
     }
 
+    #[inline(always)]
     pub fn read_enum<E: TryFrom<u16>>(
         self,
         offset: u32,
@@ -223,7 +234,7 @@ impl<'a> DataSection<'a> {
         })
     }
 
-    #[inline]
+    #[inline(always)]
     fn wire_bytes<const N: usize>(self, offset: u32) -> Result<[u8; N], PrimitiveError> {
         let offset = usize::try_from(offset).map_err(|_| PrimitiveError::OffsetOverflow)?;
         let start = offset

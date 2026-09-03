@@ -264,7 +264,7 @@ impl<'context, 'data, B: TraversalBudget> StructReader<'context, 'data, B> {
         ) ^ default)
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn data_section(self) -> Result<DataSection<'data>, StructReadError> {
         let Some(reference) = self.reference else {
             return Ok(DataSection::new(&[])?);
