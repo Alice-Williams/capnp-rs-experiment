@@ -480,6 +480,12 @@ mod tests {
         assert_eq!(reader.color(), Color::Blue);
         assert_eq!(reader.color_ordinal(), 2);
         assert_eq!(reader.defaulted(), 0);
+        let choice = reader.choice();
+        assert_eq!(choice.which(), super::wire::choice::Which::Number);
+        assert_eq!(choice.number(), 12_345_678_901_234_567_890);
+        let metadata = reader.metadata();
+        assert_eq!(metadata.created(), 9_876_543_210);
+        assert!(metadata.valid());
         assert!(
             reader
                 .text()
@@ -605,8 +611,23 @@ mod tests {
             .expect("raw root")
             .set_u16(choice_schema.discriminant_offset, 55, 0)
             .expect("unknown discriminant writes");
-        let message = OwnedMessage::new(arena.into_segments(), ReaderLimits::default())
-            .expect("message validates");
+        let storage = arena.into_segments();
+        {
+            let segments = storage
+                .iter()
+                .map(|segment| segment.as_ref())
+                .collect::<Vec<_>>();
+            let message = BorrowedMessage::new(&segments, ReaderLimits::default())
+                .expect("borrowed message validates");
+            let reader =
+                wire_fixture::BorrowedReader::from_root(&message).expect("borrowed generated root");
+            assert_eq!(
+                reader.choice().which(),
+                super::wire::choice::Which::Unrecognized(55)
+            );
+        }
+        let message =
+            OwnedMessage::new(storage, ReaderLimits::default()).expect("message validates");
         let reader = wire_fixture::Reader::from_root(schema, message).expect("generated reader");
         assert_eq!(
             reader.choice().expect("group").which().expect("raw tag"),

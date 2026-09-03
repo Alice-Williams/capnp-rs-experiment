@@ -1181,20 +1181,19 @@ fn emit_borrowed_reader(
         .map_err(|_| GenerateError::Format)?;
     writeln!(output, "    impl<'context, 'data, B: capnp_message::TraversalBudget> BorrowedReader<'context, 'data, B> {{")
         .map_err(|_| GenerateError::Format)?;
-    writeln!(output, "        #[doc(hidden)]\n        pub fn from_reader(inner: capnp_message::StructReader<'context, 'data, B>) -> Result<Self, capnp_schema::DynamicError> {{ let data = inner.data_section()?; let full_data = data.as_bytes().get(..{data_bytes}).and_then(|bytes| bytes.try_into().ok()); Ok(Self {{ pointers: inner.pointer_section()?, data, full_data }}) }}")
+    writeln!(output, "        #[doc(hidden)]\n        pub fn from_reader(inner: capnp_message::StructReader<'context, 'data, B>) -> Result<Self, capnp_schema::DynamicError> {{ let data = inner.data_section()?; Ok(Self::from_sections(inner.pointer_section()?, data)) }}")
+        .map_err(|_| GenerateError::Format)?;
+    writeln!(output, "        #[doc(hidden)]\n        pub(super) fn from_sections(pointers: capnp_message::PointerSection<'context, 'data, B>, data: capnp_message::DataSection<'data>) -> Self {{ let full_data = data.as_bytes().get(..{data_bytes}).and_then(|bytes| bytes.try_into().ok()); Self {{ pointers, data, full_data }} }}")
         .map_err(|_| GenerateError::Format)?;
     for field in &structure.fields {
         emit_borrowed_reader_field(output, field, names)?;
     }
     if structure.discriminant_count > 0 {
+        writeln!(output, "        pub fn which(&self) -> Which {{")
+            .map_err(|_| GenerateError::Format)?;
         writeln!(
             output,
-            "        pub fn which(&self) -> Result<Which, capnp_schema::DynamicError> {{"
-        )
-        .map_err(|_| GenerateError::Format)?;
-        writeln!(
-            output,
-            "            match self.data.read_u16({}, 0)? {{",
+            "            match self.data.get_u16({}, 0) {{",
             structure.discriminant_offset
         )
         .map_err(|_| GenerateError::Format)?;
@@ -1202,7 +1201,7 @@ fn emit_borrowed_reader(
             if let Some(discriminant) = field.discriminant_value {
                 writeln!(
                     output,
-                    "                {discriminant} => Ok(Which::{}),",
+                    "                {discriminant} => Which::{},",
                     rust_pascal(&field.name)
                 )
                 .map_err(|_| GenerateError::Format)?;
@@ -1211,7 +1210,7 @@ fn emit_borrowed_reader(
         let unrecognized = unique_variant(structure.fields.iter().map(|field| field.name.as_str()));
         writeln!(
             output,
-            "                value => Ok(Which::{unrecognized}(value)),"
+            "                value => Which::{unrecognized}(value),"
         )
         .map_err(|_| GenerateError::Format)?;
         writeln!(output, "            }}\n        }}").map_err(|_| GenerateError::Format)?;
@@ -1232,8 +1231,14 @@ fn emit_borrowed_reader_field(
 ) -> Result<(), GenerateError> {
     use capnp_schema::Value;
 
-    if field.discriminant_value.is_some() {
-        return Ok(());
+    let method = rust_snake(&field.name);
+    if let FieldKind::Group { type_id } = &field.kind {
+        let target = names.reference(*type_id, true)?;
+        return writeln!(
+            output,
+            "        pub fn {method}(&self) -> {target}::BorrowedReader<'context, 'data, B> {{ {target}::BorrowedReader::from_sections(self.pointers, self.data) }}"
+        )
+        .map_err(|_| GenerateError::Format);
     }
     let FieldKind::Slot {
         offset,
@@ -1244,7 +1249,6 @@ fn emit_borrowed_reader_field(
     else {
         return Ok(());
     };
-    let method = rust_snake(&field.name);
     if matches!((ty, default_value), (Type::Void, Value::Void)) {
         return writeln!(output, "        pub fn {method}(&self) {{}}")
             .map_err(|_| GenerateError::Format);
