@@ -637,20 +637,32 @@ fn pack_complete_run_chunk(
     if input.len() != (MAX_RUN_WORDS + 1) * WORD_BYTES {
         return Ok(false);
     }
-    if input.chunks_exact(WORD_BYTES).all(word_is_zero) {
+    let first_word = &input[..WORD_BYTES];
+    let first_tag = word_tag_slice(first_word);
+    if first_tag == 0
+        && input[WORD_BYTES..]
+            .chunks_exact(WORD_BYTES)
+            .all(word_is_zero)
+    {
         check_output_limit(output.len(), 2, max_output_bytes)?;
         output.extend_from_slice(&[0, u8::MAX]);
         return Ok(true);
     }
-    if input
-        .chunks_exact(WORD_BYTES)
-        .all(|word| zero_byte_count_slice(word) == 0)
-    {
+    let mut is_raw_run = first_tag == u8::MAX;
+    if is_raw_run {
+        for word in input[WORD_BYTES..].chunks_exact(WORD_BYTES) {
+            if zero_byte_count_slice(word) > 1 {
+                is_raw_run = false;
+                break;
+            }
+        }
+    }
+    if is_raw_run {
         let encoded_len = 2 + input.len();
         check_raw_output_limit(output.len(), encoded_len, max_output_bytes)?;
         output.reserve(encoded_len);
         output.push(u8::MAX);
-        output.extend_from_slice(&input[..WORD_BYTES]);
+        output.extend_from_slice(first_word);
         output.push(u8::MAX);
         output.extend_from_slice(&input[WORD_BYTES..]);
         return Ok(true);
