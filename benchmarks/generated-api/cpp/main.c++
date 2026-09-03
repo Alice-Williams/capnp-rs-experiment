@@ -138,7 +138,7 @@ uint64_t measure(Root root, Fingerprint fingerprint, size_t passes) {
 
 int main(int argc, char** argv) {
   if (argc != 4) {
-    std::cerr << "usage: cpp-generated-api direct-scalars|generated-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-blobs PASSES FIXTURE\n";
+    std::cerr << "usage: cpp-generated-api direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs PASSES FIXTURE\n";
     return 2;
   }
   auto mode = std::string_view(argv[1]);
@@ -148,11 +148,11 @@ int main(int argc, char** argv) {
 
   auto started = std::chrono::steady_clock::now();
   uint64_t checksum;
-  if (mode == "direct-scalars") {
+  if (mode == "direct-scalars" || mode == "borrowed-direct-scalars") {
     checksum = measure(message.getRoot<capnp::AnyStruct>(), directScalarFingerprint, passes);
   } else if (mode == "generated-scalars" || mode == "borrowed-scalars") {
     checksum = measure(message.getRoot<WireFixture>(), generatedScalarFingerprint, passes);
-  } else if (mode == "direct-blobs") {
+  } else if (mode == "direct-blobs" || mode == "borrowed-direct-blobs") {
     checksum = measure(message.getRoot<capnp::AnyStruct>(), directBlobFingerprint, passes);
   } else if (mode == "generated-blobs" || mode == "borrowed-blobs") {
     checksum = measure(message.getRoot<WireFixture>(), generatedBlobFingerprint, passes);

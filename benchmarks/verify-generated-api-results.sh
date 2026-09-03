@@ -6,15 +6,15 @@ result_dir=${1:-"$repo_root/benchmarks/results/2026-09-03-m55-generated-reader-b
 expected_passes=${2:-100000}
 expected_cases=${3:-4}
 
-if [[ "$expected_cases" != 4 && "$expected_cases" != 6 ]]; then
-    printf 'expected case count must be 4 or 6\n' >&2
+if [[ "$expected_cases" != 4 && "$expected_cases" != 6 && "$expected_cases" != 8 ]]; then
+    printf 'expected case count must be 4, 6, or 8\n' >&2
     exit 2
 fi
 expected_raw_lines=$((1 + expected_cases * 2 * 11))
 expected_summary_lines=$((1 + expected_cases * 2))
 expected_comparison_lines=$((1 + expected_cases))
 expected_incremental_lines=3
-if [[ "$expected_cases" == 6 ]]; then expected_incremental_lines=5; fi
+if [[ "$expected_cases" == 6 || "$expected_cases" == 8 ]]; then expected_incremental_lines=5; fi
 
 grep -Fx 'cpp_oracle_commit=e7c9cd96f1505b5ae486db7821006c2f5dce5b5b' "$result_dir/metadata.txt"
 grep -Fx 'schema=conformance/schemas/wire-fixture.capnp' "$result_dir/metadata.txt"
@@ -39,10 +39,11 @@ awk -F '\t' -v passes="$expected_passes" -v cases="$expected_cases" -v expected_
   $1 != "cpp" && $1 != "native" { exit 1 }
   $2 != "direct-scalars" && $2 != "generated-scalars" &&
       $2 != "direct-blobs" && $2 != "generated-blobs" &&
-      !(cases == 6 && ($2 == "borrowed-scalars" || $2 == "borrowed-blobs")) { exit 1 }
+      !(cases >= 6 && ($2 == "borrowed-scalars" || $2 == "borrowed-blobs")) &&
+      !(cases == 8 && ($2 == "borrowed-direct-scalars" || $2 == "borrowed-direct-blobs")) { exit 1 }
   {
     shape = $2
-    sub(/^(direct|generated|borrowed)-/, "", shape)
+    sub(/^(borrowed-direct|direct|generated|borrowed)-/, "", shape)
   }
   !(shape in checksum) { checksum[shape] = $6; next }
   $6 != checksum[shape] { exit 1 }

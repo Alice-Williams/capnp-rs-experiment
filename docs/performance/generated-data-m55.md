@@ -100,6 +100,13 @@ allocation or copy and contains no raw pointer or unsafe self-reference.
 | retained generated scalars | 3.9763 | 67.6683 | 17.018 |
 | retained generated text/data | 17.2203 | 244.5270 | 14.200 |
 
+This checkpoint is not an acceptance comparison: it added borrowed generated
+rows before adding a borrowed direct-runtime Rust control. Consequently, its
+incremental table subtracts the retained direct reader from the borrowed
+generated reader. The corrected harness records separate
+`borrowed-direct-*` rows so ownership, validation state, and cached view setup
+are paired like-for-like.
+
 The C++ `generated-*` and `borrowed-*` rows intentionally invoke the same
 generated reader. Their timing spread is therefore an internal noise check,
 not a second C++ implementation. The native borrowed blob path is already

@@ -24,7 +24,7 @@ const FRAME: &[u8] = include_bytes!(concat!(
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let mode = args.next().ok_or(
-        "usage: generated_api_benchmark direct-scalars|generated-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-blobs PASSES",
+        "usage: generated_api_benchmark direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs PASSES",
     )?;
     let passes = args.next().ok_or("missing passes")?.parse::<usize>()?;
     if args.next().is_some()
@@ -33,9 +33,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             mode.as_str(),
             "direct-scalars"
                 | "generated-scalars"
+                | "borrowed-direct-scalars"
                 | "borrowed-scalars"
                 | "direct-blobs"
                 | "generated-blobs"
+                | "borrowed-direct-blobs"
                 | "borrowed-blobs"
         )
     {
@@ -65,6 +67,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             nesting_levels: 64,
         },
     )?;
+    let borrowed_direct = borrowed_message.root_struct()?;
     let borrowed = wire_fixture::BorrowedReader::from_root(&borrowed_message)?;
     let message = owned_frame()?;
     let direct = message.root_struct()?.into_root();
@@ -78,6 +81,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map_err(Into::into)
         })?,
         "generated-scalars" => measure(passes, || generated_scalar_fingerprint(&generated))?,
+        "borrowed-direct-scalars" => measure(passes, || {
+            direct_scalar_fingerprint(borrowed_direct).map_err(Into::into)
+        })?,
         "borrowed-scalars" => measure(passes, || borrowed_scalar_fingerprint(&borrowed))?,
         "direct-blobs" => measure(passes, || {
             direct
@@ -85,6 +91,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map_err(Into::into)
         })?,
         "generated-blobs" => measure(passes, || generated_blob_fingerprint(&generated))?,
+        "borrowed-direct-blobs" => measure(passes, || {
+            direct_blob_fingerprint(borrowed_direct).map_err(Into::into)
+        })?,
         "borrowed-blobs" => measure(passes, || borrowed_blob_fingerprint(&borrowed))?,
         _ => unreachable!(),
     };
@@ -103,8 +112,8 @@ fn measure(
     Ok(black_box(checksum))
 }
 
-fn direct_scalar_fingerprint(
-    reader: capnp_message::StructReader<'_, '_, capnp_message::SharedTraversalBudget>,
+fn direct_scalar_fingerprint<B: capnp_message::TraversalBudget>(
+    reader: capnp_message::StructReader<'_, '_, B>,
 ) -> Result<u64, StructReadError> {
     let data = reader.data_section()?;
     let mut value = u64::from(data.read_bool(0, false)?);
@@ -173,8 +182,8 @@ fn borrowed_scalar_fingerprint<B: capnp_message::TraversalBudget>(
     Ok(value)
 }
 
-fn direct_blob_fingerprint(
-    reader: capnp_message::StructReader<'_, '_, capnp_message::SharedTraversalBudget>,
+fn direct_blob_fingerprint<B: capnp_message::TraversalBudget>(
+    reader: capnp_message::StructReader<'_, '_, B>,
 ) -> Result<u64, StructReadError> {
     let text = reader.read_text(0, None)?;
     let data = reader.read_data(1, None)?;

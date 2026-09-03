@@ -68,9 +68,11 @@ printf 'implementation\tcase\tpasses\trun\telapsed_ns\tchecksum\n' > "$output/re
 workloads=(
     direct-scalars
     generated-scalars
+    borrowed-direct-scalars
     borrowed-scalars
     direct-blobs
     generated-blobs
+    borrowed-direct-blobs
     borrowed-blobs
 )
 
@@ -106,7 +108,7 @@ python3 "$repo_root/tools/summarize-generated-api-benchmarks.py" \
     "$output/incremental.tsv"
 awk -F '\t' '
   NR == 1 { next }
-  { shape = $2; sub(/^(direct|generated|borrowed)-/, "", shape) }
+  { shape = $2; sub(/^(borrowed-direct|direct|generated|borrowed)-/, "", shape) }
   !(shape in checksum) { checksum[shape] = $6; next }
   $6 != checksum[shape] { exit 1 }
 ' "$output/results.tsv"

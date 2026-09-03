@@ -84,7 +84,10 @@ def main() -> None:
                 "generated_native_over_cpp",
             ]
         )
-        for ownership in ("generated", "borrowed"):
+        ownerships = ["generated"]
+        if any(case.startswith("borrowed-") for _, case in medians):
+            ownerships.append("borrowed")
+        for ownership in ownerships:
             for shape in ("scalars", "blobs"):
                 write_incremental(writer, medians, by_run, ownership, shape)
 
@@ -96,10 +99,13 @@ def write_incremental(
     ownership: str,
     shape: str,
 ) -> None:
-    cpp_incremental = paired_median(by_run, "cpp", ownership, shape)
-    native_incremental = paired_median(by_run, "native", ownership, shape)
-    cpp_direct = medians[("cpp", f"direct-{shape}")]
-    native_direct = medians[("native", f"direct-{shape}")]
+    direct_case = "direct"
+    if ownership == "borrowed" and ("cpp", f"borrowed-direct-{shape}") in medians:
+        direct_case = "borrowed-direct"
+    cpp_incremental = paired_median(by_run, "cpp", ownership, direct_case, shape)
+    native_incremental = paired_median(by_run, "native", ownership, direct_case, shape)
+    cpp_direct = medians[("cpp", f"{direct_case}-{shape}")]
+    native_direct = medians[("native", f"{direct_case}-{shape}")]
     cpp_generated = medians[("cpp", f"{ownership}-{shape}")]
     native_generated = medians[("native", f"{ownership}-{shape}")]
     ratio = (
@@ -123,6 +129,7 @@ def paired_median(
     samples: dict[tuple[str, str, str], float],
     implementation: str,
     ownership: str,
+    direct_case: str,
     shape: str,
 ) -> float:
     generated = {
@@ -133,7 +140,7 @@ def paired_median(
     direct = {
         run: value
         for (impl, case, run), value in samples.items()
-        if impl == implementation and case == f"direct-{shape}"
+        if impl == implementation and case == f"{direct_case}-{shape}"
     }
     runs = sorted(generated.keys() & direct.keys(), key=int)
     if not runs:
