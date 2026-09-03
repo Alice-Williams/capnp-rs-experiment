@@ -67,6 +67,7 @@ workloads=(
     'fresh far'
     'prepared double-far'
     'fresh double-far'
+    'reuse direct'
 )
 
 run_workload() {

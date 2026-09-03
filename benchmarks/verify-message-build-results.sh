@@ -22,7 +22,7 @@ if git -C "$repo_root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     git -C "$repo_root" merge-base --is-ancestor "$native_commit" HEAD
 fi
 
-test "$workload_count" -eq "$((shape_count * 2))"
+test "$workload_count" -ge "$((shape_count * 2))"
 test "$(wc -l < "$result_dir/results.tsv")" -eq "$expected_results"
 test "$(wc -l < "$result_dir/summary.tsv")" -eq "$expected_summary"
 test "$(wc -l < "$result_dir/comparison.tsv")" -eq "$expected_comparison"
@@ -31,7 +31,7 @@ awk -F '\t' -v expected="$expected_results" -v passes="$expected_passes" '
   NR == 1 { if ($0 != "implementation\tcase\tshape\tpasses\trun\telapsed_ns\tsemantic_checksum\twire_checksum") exit 1; next }
   NF != 8 || $4 != passes || $6 <= 0 || $7 < 0 || $8 < 0 { exit 1 }
   $1 != "cpp" && $1 != "native" { exit 1 }
-  $2 != "prepared" && $2 != "fresh" { exit 1 }
+  $2 != "prepared" && $2 != "fresh" && $2 != "reuse" { exit 1 }
   $3 != "direct" && $3 != "far" && $3 != "double-far" { exit 1 }
   !($1 FS $2 FS $3 in semantic) {
     semantic[$1 FS $2 FS $3] = $7
@@ -53,6 +53,7 @@ if [[ "$gate_mode" == final ]]; then
       NR == 1 { next }
       $1 == "prepared" && $5 > 1.036 { exit 1 }
       $1 == "fresh" && $5 > 1.03 { exit 1 }
+      $1 == "reuse" && $5 > 1.03 { exit 1 }
       END { if (NR < 5) exit 1 }
     ' "$result_dir/comparison.tsv"
     awk -F '\t' -v expected="$((shape_count + 1))" 'NR == 1 { next } $4 > 1.03 { exit 1 } END { if (NR != expected) exit 1 }' \

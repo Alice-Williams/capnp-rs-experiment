@@ -117,18 +117,35 @@ __attribute__((noinline)) uint64_t freshIteration(
   return hashSegments(message.getSegmentsForOutput());
 }
 
+__attribute__((noinline)) uint64_t reuseIteration(
+    std::array<capnp::word, 3>& scratch, uint64_t first, uint64_t second) {
+  uint64_t fingerprint;
+  {
+    capnp::MallocMessageBuilder message(
+        kj::arrayPtr(scratch.data(), scratch.size()),
+        capnp::AllocationStrategy::FIXED_SIZE);
+    auto root = message.getRoot<capnp::AnyPointer>().initAsAnyStruct(2, 0);
+    auto data = root.getDataSection();
+    setWord(data.begin(), 0, first);
+    setWord(data.begin(), 1, second);
+    fingerprint = hashSegments(message.getSegmentsForOutput());
+  }
+  return fingerprint;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
   if (argc != 4) {
-    std::cerr << "usage: cpp-message-build prepared|fresh direct|far|double-far PASSES\n";
+    std::cerr << "usage: cpp-message-build prepared|fresh|reuse direct|far|double-far PASSES\n";
     return 2;
   }
   auto mode = std::string_view(argv[1]);
   auto shape = std::string_view(argv[2]);
   auto passes = parseSize(argv[3]);
-  if ((mode != "prepared" && mode != "fresh")
-      || (shape != "direct" && shape != "far" && shape != "double-far")) {
+  if ((mode != "prepared" && mode != "fresh" && mode != "reuse")
+      || (shape != "direct" && shape != "far" && shape != "double-far")
+      || (mode == "reuse" && shape != "direct")) {
     std::cerr << "unknown benchmark mode or shape\n";
     return 2;
   }
@@ -136,18 +153,29 @@ int main(int argc, char** argv) {
   auto shapeId = shape == "direct" ? 0u : shape == "far" ? 1u : 2u;
   uint64_t semantic = SEED;
   uint64_t wire = SEED;
+  std::array<capnp::word, 3> scratch{};
   auto started = std::chrono::steady_clock::now();
   for (size_t pass = 0; pass < passes; ++pass) {
     auto first = VALUE ^ uint64_t{pass};
     auto second = std::rotl(first, 23);
     auto fingerprint = mode == "prepared"
         ? preparedIteration(shapeId, first, second)
+        : mode == "reuse"
+        ? reuseIteration(scratch, first, second)
         : freshIteration(shapeId, first, second);
     semantic = std::rotl(semantic, 9) ^ first ^ std::rotl(second, 13);
     wire = std::rotl(wire, 11) ^ fingerprint;
   }
   auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
       std::chrono::steady_clock::now() - started);
+  if (mode == "reuse") {
+    auto bytes = reinterpret_cast<const capnp::byte*>(scratch.data());
+    if (readWord(bytes, 0) != 0 || readWord(bytes, 1) != 0
+        || readWord(bytes, 2) != 0) {
+      std::cerr << "scratch storage was not cleared\n";
+      return 1;
+    }
+  }
   asm volatile("" : "+r"(semantic), "+r"(wire) : : "memory");
   std::cout << elapsed.count() << '\t' << semantic << '\t' << wire << '\n';
   return 0;

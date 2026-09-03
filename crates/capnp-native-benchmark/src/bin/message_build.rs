@@ -10,15 +10,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let mode = args
         .next()
-        .ok_or("usage: message_build prepared|fresh direct|far|double-far PASSES")?;
+        .ok_or("usage: message_build prepared|fresh|reuse direct|far|double-far PASSES")?;
     let shape = args.next().ok_or("missing shape")?;
     let passes = args.next().ok_or("missing pass count")?.parse::<usize>()?;
     if args.next().is_some()
-        || !matches!(mode.as_str(), "prepared" | "fresh")
+        || !matches!(mode.as_str(), "prepared" | "fresh" | "reuse")
         || !matches!(shape.as_str(), "direct" | "far" | "double-far")
+        || (mode == "reuse" && shape != "direct")
         || passes == 0
     {
-        return Err("expected prepared|fresh, direct|far|double-far, and positive PASSES".into());
+        return Err(
+            "expected prepared|fresh|reuse, direct|far|double-far, and positive PASSES".into(),
+        );
     }
 
     let shape = match shape.as_str() {
@@ -29,21 +32,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let mut semantic = SEED;
     let mut wire = SEED;
+    let mut reuse_arena = if mode == "reuse" {
+        Some(ExclusiveArena::new(3, 3)?)
+    } else {
+        None
+    };
     let started = Instant::now();
     for pass in 0..passes {
         let first = VALUE ^ pass as u64;
         let second = first.rotate_left(23);
-        let fingerprint = if mode == "prepared" {
-            prepared_iteration(shape, first, second)
-        } else {
-            fresh_iteration(shape, first, second)?
+        let fingerprint = match mode.as_str() {
+            "prepared" => prepared_iteration(shape, first, second),
+            "reuse" => reuse_iteration(
+                reuse_arena.as_mut().expect("reuse mode creates its arena"),
+                first,
+                second,
+            )?,
+            _ => fresh_iteration(shape, first, second)?,
         };
         semantic = semantic.rotate_left(9) ^ first ^ second.rotate_left(13);
         wire = wire.rotate_left(11) ^ fingerprint;
     }
+    let elapsed = started.elapsed();
+    if let Some(arena) = &reuse_arena
+        && arena.as_segment() != [0; 8]
+    {
+        return Err("reused arena root storage was not cleared".into());
+    }
     println!(
         "{}\t{}\t{}",
-        started.elapsed().as_nanos(),
+        elapsed.as_nanos(),
         black_box(semantic),
         black_box(wire)
     );
@@ -88,6 +106,23 @@ fn fresh_iteration(shape: u8, first: u64, second: u64) -> Result<u64, capnp_mess
         root.set_u64(1, second, 0)?;
     }
     Ok(hash_segments(&arena))
+}
+
+#[inline(never)]
+fn reuse_iteration(
+    arena: &mut ExclusiveArena,
+    first: u64,
+    second: u64,
+) -> Result<u64, capnp_message::ArenaError> {
+    {
+        let mut root = arena.init_root_struct(2, 0)?;
+        root.set_u64(0, first, 0)?;
+        root.set_u64(1, second, 0)?;
+    }
+    let fingerprint = hash_segments(arena);
+    arena.reset()?;
+    debug_assert_eq!(arena.as_segment(), &[0; 8]);
+    Ok(fingerprint)
 }
 
 fn set_word(bytes: &mut [u8], index: usize, value: u64) {
