@@ -1469,17 +1469,17 @@ fn emit_borrowed_list_wrapper(
     .map_err(|_| GenerateError::Format)?;
     writeln!(
         output,
-        "        pub const fn len(self) -> u32 {{ self.inner.len() }}"
+        "        #[inline(always)]\n        pub const fn len(self) -> u32 {{ self.inner.len() }}"
     )
     .map_err(|_| GenerateError::Format)?;
     writeln!(
         output,
-        "        pub const fn is_empty(self) -> bool {{ self.inner.is_empty() }}"
+        "        #[inline(always)]\n        pub const fn is_empty(self) -> bool {{ self.inner.is_empty() }}"
     )
     .map_err(|_| GenerateError::Format)?;
     writeln!(
         output,
-        "        pub fn get(self, index: u32) -> Result<{get_type}, capnp_message::ListReadError> {{ {get_expression} }}"
+        "        #[inline(always)]\n        pub fn get(self, index: u32) -> Result<{get_type}, capnp_message::ListReadError> {{ {get_expression} }}"
     )
     .map_err(|_| GenerateError::Format)?;
     writeln!(output, "    }}").map_err(|_| GenerateError::Format)

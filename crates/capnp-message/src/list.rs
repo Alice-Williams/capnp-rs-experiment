@@ -176,6 +176,7 @@ impl<'data> MessageSegments<'data> {
     /// assert!(values.is_empty());
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
+    #[inline(always)]
     pub fn read_list<'context, B: TraversalBudget>(
         &'context self,
         location: WireLocation,
@@ -241,6 +242,7 @@ impl<'context, 'data, B: TraversalBudget> ListReader<'context, 'data, B> {
         self.len() == 0
     }
 
+    #[inline(always)]
     pub fn as_primitive<T: PrimitiveListElement>(
         self,
     ) -> Result<PrimitiveListReader<'context, 'data, B, T>, ListReadError> {
@@ -266,6 +268,7 @@ impl<'context, 'data, B: TraversalBudget> ListReader<'context, 'data, B> {
         })
     }
 
+    #[inline(always)]
     pub fn as_pointers(self) -> Result<PointerListReader<'context, 'data, B>, ListReadError> {
         if self.reference.is_some() {
             compatible(self.layout()?, ElementSize::Pointer)?;
@@ -273,6 +276,7 @@ impl<'context, 'data, B: TraversalBudget> ListReader<'context, 'data, B> {
         Ok(PointerListReader { list: self })
     }
 
+    #[inline(always)]
     pub fn as_structs(self) -> Result<StructListReader<'context, 'data, B>, ListReadError> {
         if self
             .reference
@@ -286,6 +290,7 @@ impl<'context, 'data, B: TraversalBudget> ListReader<'context, 'data, B> {
         Ok(StructListReader { list: self })
     }
 
+    #[inline(always)]
     fn layout(self) -> Result<ElementLayout, ListReadError> {
         Ok(match self.reference {
             None => ElementLayout {
@@ -325,6 +330,7 @@ impl<'context, 'data, B: TraversalBudget> ListReader<'context, 'data, B> {
         })
     }
 
+    #[inline(always)]
     fn segment(self) -> Result<&'data [u8], ListReadError> {
         let segment_id = self.reference.map_or(0, |value| value.content.segment_id);
         self.segments
@@ -332,6 +338,7 @@ impl<'context, 'data, B: TraversalBudget> ListReader<'context, 'data, B> {
             .ok_or(ListReadError::UnknownSegment { segment_id })
     }
 
+    #[inline(always)]
     fn content_start_bits(self) -> Result<u64, ListReadError> {
         u64::from(self.reference.map_or(0, |value| value.content.word_offset))
             .checked_mul(64)
@@ -421,6 +428,7 @@ impl<'context, 'data, B: TraversalBudget, T: PrimitiveListElement>
         self.len == 0
     }
 
+    #[inline(always)]
     pub fn get(self, index: u32) -> Result<T, ListReadError> {
         check_index(index, self.len())?;
         let bit_offset = u64::from(index)
@@ -559,6 +567,7 @@ impl<'context, 'data, B: TraversalBudget> PointerListReader<'context, 'data, B> 
         })
     }
 
+    #[inline(always)]
     pub fn get_list(self, index: u32) -> Result<ListReader<'context, 'data, B>, ListReadError> {
         let (location, nesting) = self.element_location(index)?;
         self.list
@@ -574,6 +583,7 @@ impl<'context, 'data, B: TraversalBudget> PointerListReader<'context, 'data, B> 
             .read_struct(location, self.list.budget, nesting)?)
     }
 
+    #[inline(always)]
     pub fn read_text(self, index: u32) -> Result<TextReader<'data>, ListReadError> {
         let (location, nesting) = self.element_location(index)?;
         Ok(self
@@ -582,6 +592,7 @@ impl<'context, 'data, B: TraversalBudget> PointerListReader<'context, 'data, B> 
             .read_text(location, self.list.budget, nesting)?)
     }
 
+    #[inline(always)]
     pub fn read_data(self, index: u32) -> Result<DataReader<'data>, ListReadError> {
         let (location, nesting) = self.element_location(index)?;
         Ok(self
@@ -597,6 +608,7 @@ impl<'context, 'data, B: TraversalBudget> PointerListReader<'context, 'data, B> 
         }
     }
 
+    #[inline(always)]
     pub(crate) fn element_location(
         self,
         index: u32,

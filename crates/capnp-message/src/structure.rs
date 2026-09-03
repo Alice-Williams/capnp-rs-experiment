@@ -185,7 +185,7 @@ impl<'context, 'data, B: TraversalBudget> PointerSection<'context, 'data, B> {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn read_list(self, index: u16) -> Result<ListReader<'context, 'data, B>, ListReadError> {
         match self.location(index)? {
             Some(location) => self.segments.read_list(location, self.budget, self.nesting),
