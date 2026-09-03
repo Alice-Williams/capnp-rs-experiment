@@ -637,12 +637,15 @@ fn pack_complete_run_chunk(
     if input.len() != (MAX_RUN_WORDS + 1) * WORD_BYTES {
         return Ok(false);
     }
-    if input.iter().all(|byte| *byte == 0) {
+    if input.chunks_exact(WORD_BYTES).all(word_is_zero) {
         check_output_limit(output.len(), 2, max_output_bytes)?;
         output.extend_from_slice(&[0, u8::MAX]);
         return Ok(true);
     }
-    if input.iter().all(|byte| *byte != 0) {
+    if input
+        .chunks_exact(WORD_BYTES)
+        .all(|word| zero_byte_count_slice(word) == 0)
+    {
         let encoded_len = 2 + input.len();
         check_raw_output_limit(output.len(), encoded_len, max_output_bytes)?;
         output.reserve(encoded_len);
