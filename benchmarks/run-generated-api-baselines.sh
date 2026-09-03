@@ -100,6 +100,8 @@ workloads=(
     generated-builder-blobs
     direct-builder-struct
     generated-builder-struct
+    direct-builder-list
+    generated-builder-list
 )
 
 run_workload() {

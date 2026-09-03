@@ -6,8 +6,8 @@ result_dir=${1:-"$repo_root/benchmarks/results/2026-09-03-m55-generated-reader-b
 expected_passes=${2:-100000}
 expected_cases=${3:-4}
 
-if ((expected_cases < 4 || expected_cases > 26 || expected_cases % 2 != 0)); then
-    printf 'expected case count must be an even value from 4 through 26\n' >&2
+if ((expected_cases < 4 || expected_cases > 28 || expected_cases % 2 != 0)); then
+    printf 'expected case count must be an even value from 4 through 28\n' >&2
     exit 2
 fi
 expected_raw_lines=$((1 + expected_cases * 2 * 11))
@@ -18,6 +18,7 @@ if ((expected_cases >= 6)); then expected_incremental_lines=5; fi
 if ((expected_cases >= 22)); then expected_incremental_lines=6; fi
 if ((expected_cases >= 24)); then expected_incremental_lines=7; fi
 if ((expected_cases >= 26)); then expected_incremental_lines=8; fi
+if ((expected_cases >= 28)); then expected_incremental_lines=9; fi
 
 grep -Fx 'cpp_oracle_commit=e7c9cd96f1505b5ae486db7821006c2f5dce5b5b' "$result_dir/metadata.txt"
 grep -Fx 'schema=conformance/schemas/wire-fixture.capnp' "$result_dir/metadata.txt"
@@ -52,7 +53,8 @@ awk -F '\t' -v passes="$expected_passes" -v cases="$expected_cases" -v expected_
       !(cases >= 20 && ($2 == "borrowed-direct-defaults" || $2 == "borrowed-defaults")) &&
       !(cases >= 22 && ($2 == "direct-builder-scalars" || $2 == "generated-builder-scalars")) &&
       !(cases >= 24 && ($2 == "direct-builder-blobs" || $2 == "generated-builder-blobs")) &&
-      !(cases == 26 && ($2 == "direct-builder-struct" || $2 == "generated-builder-struct")) { exit 1 }
+      !(cases >= 26 && ($2 == "direct-builder-struct" || $2 == "generated-builder-struct")) &&
+      !(cases == 28 && ($2 == "direct-builder-list" || $2 == "generated-builder-list")) { exit 1 }
   {
     shape = $2
     sub(/^(borrowed-direct|direct|generated|borrowed)-/, "", shape)
