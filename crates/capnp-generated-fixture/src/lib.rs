@@ -622,6 +622,19 @@ mod tests {
                 .expect("nested struct")
                 .set_value(88)
                 .expect("nested scalar");
+            {
+                let mut nodes = root.init_structs(2).expect("typed struct list init");
+                nodes
+                    .get(0)
+                    .expect("first struct list element")
+                    .set_value(101)
+                    .expect("first struct list scalar");
+                nodes
+                    .get(1)
+                    .expect("second struct list element")
+                    .set_value(202)
+                    .expect("second struct list scalar");
+            }
         }
         let message = OwnedMessage::new(arena.into_segments(), ReaderLimits::default())
             .expect("native generated message validates");
@@ -646,6 +659,17 @@ mod tests {
         assert_eq!(
             reader.choice().expect("choice").number().expect("number"),
             444
+        );
+        assert_eq!(
+            reader
+                .structs()
+                .expect("struct list")
+                .expect("non-null struct list")
+                .get(1)
+                .expect("second struct")
+                .value()
+                .expect("second value"),
+            202
         );
         assert_eq!(
             reader

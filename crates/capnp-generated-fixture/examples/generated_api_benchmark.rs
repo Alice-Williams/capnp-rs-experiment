@@ -8,7 +8,7 @@ use capnp_io::{FrameLimits, FrameRead, parse_frame};
 use capnp_message::{
     BorrowedMessage, ExclusiveArena, OwnedMessage, ReaderLimits, StructBuilder, StructReadError,
 };
-use capnp_schema::{CompiledSchema, DynamicInput, LoadLimits, NodeKind};
+use capnp_schema::{CompiledSchema, LoadLimits, NodeKind};
 
 const SEED: u64 = 0x4d59_5df4_d0f3_3173;
 const REQUEST: &[u8] = include_bytes!(concat!(
@@ -454,8 +454,7 @@ fn write_generated_struct_list(
     let values = struct_list_builder_values(pass);
     let mut list = builder.init_structs(2)?;
     for (index, value) in values.into_iter().enumerate() {
-        list.struct_element(index as u32)?
-            .set("value", DynamicInput::UInt32(value))?;
+        list.get(index as u32)?.set_value(value)?;
     }
     Ok(())
 }

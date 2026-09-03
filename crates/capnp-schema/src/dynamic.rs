@@ -1222,6 +1222,254 @@ macro_rules! generated_slot_setters {
     };
 }
 
+/// Compact backing storage for generated builders of non-generic structs.
+///
+/// Unlike the fully dynamic builder, this representation has no owned brand
+/// state. Generated direct-slot operations therefore do not execute drop glue
+/// when a short-lived list element builder leaves scope.
+#[doc(hidden)]
+pub struct GeneratedStructBuilder<'schema, 'arena> {
+    schema: &'schema CompiledSchema,
+    type_id: NodeId,
+    builder: StructBuilder<'arena>,
+}
+
+impl<'schema, 'arena> GeneratedStructBuilder<'schema, 'arena> {
+    pub fn root(
+        schema: &'schema CompiledSchema,
+        arena: &'arena mut ExclusiveArena,
+        type_id: NodeId,
+    ) -> Result<Self, DynamicError> {
+        let structure = require_struct(schema, type_id)?;
+        Ok(Self {
+            schema,
+            type_id,
+            builder: arena.init_root_struct(structure.data_word_count, structure.pointer_count)?,
+        })
+    }
+
+    #[inline(always)]
+    pub fn from_dynamic(value: DynamicStructBuilder<'schema, 'arena>) -> Self {
+        let DynamicStructBuilder {
+            schema,
+            type_id,
+            builder,
+            ..
+        } = value;
+        Self {
+            schema,
+            type_id,
+            builder,
+        }
+    }
+
+    #[inline(always)]
+    pub const fn from_struct_list_element(
+        schema: &'schema CompiledSchema,
+        type_id: NodeId,
+        builder: StructBuilder<'arena>,
+    ) -> Self {
+        Self {
+            schema,
+            type_id,
+            builder,
+        }
+    }
+
+    #[doc(hidden)]
+    pub const fn schema(&self) -> &'schema CompiledSchema {
+        self.schema
+    }
+
+    generated_slot_setters!(
+        (set_bool_slot, set_bool, bool),
+        (set_i8_slot, set_i8, i8),
+        (set_i16_slot, set_i16, i16),
+        (set_i32_slot, set_i32, i32),
+        (set_i64_slot, set_i64, i64),
+        (set_u8_slot, set_u8, u8),
+        (set_u16_slot, set_u16, u16),
+        (set_u32_slot, set_u32, u32),
+        (set_u64_slot, set_u64, u64),
+        (set_f32_slot, set_f32, f32),
+        (set_f64_slot, set_f64, f64),
+    );
+
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn set_text_slot(&mut self, offset: u32, value: &str) -> Result<(), DynamicError> {
+        Ok(self.builder.set_text(u16_offset(offset)?, value)?)
+    }
+
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn set_data_slot(&mut self, offset: u32, value: &[u8]) -> Result<(), DynamicError> {
+        Ok(self.builder.set_data(u16_offset(offset)?, value)?)
+    }
+
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn init_struct_slot(
+        &mut self,
+        offset: u32,
+        type_id: NodeId,
+        data_word_count: u16,
+        pointer_count: u16,
+    ) -> Result<DynamicStructBuilder<'schema, '_>, DynamicError> {
+        Ok(DynamicStructBuilder {
+            schema: self.schema,
+            type_id,
+            brand: None,
+            builder: self.builder.init_struct(
+                u16_offset(offset)?,
+                data_word_count,
+                pointer_count,
+            )?,
+        })
+    }
+
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn init_primitive_list_slot<T: capnp_message::PrimitiveListValue>(
+        &mut self,
+        offset: u32,
+        element_count: u32,
+    ) -> Result<DataListBuilder<'_, T>, DynamicError> {
+        Ok(self
+            .builder
+            .init_list::<T>(u16_offset(offset)?, element_count)?)
+    }
+
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn init_struct_list_slot(
+        &mut self,
+        offset: u32,
+        element_count: u32,
+        data_word_count: u16,
+        pointer_count: u16,
+    ) -> Result<StructListBuilder<'_>, DynamicError> {
+        Ok(self.builder.init_struct_list(
+            u16_offset(offset)?,
+            element_count,
+            data_word_count,
+            pointer_count,
+        )?)
+    }
+
+    pub fn field_type(&self, name: &str) -> Result<Type, DynamicError> {
+        let (field, _) = self.field_owned(name)?;
+        let FieldKind::Slot { ty, .. } = field.kind else {
+            return Err(type_mismatch("slot field"));
+        };
+        Ok(ty)
+    }
+
+    pub fn set(&mut self, name: &str, value: DynamicInput<'_>) -> Result<(), DynamicError> {
+        let mut dynamic = DynamicStructBuilder {
+            schema: self.schema,
+            type_id: self.type_id,
+            brand: None,
+            builder: self.builder.group(),
+        };
+        dynamic.set(name, value)
+    }
+
+    pub fn activate(&mut self, name: &str) -> Result<(), DynamicError> {
+        let mut dynamic = DynamicStructBuilder {
+            schema: self.schema,
+            type_id: self.type_id,
+            brand: None,
+            builder: self.builder.group(),
+        };
+        dynamic.activate(name)
+    }
+
+    pub fn group(&mut self, name: &str) -> Result<DynamicStructBuilder<'schema, '_>, DynamicError> {
+        let (field, discriminant_offset) = self.field_owned(name)?;
+        self.activate_field(&field, discriminant_offset)?;
+        let FieldKind::Group { type_id } = field.kind else {
+            return Err(type_mismatch("group field"));
+        };
+        Ok(DynamicStructBuilder {
+            schema: self.schema,
+            type_id,
+            brand: None,
+            builder: self.builder.group(),
+        })
+    }
+
+    pub fn init_struct(
+        &mut self,
+        name: &str,
+    ) -> Result<DynamicStructBuilder<'schema, '_>, DynamicError> {
+        let (field, discriminant_offset) = self.field_owned(name)?;
+        self.activate_field(&field, discriminant_offset)?;
+        let FieldKind::Slot { offset, ty, .. } = field.kind else {
+            return Err(type_mismatch("struct field"));
+        };
+        let Type::Struct { type_id, brand } = ty else {
+            return Err(type_mismatch("struct field"));
+        };
+        let structure = require_struct(self.schema, type_id)?;
+        Ok(DynamicStructBuilder {
+            schema: self.schema,
+            type_id,
+            brand: compact_builder_brand(brand),
+            builder: self.builder.init_struct(
+                u16_offset(offset)?,
+                structure.data_word_count,
+                structure.pointer_count,
+            )?,
+        })
+    }
+
+    pub fn init_list(
+        &mut self,
+        name: &str,
+        element_count: u32,
+    ) -> Result<DynamicListBuilder<'schema, '_>, DynamicError> {
+        let (field, discriminant_offset) = self.field_owned(name)?;
+        self.activate_field(&field, discriminant_offset)?;
+        let FieldKind::Slot { offset, ty, .. } = field.kind else {
+            return Err(type_mismatch("list field"));
+        };
+        let Type::List(element) = ty else {
+            return Err(type_mismatch("list field"));
+        };
+        DynamicListBuilder::from_struct_field(
+            self.schema,
+            &mut self.builder,
+            u16_offset(offset)?,
+            *element,
+            element_count,
+        )
+    }
+
+    fn field_owned(&self, name: &str) -> Result<(Field, u32), DynamicError> {
+        let structure = require_struct(self.schema, self.type_id)?;
+        let field = structure
+            .field(name)
+            .ok_or_else(|| DynamicError::UnknownField {
+                type_id: self.type_id,
+                name: name.to_owned(),
+            })?
+            .clone();
+        Ok((field, structure.discriminant_offset))
+    }
+
+    fn activate_field(
+        &mut self,
+        field: &Field,
+        discriminant_offset: u32,
+    ) -> Result<(), DynamicError> {
+        if let Some(value) = field.discriminant_value {
+            self.builder.set_u16(discriminant_offset, value, 0)?;
+        }
+        Ok(())
+    }
+}
+
 impl<'schema, 'arena> DynamicStructBuilder<'schema, 'arena> {
     pub fn root(
         schema: &'schema CompiledSchema,
@@ -1249,6 +1497,28 @@ impl<'schema, 'arena> DynamicStructBuilder<'schema, 'arena> {
 
     pub const fn type_id(&self) -> NodeId {
         self.type_id
+    }
+
+    #[doc(hidden)]
+    pub const fn schema(&self) -> &'schema CompiledSchema {
+        self.schema
+    }
+
+    /// Wraps a struct-list element whose type and brand were selected by
+    /// statically generated code.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn from_struct_list_element(
+        schema: &'schema CompiledSchema,
+        type_id: NodeId,
+        builder: StructBuilder<'arena>,
+    ) -> Self {
+        Self {
+            schema,
+            type_id,
+            brand: None,
+            builder,
+        }
     }
 
     generated_slot_setters!(
@@ -1316,6 +1586,25 @@ impl<'schema, 'arena> DynamicStructBuilder<'schema, 'arena> {
         Ok(self
             .builder
             .init_list::<T>(u16_offset(offset)?, element_count)?)
+    }
+
+    /// Initializes a statically generated, unbranded struct-list field
+    /// without repeating dynamic field, element-type, or layout lookup.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn init_struct_list_slot(
+        &mut self,
+        offset: u32,
+        element_count: u32,
+        data_word_count: u16,
+        pointer_count: u16,
+    ) -> Result<StructListBuilder<'_>, DynamicError> {
+        Ok(self.builder.init_struct_list(
+            u16_offset(offset)?,
+            element_count,
+            data_word_count,
+            pointer_count,
+        )?)
     }
 
     /// Resolves a field's runtime type through this builder's current brand.

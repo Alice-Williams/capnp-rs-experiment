@@ -252,6 +252,60 @@ impl<T: ListElement> ListReader<T> {
     }
 }
 
+/// A generated, schema-typed builder for an inline-composite struct list.
+pub struct StructListBuilder<'schema, 'arena, T> {
+    schema: &'schema capnp_schema::CompiledSchema,
+    inner: capnp_message::StructListBuilder<'arena>,
+    marker: PhantomData<fn() -> T>,
+}
+
+impl<'schema, 'arena, T: StructListElement> StructListBuilder<'schema, 'arena, T> {
+    #[allow(dead_code)]
+    fn from_parts(
+        schema: &'schema capnp_schema::CompiledSchema,
+        inner: capnp_message::StructListBuilder<'arena>,
+    ) -> Self {
+        Self { schema, inner, marker: PhantomData }
+    }
+
+    pub fn len(&self) -> u32 {
+        self.inner.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    #[inline(always)]
+    pub fn get(&mut self, index: u32) -> Result<T::Builder<'schema, '_>, capnp_schema::DynamicError> {
+        Ok(T::from_builder(self.schema, self.inner.get(index)?))
+    }
+
+    /// Returns the dynamic element wrapper used by generated code predating
+    /// the typed `get()` fast path.
+    pub fn struct_element(
+        &mut self,
+        index: u32,
+    ) -> Result<capnp_schema::DynamicStructBuilder<'schema, '_>, capnp_schema::DynamicError> {
+        Ok(capnp_schema::DynamicStructBuilder::from_struct_list_element(
+            self.schema,
+            T::TYPE_ID,
+            self.inner.get(index)?,
+        ))
+    }
+}
+
+#[doc(hidden)]
+pub trait StructListElement {
+    const TYPE_ID: u64;
+    type Builder<'schema, 'arena>;
+
+    fn from_builder<'schema, 'arena>(
+        schema: &'schema capnp_schema::CompiledSchema,
+        builder: capnp_message::StructBuilder<'arena>,
+    ) -> Self::Builder<'schema, 'arena>;
+}
+
 pub trait ListElement: Sized {
     fn from_dynamic(value: capnp_schema::DynamicValue) -> Result<Self, capnp_schema::DynamicError>;
 }
@@ -1117,8 +1171,13 @@ fn emit_struct(
         .map_err(|_| GenerateError::Format)?;
     writeln!(output, "    }}").map_err(|_| GenerateError::Format)?;
 
+    let builder_inner = if parameters.is_empty() {
+        "capnp_schema::GeneratedStructBuilder<'schema, 'arena>"
+    } else {
+        "capnp_schema::DynamicStructBuilder<'schema, 'arena>"
+    };
     writeln!(output, "    #[allow(dead_code)]").map_err(|_| GenerateError::Format)?;
-    writeln!(output, "    pub struct Builder<'schema, 'arena{comma}{params}> {{ inner: capnp_schema::DynamicStructBuilder<'schema, 'arena>, marker: PhantomData<fn() -> {marker}> }}",
+    writeln!(output, "    pub struct Builder<'schema, 'arena{comma}{params}> {{ inner: {builder_inner}, marker: PhantomData<fn() -> {marker}> }}",
         comma = if parameters.is_empty() { "" } else { ", " },
         params = parameters.iter().map(|parameter| format!("{} = capnp_schema::DynamicValue", parameter.name)).collect::<Vec<_>>().join(", "))
         .map_err(|_| GenerateError::Format)?;
@@ -1148,19 +1207,43 @@ fn emit_struct(
             .map_err(|_| GenerateError::Format)?;
     }
     if generated_bounds.is_empty() {
-        writeln!(output, "            Ok(Self {{ inner: capnp_schema::DynamicStructBuilder::root(schema, arena, TYPE_ID)?, marker: PhantomData }})")
+        writeln!(output, "            Ok(Self {{ inner: capnp_schema::GeneratedStructBuilder::root(schema, arena, TYPE_ID)?, marker: PhantomData }})")
             .map_err(|_| GenerateError::Format)?;
     } else {
         writeln!(output, "            Ok(Self {{ inner: capnp_schema::DynamicStructBuilder::root_branded(schema, arena, TYPE_ID, {brand})?, marker: PhantomData }})")
             .map_err(|_| GenerateError::Format)?;
     }
     writeln!(output, "        }}").map_err(|_| GenerateError::Format)?;
-    writeln!(output, "        #[doc(hidden)]\n        #[inline(always)]\n        pub fn from_dynamic(inner: capnp_schema::DynamicStructBuilder<'schema, 'arena>) -> Self {{ Self {{ inner, marker: PhantomData }} }}")
-        .map_err(|_| GenerateError::Format)?;
+    if parameters.is_empty() {
+        writeln!(output, "        #[doc(hidden)]\n        #[inline(always)]\n        pub fn from_dynamic(inner: capnp_schema::DynamicStructBuilder<'schema, 'arena>) -> Self {{ Self {{ inner: capnp_schema::GeneratedStructBuilder::from_dynamic(inner), marker: PhantomData }} }}")
+            .map_err(|_| GenerateError::Format)?;
+        writeln!(output, "        #[doc(hidden)]\n        #[inline(always)]\n        pub fn from_generated(inner: capnp_schema::GeneratedStructBuilder<'schema, 'arena>) -> Self {{ Self {{ inner, marker: PhantomData }} }}")
+            .map_err(|_| GenerateError::Format)?;
+    } else {
+        writeln!(output, "        #[doc(hidden)]\n        #[inline(always)]\n        pub fn from_dynamic(inner: capnp_schema::DynamicStructBuilder<'schema, 'arena>) -> Self {{ Self {{ inner, marker: PhantomData }} }}")
+            .map_err(|_| GenerateError::Format)?;
+    }
     for field in &structure.fields {
         emit_builder_field(output, schema, field, names, &parameters)?;
     }
     writeln!(output, "    }}").map_err(|_| GenerateError::Format)?;
+
+    if parameters.is_empty() {
+        writeln!(output, "    impl StructListElement for Reader {{")
+            .map_err(|_| GenerateError::Format)?;
+        writeln!(output, "        const TYPE_ID: u64 = TYPE_ID;")
+            .map_err(|_| GenerateError::Format)?;
+        writeln!(
+            output,
+            "        type Builder<'schema, 'arena> = Builder<'schema, 'arena>;"
+        )
+        .map_err(|_| GenerateError::Format)?;
+        writeln!(output, "        #[inline(always)]\n        fn from_builder<'schema, 'arena>(schema: &'schema capnp_schema::CompiledSchema, builder: capnp_message::StructBuilder<'arena>) -> Self::Builder<'schema, 'arena> {{")
+            .map_err(|_| GenerateError::Format)?;
+        writeln!(output, "            Builder::from_generated(capnp_schema::GeneratedStructBuilder::from_struct_list_element(schema, TYPE_ID, builder))")
+            .map_err(|_| GenerateError::Format)?;
+        writeln!(output, "        }}\n    }}").map_err(|_| GenerateError::Format)?;
+    }
 
     if structure.discriminant_count > 0 {
         writeln!(
@@ -2669,22 +2752,53 @@ fn emit_builder_field(
                     }
                     writeln!(output, "        }}").map_err(|_| GenerateError::Format)?;
                 }
-                Type::List(element)
-                    if field.discriminant_value.is_none()
-                        && borrowed_primitive_rust_type(element).is_some() =>
-                {
-                    let rust_type = borrowed_primitive_rust_type(element)
-                        .expect("primitive type was checked above");
-                    writeln!(output, "        #[inline(always)]\n        pub fn init_{method}(&mut self, element_count: u32) -> Result<capnp_message::DataListBuilder<'_, {rust_type}>, capnp_schema::DynamicError> {{")
-                        .map_err(|_| GenerateError::Format)?;
-                    writeln!(
-                        output,
-                        "            self.inner.init_primitive_list_slot::<{rust_type}>({offset}, element_count)"
-                    )
-                    .map_err(|_| GenerateError::Format)?;
-                    writeln!(output, "        }}").map_err(|_| GenerateError::Format)?;
-                }
-                Type::List(_) => {
+                Type::List(element) => {
+                    if field.discriminant_value.is_none() {
+                        if let Some(rust_type) = borrowed_primitive_rust_type(element) {
+                            writeln!(output, "        #[inline(always)]\n        pub fn init_{method}(&mut self, element_count: u32) -> Result<capnp_message::DataListBuilder<'_, {rust_type}>, capnp_schema::DynamicError> {{")
+                                .map_err(|_| GenerateError::Format)?;
+                            writeln!(
+                                output,
+                                "            self.inner.init_primitive_list_slot::<{rust_type}>({offset}, element_count)"
+                            )
+                            .map_err(|_| GenerateError::Format)?;
+                            writeln!(output, "        }}").map_err(|_| GenerateError::Format)?;
+                            return Ok(());
+                        }
+                        if let Type::Struct { type_id, brand } = element.as_ref()
+                            && brand.scopes.is_empty()
+                        {
+                            let child = schema
+                                .node(*type_id)
+                                .ok_or(GenerateError::UnknownType(*type_id))?;
+                            if generic_parameters(schema, child).is_empty() {
+                                let NodeKind::Struct(child_structure) = &child.kind else {
+                                    return Err(GenerateError::UnknownType(*type_id));
+                                };
+                                let target = struct_reader_type(
+                                    schema,
+                                    *type_id,
+                                    Some(brand),
+                                    names,
+                                    context,
+                                )?;
+                                writeln!(output, "        #[inline(always)]\n        pub fn init_{method}(&mut self, element_count: u32) -> Result<StructListBuilder<'schema, '_, {target}>, capnp_schema::DynamicError> {{")
+                                    .map_err(|_| GenerateError::Format)?;
+                                writeln!(output, "            let schema = self.inner.schema();")
+                                    .map_err(|_| GenerateError::Format)?;
+                                writeln!(output, "            let inner = self.inner.init_struct_list_slot({offset}, element_count, {}, {})?;", child_structure.data_word_count, child_structure.pointer_count)
+                                    .map_err(|_| GenerateError::Format)?;
+                                writeln!(
+                                    output,
+                                    "            Ok(StructListBuilder::from_parts(schema, inner))"
+                                )
+                                .map_err(|_| GenerateError::Format)?;
+                                writeln!(output, "        }}")
+                                    .map_err(|_| GenerateError::Format)?;
+                                return Ok(());
+                            }
+                        }
+                    }
                     writeln!(output, "        pub fn init_{method}(&mut self, element_count: u32) -> Result<capnp_schema::DynamicListBuilder<'schema, '_>, capnp_schema::DynamicError> {{")
                         .map_err(|_| GenerateError::Format)?;
                     writeln!(
@@ -3187,6 +3301,16 @@ mod tests {
             !generated
                 .source
                 .contains("self.inner.init_list(\"uint16s\"")
+        );
+        assert!(
+            generated
+                .source
+                .contains("self.inner.init_struct_list_slot(17, element_count, 1, 1)")
+        );
+        assert!(
+            !generated
+                .source
+                .contains("self.inner.init_list(\"structs\"")
         );
         assert!(
             generated
