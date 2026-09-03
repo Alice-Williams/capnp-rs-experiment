@@ -280,6 +280,17 @@ impl PackedDecoder {
     fn push_inner(&mut self, input: &[u8]) -> Result<(), PackedError> {
         let mut cursor = 0;
         while cursor < input.len() {
+            if matches!(self.state, DecodeState::Tag) {
+                let consumed = decode_complete_item(
+                    &input[cursor..],
+                    &mut self.output,
+                    self.max_output_bytes,
+                )?;
+                if consumed != 0 {
+                    cursor += consumed;
+                    continue;
+                }
+            }
             match &mut self.state {
                 DecodeState::Tag => {
                     let tag = input[cursor];
@@ -405,6 +416,54 @@ impl PackedDecoder {
             }
         }
     }
+}
+
+#[inline(always)]
+fn decode_complete_item(
+    input: &[u8],
+    output: &mut Vec<u8>,
+    max_output_bytes: usize,
+) -> Result<usize, PackedError> {
+    let tag = input[0];
+    let payload_bytes = tag.count_ones() as usize;
+    let header_bytes = 1 + payload_bytes + usize::from(tag == 0 || tag == u8::MAX);
+    if input.len() < header_bytes {
+        return Ok(0);
+    }
+
+    ensure_output_limit(output.len(), WORD_BYTES, max_output_bytes)?;
+    if tag == 0 {
+        let additional_bytes = usize::from(input[1]) * WORD_BYTES;
+        let first_word_end = output.len() + WORD_BYTES;
+        ensure_output_limit(first_word_end, additional_bytes, max_output_bytes)?;
+        output.resize(first_word_end + additional_bytes, 0);
+        return Ok(2);
+    }
+
+    let raw_bytes = if tag == u8::MAX {
+        usize::from(input[1 + payload_bytes]) * WORD_BYTES
+    } else {
+        0
+    };
+    if input.len() < header_bytes + raw_bytes {
+        return Ok(0);
+    }
+
+    let output_start = output.len();
+    output.resize(output_start + WORD_BYTES, 0);
+    let mut payload = 1;
+    for lane in 0..WORD_BYTES {
+        if tag & (1 << lane) != 0 {
+            output[output_start + lane] = input[payload];
+            payload += 1;
+        }
+    }
+    if tag == u8::MAX {
+        ensure_output_limit(output.len(), raw_bytes, max_output_bytes)?;
+        let raw_start = header_bytes;
+        output.extend_from_slice(&input[raw_start..raw_start + raw_bytes]);
+    }
+    Ok(header_bytes + raw_bytes)
 }
 
 /// Packs a complete word-aligned byte slice with an explicit output bound.
