@@ -1,6 +1,6 @@
 # M52 — Message-read performance
 
-- Status: in-progress
+- Status: complete
 - Phase: 9
 - Depends on: M51
 
@@ -47,17 +47,17 @@ may be replaced by an unmatched ownership or safety model.
 
 ## Implementation checklist
 
-- [ ] Trace the native and pinned C++ root, direct-pointer, far-pointer,
+- [x] Trace the native and pinned C++ root, direct-pointer, far-pointer,
   traversal-budget, scalar, text, and data read paths.
 - [x] Add byte-identical fixtures and a paired framing/message-read runner with
   checksums that observe every requested result.
 - [x] Record and verify the unmodified M52 baseline.
-- [ ] Attribute each material incremental gap with assembly or isolated phase
+- [x] Attribute each material incremental gap with assembly or isolated phase
   evidence before changing implementation code.
-- [ ] Optimize only message validation/read paths while preserving hostile-input
+- [x] Optimize only message validation/read paths while preserving hostile-input
   and exact-budget guarantees.
-- [ ] Record final cumulative and incremental comparisons.
-- [ ] Add Bazel evidence gates and pass full Cargo/MSRV/Bazel/Miri validation.
+- [x] Record final cumulative and incremental comparisons.
+- [x] Add Bazel evidence gates and pass full Cargo/MSRV/Bazel/Miri validation.
 
 ## Required exit evidence
 

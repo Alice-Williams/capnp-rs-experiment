@@ -114,4 +114,4 @@ wire safety or protocol ordering.
 - [Bottom-up performance program](performance-stack.md)
 - [M50 — Wire primitives performance](milestones/M50-wire-primitives-performance.md) — complete ([report](../performance/wire-primitives-m50.md))
 - [M51 — Standard framing performance](milestones/M51-standard-framing-performance.md) — complete ([report](../performance/framing-m51.md))
-- [M52 — Message-read performance](milestones/M52-message-reads-performance.md) — in-progress
+- [M52 — Message-read performance](milestones/M52-message-reads-performance.md) — complete ([report](../performance/message-reads-m52.md))

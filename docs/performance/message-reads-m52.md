@@ -370,3 +370,21 @@ root ratios independently remain far below parity.
 
 Evidence:
 `benchmarks/results/2026-09-03-m52-retained-final-g-drive-docker/`.
+
+## Validation
+
+The completed implementation and checked-in evidence pass:
+
+- development-toolchain formatting, all workspace targets, documentation tests,
+  and Clippy with warnings denied;
+- all workspace targets on the declared Rust 1.85 MSRV;
+- `bazelisk test //...`, including the structural benchmark checks and the M52
+  final ratio gate;
+- all three exact Loom concurrency models; and
+- pinned `nightly-2026-08-31` Miri tests for wire alignment and disjoint builder
+  partitions.
+
+Loom's generator uses a 4 KiB default coroutine stack. The partitioned-builder
+model now explicitly gives its worker coroutines 64 KiB, preventing test-harness
+stack exhaustion while leaving the explored synchronization state and product
+code unchanged.
