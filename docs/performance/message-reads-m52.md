@@ -88,3 +88,30 @@ changing checked-coordinate semantics.
 
 Evidence:
 `benchmarks/results/2026-09-03-m52-streamlined-root-g-drive-docker/`.
+
+## Shared-descriptor root checkpoint
+
+Framing and message reading now share one safe `Segment` descriptor whose
+private representation proves word alignment. The message context borrows the
+already-validated framing table directly. A specialized struct-root path also
+reuses the source segment while checking a direct pointer, while far pointers
+retain the general checked-coordinate path. No native pointer is cached and no
+unsafe code is used.
+
+| Case | Segments | C++ ns/message | Rust ns/message | Rust / C++ | Ceiling |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| framing | 1 | 13.2911 | 4.2493 | 0.320 | — |
+| root | 1 | 44.1166 | 12.7450 | 0.289 | 0.331 |
+| framing | 2 | 57.4517 | 5.7215 | 0.100 | — |
+| root | 2 | 168.2798 | 26.5202 | 0.158 | 0.172 |
+| framing | 64 | 436.4597 | 185.6482 | 0.425 | — |
+| root | 64 | 566.7974 | 192.0447 | 0.339 | 0.349 |
+
+Every root shape now passes the inherited cumulative gate. Paired subtraction
+gives incremental Rust/C++ ratios of 0.276, 0.188, and 0.049. The 64-segment
+increment is only 6.3965 ns and the framing/root sample ranges overlap, so M52
+does not treat that subtraction alone as a stable component claim; an isolated
+root-read benchmark must corroborate it before this layer is final.
+
+Evidence:
+`benchmarks/results/2026-09-03-m52-shared-descriptors-g-drive-docker/`.
