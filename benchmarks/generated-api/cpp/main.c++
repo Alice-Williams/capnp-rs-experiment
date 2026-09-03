@@ -194,7 +194,9 @@ uint64_t generatedNestedFingerprint(WireFixture::Reader root) {
 }
 
 uint64_t directStructListFingerprint(capnp::AnyStruct::Reader root) {
-  auto nodes = root.getPointerSection()[17].getAs<capnp::List<capnp::AnyStruct>>();
+  auto nodes = root.getPointerSection()[17]
+      .getAs<capnp::AnyList>()
+      .as<capnp::List<capnp::AnyStruct>>();
   return readData<uint32_t>(nodes[1].getDataSection(), 0);
 }
 
