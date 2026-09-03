@@ -15,6 +15,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string_view>
+#include <type_traits>
 
 namespace {
 
@@ -68,6 +69,152 @@ T readData(kj::ArrayPtr<const capnp::byte> data, size_t index, T defaultValue = 
     wire = encoded.get();
   }
   return wire ^ defaultValue;
+}
+
+template <typename T>
+void writeData(
+    kj::ArrayPtr<capnp::byte> data, size_t index, T value,
+    T defaultValue = 0) {
+  auto offset = index * sizeof(T);
+  if (offset + sizeof(T) > data.size()) {
+    throw std::runtime_error("direct scalar write exceeds the data section");
+  }
+  capnp::_::WireValue<T> encoded;
+  if constexpr (std::is_floating_point_v<T>) {
+    if (defaultValue != 0) {
+      throw std::runtime_error("non-zero floating-point default is unsupported here");
+    }
+    encoded.set(value);
+  } else {
+    encoded.set(value ^ defaultValue);
+  }
+  std::memcpy(data.begin() + offset, &encoded, sizeof(encoded));
+}
+
+struct ScalarBuilderValues {
+  uint64_t raw;
+  bool boolValue;
+  int8_t int8Value;
+  int16_t int16Value;
+  int32_t int32Value;
+  int64_t int64Value;
+  uint8_t uint8Value;
+  uint16_t uint16Value;
+  uint32_t uint32Value;
+  uint64_t uint64Value;
+  float float32Value;
+  double float64Value;
+  Color color;
+  uint32_t defaulted;
+};
+
+ScalarBuilderValues scalarBuilderValues(size_t pass) {
+  auto raw = SEED + static_cast<uint64_t>(pass) * 0x9e3779b97f4a7c15ull;
+  auto color = raw % 3 == 0 ? Color::RED
+      : raw % 3 == 1 ? Color::GREEN : Color::BLUE;
+  return {
+    raw,
+    (raw & 1) != 0,
+    static_cast<int8_t>(raw & 0x7f),
+    static_cast<int16_t>(raw & 0x7fff),
+    static_cast<int32_t>(raw & 0x7fffffffull),
+    static_cast<int64_t>(raw & 0x7fffffffffffffffull),
+    static_cast<uint8_t>(raw),
+    static_cast<uint16_t>(raw),
+    static_cast<uint32_t>(raw),
+    raw,
+    std::bit_cast<float>(0x3f800000u | (static_cast<uint32_t>(raw) & 0x007fffffu)),
+    std::bit_cast<double>(0x3ff0000000000000ull | (raw & 0x000fffffffffffffull)),
+    color,
+    static_cast<uint32_t>(raw >> 17),
+  };
+}
+
+uint64_t scalarBuilderFingerprint(size_t pass) {
+  auto values = scalarBuilderValues(pass);
+  uint64_t value = values.boolValue;
+  value = std::rotl(value, 5) ^ uint64_t{static_cast<uint8_t>(values.int8Value)};
+  value = std::rotl(value, 7) ^ uint64_t{static_cast<uint16_t>(values.int16Value)};
+  value = std::rotl(value, 11) ^ uint64_t{static_cast<uint32_t>(values.int32Value)};
+  value = std::rotl(value, 13) ^ static_cast<uint64_t>(values.int64Value);
+  value = std::rotl(value, 17) ^ values.uint8Value;
+  value = std::rotl(value, 19) ^ values.uint16Value;
+  value = std::rotl(value, 23) ^ values.uint32Value;
+  value = std::rotl(value, 29) ^ values.uint64Value;
+  value = std::rotl(value, 31) ^ std::bit_cast<uint32_t>(values.float32Value);
+  value = std::rotl(value, 37) ^ std::bit_cast<uint64_t>(values.float64Value);
+  value = std::rotl(value, 41) ^ static_cast<uint16_t>(values.color);
+  return std::rotl(value, 43) ^ values.defaulted ^ std::rotl(values.raw, 47);
+}
+
+void writeDirectScalars(capnp::AnyStruct::Builder& root, size_t pass) {
+  auto values = scalarBuilderValues(pass);
+  auto data = root.getDataSection();
+  if (data.size() < 72) {
+    throw std::runtime_error("WireFixture direct builder has a short data section");
+  }
+  data[0] = static_cast<capnp::byte>((data[0] & ~1u) | values.boolValue);
+  writeData<int8_t>(data, 1, values.int8Value);
+  writeData<int16_t>(data, 1, values.int16Value);
+  writeData<int32_t>(data, 1, values.int32Value);
+  writeData<int64_t>(data, 1, values.int64Value);
+  writeData<uint8_t>(data, 16, values.uint8Value);
+  writeData<uint16_t>(data, 9, values.uint16Value);
+  writeData<uint32_t>(data, 5, values.uint32Value);
+  writeData<uint64_t>(data, 3, values.uint64Value);
+  writeData<float>(data, 8, values.float32Value);
+  writeData<double>(data, 5, values.float64Value);
+  writeData<uint16_t>(data, 18, static_cast<uint16_t>(values.color));
+  writeData<uint32_t>(data, 16, values.defaulted, 123456u);
+}
+
+void writeGeneratedScalars(WireFixture::Builder& root, size_t pass) {
+  auto values = scalarBuilderValues(pass);
+  root.setBoolValue(values.boolValue);
+  root.setInt8Value(values.int8Value);
+  root.setInt16Value(values.int16Value);
+  root.setInt32Value(values.int32Value);
+  root.setInt64Value(values.int64Value);
+  root.setUint8Value(values.uint8Value);
+  root.setUint16Value(values.uint16Value);
+  root.setUint32Value(values.uint32Value);
+  root.setUint64Value(values.uint64Value);
+  root.setFloat32Value(values.float32Value);
+  root.setFloat64Value(values.float64Value);
+  root.setColor(values.color);
+  root.setDefaulted(values.defaulted);
+}
+
+template <typename Root, typename Write>
+uint64_t measureBuilder(Root& root, Write write, size_t passes) {
+  uint64_t checksum = SEED;
+  for (size_t pass = 0; pass < passes; ++pass) {
+    auto rootPointer = &root;
+    asm volatile("" : "+r"(rootPointer) : : "memory");
+    write(*rootPointer, pass);
+    checksum = std::rotl(checksum, 9) ^ scalarBuilderFingerprint(pass);
+  }
+  return checksum;
+}
+
+void benchmarkDirectBuilder(size_t passes) {
+  capnp::MallocMessageBuilder message;
+  auto root = message.initRoot<capnp::AnyPointer>().initAsAnyStruct(9, 28);
+  auto started = std::chrono::steady_clock::now();
+  auto checksum = measureBuilder(root, writeDirectScalars, passes);
+  auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now() - started);
+  std::cout << elapsed.count() << '\t' << checksum << '\n';
+}
+
+void benchmarkGeneratedBuilder(size_t passes) {
+  capnp::MallocMessageBuilder message;
+  auto root = message.initRoot<WireFixture>();
+  auto started = std::chrono::steady_clock::now();
+  auto checksum = measureBuilder(root, writeGeneratedScalars, passes);
+  auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now() - started);
+  std::cout << elapsed.count() << '\t' << checksum << '\n';
 }
 
 uint64_t directScalarFingerprint(capnp::AnyStruct::Reader root) {
@@ -276,11 +423,19 @@ uint64_t measure(Root root, Fingerprint fingerprint, size_t passes) {
 
 int main(int argc, char** argv) {
   if (argc != 4) {
-    std::cerr << "usage: cpp-generated-api direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups|borrowed-direct-lists|borrowed-lists|borrowed-direct-nested|borrowed-nested|borrowed-direct-struct-lists|borrowed-struct-lists|borrowed-direct-evolution|borrowed-evolution|borrowed-direct-defaults|borrowed-defaults PASSES FIXTURE\n";
+    std::cerr << "usage: cpp-generated-api direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups|borrowed-direct-lists|borrowed-lists|borrowed-direct-nested|borrowed-nested|borrowed-direct-struct-lists|borrowed-struct-lists|borrowed-direct-evolution|borrowed-evolution|borrowed-direct-defaults|borrowed-defaults|direct-builder-scalars|generated-builder-scalars PASSES FIXTURE\n";
     return 2;
   }
   auto mode = std::string_view(argv[1]);
   auto passes = parseSize(argv[2]);
+  if (mode == "direct-builder-scalars") {
+    benchmarkDirectBuilder(passes);
+    return 0;
+  }
+  if (mode == "generated-builder-scalars") {
+    benchmarkGeneratedBuilder(passes);
+    return 0;
+  }
   auto words = mode == "borrowed-direct-defaults" || mode == "borrowed-defaults"
       ? emptyMessageWords()
       : readWords(argv[3]);

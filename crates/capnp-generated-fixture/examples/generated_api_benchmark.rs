@@ -5,8 +5,10 @@ use std::time::Instant;
 use capnp_generated_fixture::evolution_v1;
 use capnp_generated_fixture::wire::{Color, choice, wire_fixture};
 use capnp_io::{FrameLimits, FrameRead, parse_frame};
-use capnp_message::{BorrowedMessage, OwnedMessage, ReaderLimits, StructReadError};
-use capnp_schema::{CompiledSchema, LoadLimits};
+use capnp_message::{
+    BorrowedMessage, ExclusiveArena, OwnedMessage, ReaderLimits, StructBuilder, StructReadError,
+};
+use capnp_schema::{CompiledSchema, LoadLimits, NodeKind};
 
 const SEED: u64 = 0x4d59_5df4_d0f3_3173;
 const REQUEST: &[u8] = include_bytes!(concat!(
@@ -32,7 +34,7 @@ const EMPTY_FRAME: &[u8] = &[0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let mode = args.next().ok_or(
-        "usage: generated_api_benchmark direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups|borrowed-direct-lists|borrowed-lists|borrowed-direct-nested|borrowed-nested|borrowed-direct-struct-lists|borrowed-struct-lists|borrowed-direct-evolution|borrowed-evolution|borrowed-direct-defaults|borrowed-defaults PASSES",
+        "usage: generated_api_benchmark direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups|borrowed-direct-lists|borrowed-lists|borrowed-direct-nested|borrowed-nested|borrowed-direct-struct-lists|borrowed-struct-lists|borrowed-direct-evolution|borrowed-evolution|borrowed-direct-defaults|borrowed-defaults|direct-builder-scalars|generated-builder-scalars PASSES",
     )?;
     let passes = args.next().ok_or("missing passes")?.parse::<usize>()?;
     if args.next().is_some()
@@ -59,6 +61,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 | "borrowed-evolution"
                 | "borrowed-direct-defaults"
                 | "borrowed-defaults"
+                | "direct-builder-scalars"
+                | "generated-builder-scalars"
         )
     {
         return Err("expected a known mode and positive PASSES".into());
@@ -68,6 +72,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         REQUEST,
         LoadLimits::default(),
     )?);
+    if mode == "direct-builder-scalars" || mode == "generated-builder-scalars" {
+        return run_scalar_builder_benchmark(&mode, passes, &schema);
+    }
     let FrameRead::Message { frame, remaining } = parse_frame(FRAME, FrameLimits::default())?
     else {
         return Err("fixture is empty".into());
@@ -151,6 +158,148 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     println!("{}\t{}", started.elapsed().as_nanos(), checksum);
     Ok(())
+}
+
+fn run_scalar_builder_benchmark(
+    mode: &str,
+    passes: usize,
+    schema: &CompiledSchema,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut arena = ExclusiveArena::new(32, 1_024)?;
+    let started;
+    let checksum = if mode == "direct-builder-scalars" {
+        let node = schema
+            .node(wire_fixture::TYPE_ID)
+            .ok_or("WireFixture schema is missing")?;
+        let NodeKind::Struct(structure) = &node.kind else {
+            return Err("WireFixture is not a struct".into());
+        };
+        let mut builder =
+            arena.init_root_struct(structure.data_word_count, structure.pointer_count)?;
+        started = Instant::now();
+        measure_builder(passes, &mut builder, write_direct_scalars)?
+    } else {
+        let mut builder = wire_fixture::Builder::init_root(schema, &mut arena)?;
+        started = Instant::now();
+        measure_builder(passes, &mut builder, write_generated_scalars)?
+    };
+    println!("{}\t{}", started.elapsed().as_nanos(), checksum);
+    Ok(())
+}
+
+fn measure_builder<B, E>(
+    passes: usize,
+    builder: &mut B,
+    mut write: impl FnMut(&mut B, usize) -> Result<(), E>,
+) -> Result<u64, E> {
+    let mut checksum = SEED;
+    for pass in 0..passes {
+        write(black_box(&mut *builder), pass)?;
+        checksum = checksum.rotate_left(9) ^ scalar_builder_fingerprint(pass);
+    }
+    Ok(black_box(checksum))
+}
+
+fn write_direct_scalars(
+    builder: &mut StructBuilder<'_>,
+    pass: usize,
+) -> Result<(), capnp_message::ArenaError> {
+    let values = ScalarBuilderValues::new(pass);
+    builder.set_bool(0, values.bool_value, false)?;
+    builder.set_i8(1, values.int8_value, 0)?;
+    builder.set_i16(1, values.int16_value, 0)?;
+    builder.set_i32(1, values.int32_value, 0)?;
+    builder.set_i64(1, values.int64_value, 0)?;
+    builder.set_u8(16, values.uint8_value, 0)?;
+    builder.set_u16(9, values.uint16_value, 0)?;
+    builder.set_u32(5, values.uint32_value, 0)?;
+    builder.set_u64(3, values.uint64_value, 0)?;
+    builder.set_f32(8, values.float32_value, 0.0)?;
+    builder.set_f64(5, values.float64_value, 0.0)?;
+    builder.set_u16(18, values.color.ordinal(), 0)?;
+    builder.set_u32(16, values.defaulted, 123_456)?;
+    Ok(())
+}
+
+fn write_generated_scalars(
+    builder: &mut wire_fixture::Builder<'_, '_>,
+    pass: usize,
+) -> Result<(), capnp_schema::DynamicError> {
+    let values = ScalarBuilderValues::new(pass);
+    builder.set_bool_value(values.bool_value)?;
+    builder.set_int8_value(values.int8_value)?;
+    builder.set_int16_value(values.int16_value)?;
+    builder.set_int32_value(values.int32_value)?;
+    builder.set_int64_value(values.int64_value)?;
+    builder.set_uint8_value(values.uint8_value)?;
+    builder.set_uint16_value(values.uint16_value)?;
+    builder.set_uint32_value(values.uint32_value)?;
+    builder.set_uint64_value(values.uint64_value)?;
+    builder.set_float32_value(values.float32_value)?;
+    builder.set_float64_value(values.float64_value)?;
+    builder.set_color(values.color)?;
+    builder.set_defaulted(values.defaulted)?;
+    Ok(())
+}
+
+struct ScalarBuilderValues {
+    raw: u64,
+    bool_value: bool,
+    int8_value: i8,
+    int16_value: i16,
+    int32_value: i32,
+    int64_value: i64,
+    uint8_value: u8,
+    uint16_value: u16,
+    uint32_value: u32,
+    uint64_value: u64,
+    float32_value: f32,
+    float64_value: f64,
+    color: Color,
+    defaulted: u32,
+}
+
+impl ScalarBuilderValues {
+    fn new(pass: usize) -> Self {
+        let raw = SEED.wrapping_add((pass as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15));
+        Self {
+            raw,
+            bool_value: raw & 1 != 0,
+            int8_value: (raw & 0x7f) as i8,
+            int16_value: (raw & 0x7fff) as i16,
+            int32_value: (raw & 0x7fff_ffff) as i32,
+            int64_value: (raw & 0x7fff_ffff_ffff_ffff) as i64,
+            uint8_value: raw as u8,
+            uint16_value: raw as u16,
+            uint32_value: raw as u32,
+            uint64_value: raw,
+            float32_value: f32::from_bits(0x3f80_0000 | (raw as u32 & 0x007f_ffff)),
+            float64_value: f64::from_bits(0x3ff0_0000_0000_0000 | (raw & 0x000f_ffff_ffff_ffff)),
+            color: match raw % 3 {
+                0 => Color::Red,
+                1 => Color::Green,
+                _ => Color::Blue,
+            },
+            defaulted: (raw >> 17) as u32,
+        }
+    }
+}
+
+fn scalar_builder_fingerprint(pass: usize) -> u64 {
+    let values = ScalarBuilderValues::new(pass);
+    let mut value = u64::from(values.bool_value);
+    value = value.rotate_left(5) ^ values.int8_value as u8 as u64;
+    value = value.rotate_left(7) ^ values.int16_value as u16 as u64;
+    value = value.rotate_left(11) ^ values.int32_value as u32 as u64;
+    value = value.rotate_left(13) ^ values.int64_value as u64;
+    value = value.rotate_left(17) ^ u64::from(values.uint8_value);
+    value = value.rotate_left(19) ^ u64::from(values.uint16_value);
+    value = value.rotate_left(23) ^ u64::from(values.uint32_value);
+    value = value.rotate_left(29) ^ values.uint64_value;
+    value = value.rotate_left(31) ^ u64::from(values.float32_value.to_bits());
+    value = value.rotate_left(37) ^ values.float64_value.to_bits();
+    value = value.rotate_left(41) ^ u64::from(values.color.ordinal());
+    value.rotate_left(43) ^ u64::from(values.defaulted) ^ values.raw.rotate_left(47)
 }
 
 fn measure(

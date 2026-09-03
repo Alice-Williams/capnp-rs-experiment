@@ -90,6 +90,68 @@ def main() -> None:
         for ownership in ownerships:
             for shape in ("scalars", "blobs"):
                 write_incremental(writer, medians, by_run, ownership, shape)
+        if ("cpp", "direct-builder-scalars") in medians:
+            write_incremental_cases(
+                writer,
+                medians,
+                by_run,
+                "builder-scalars",
+                "direct-builder-scalars",
+                "generated-builder-scalars",
+            )
+
+
+def write_incremental_cases(
+    writer: object,
+    medians: dict[tuple[str, str], float],
+    by_run: dict[tuple[str, str, str], float],
+    label: str,
+    direct_case: str,
+    generated_case: str,
+) -> None:
+    cpp_incremental = paired_case_median(by_run, "cpp", direct_case, generated_case)
+    native_incremental = paired_case_median(by_run, "native", direct_case, generated_case)
+    cpp_direct = medians[("cpp", direct_case)]
+    native_direct = medians[("native", direct_case)]
+    cpp_generated = medians[("cpp", generated_case)]
+    native_generated = medians[("native", generated_case)]
+    ratio = (
+        f"{native_incremental / cpp_incremental:.3f}"
+        if cpp_incremental > 0 and native_incremental >= 0
+        else "below-resolution"
+    )
+    writer.writerow(  # type: ignore[attr-defined]
+        [
+            label,
+            f"{cpp_incremental:.4f}",
+            f"{native_incremental:.4f}",
+            ratio,
+            f"{native_direct / cpp_direct:.3f}",
+            f"{native_generated / cpp_generated:.3f}",
+        ]
+    )
+
+
+def paired_case_median(
+    samples: dict[tuple[str, str, str], float],
+    implementation: str,
+    direct_case: str,
+    generated_case: str,
+) -> float:
+    generated = {
+        run: value
+        for (impl, case, run), value in samples.items()
+        if impl == implementation and case == generated_case
+    }
+    direct = {
+        run: value
+        for (impl, case, run), value in samples.items()
+        if impl == implementation and case == direct_case
+    }
+    runs = sorted(generated.keys() & direct.keys(), key=int)
+    if not runs:
+        raise SystemExit(f"no paired {generated_case} samples for {implementation}")
+    return statistics.median(generated[run] - direct[run] for run in runs)
 
 
 def write_incremental(

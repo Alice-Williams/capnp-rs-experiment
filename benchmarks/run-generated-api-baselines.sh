@@ -64,6 +64,7 @@ mkdir -p -- "$output"
     printf 'cpp_primitive=generated WireFixture::Reader paired with AnyStruct::Reader\n'
     printf 'native_retained_primitive=generated wire_fixture::Reader paired with retained StructReader\n'
     printf 'native_borrowed_primitive=generated wire_fixture::BorrowedReader paired with BorrowedMessage root StructReader\n'
+    printf 'builder_primitive=generated WireFixture builder paired with a constant-layout AnyStruct/StructBuilder\n'
     printf 'native_commit=%s\n' "$native_commit"
     printf 'cpp_binary_sha256=%s\n' "$(sha256sum "$cpp_benchmark" | cut -d ' ' -f1)"
     printf 'native_binary_sha256=%s\n' "$(sha256sum "$native_benchmark" | cut -d ' ' -f1)"
@@ -93,6 +94,8 @@ workloads=(
     borrowed-evolution
     borrowed-direct-defaults
     borrowed-defaults
+    direct-builder-scalars
+    generated-builder-scalars
 )
 
 run_workload() {
