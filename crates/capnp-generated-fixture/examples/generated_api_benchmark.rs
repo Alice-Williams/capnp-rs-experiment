@@ -177,19 +177,18 @@ fn run_builder_benchmark(
     passes: usize,
     schema: &CompiledSchema,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let words_per_pass =
-        if mode.ends_with("builder-pointer-list") {
-            6
-        } else if mode.ends_with("builder-struct-list") {
-            5
-        } else if mode.ends_with("builder-blobs")
-            || mode.ends_with("builder-struct")
-            || mode.ends_with("builder-list")
-        {
-            2
-        } else {
-            0
-        };
+    let words_per_pass = if mode.ends_with("builder-pointer-list") {
+        6
+    } else if mode.ends_with("builder-struct-list") {
+        5
+    } else if mode.ends_with("builder-blobs")
+        || mode.ends_with("builder-struct")
+        || mode.ends_with("builder-list")
+    {
+        2
+    } else {
+        0
+    };
     let max_words = if words_per_pass == 0 {
         1_024
     } else {
