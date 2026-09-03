@@ -49,9 +49,9 @@ may be replaced by an unmatched ownership or safety model.
 
 - [ ] Trace the native and pinned C++ root, direct-pointer, far-pointer,
   traversal-budget, scalar, text, and data read paths.
-- [ ] Add byte-identical fixtures and a paired framing/message-read runner with
+- [x] Add byte-identical fixtures and a paired framing/message-read runner with
   checksums that observe every requested result.
-- [ ] Record and verify the unmodified M52 baseline.
+- [x] Record and verify the unmodified M52 baseline.
 - [ ] Attribute each material incremental gap with assembly or isolated phase
   evidence before changing implementation code.
 - [ ] Optimize only message validation/read paths while preserving hostile-input
