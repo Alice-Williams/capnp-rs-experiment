@@ -522,7 +522,7 @@ impl ExclusiveArena {
         Ok(())
     }
 
-    #[inline]
+    #[inline(always)]
     fn allocate_words(&mut self, words: u64) -> Result<WordOffset, ArenaError> {
         let words_u32 = u32::try_from(words).map_err(|_| ArenaError::AllocationOverflow)?;
         if words_u32 > MAX_SINGLE_SEGMENT_WORDS {
@@ -536,7 +536,7 @@ impl ExclusiveArena {
         self.allocate_new_segment(words_u32)
     }
 
-    #[inline]
+    #[inline(always)]
     fn try_allocate_in_segment(
         &mut self,
         segment_id: u32,
@@ -783,7 +783,7 @@ impl ExclusiveArena {
         )
     }
 
-    #[inline]
+    #[inline(always)]
     fn write_pointer(
         &mut self,
         location: WordOffset,
