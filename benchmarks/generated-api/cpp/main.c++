@@ -11,6 +11,7 @@
 #include <cstring>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string_view>
 
@@ -169,7 +170,9 @@ int main(int argc, char** argv) {
   auto mode = std::string_view(argv[1]);
   auto passes = parseSize(argv[2]);
   auto words = readWords(argv[3]);
-  capnp::FlatArrayMessageReader message(words.asPtr());
+  capnp::ReaderOptions options;
+  options.traversalLimitInWords = std::numeric_limits<uint64_t>::max();
+  capnp::FlatArrayMessageReader message(words.asPtr(), options);
 
   auto started = std::chrono::steady_clock::now();
   uint64_t checksum;
