@@ -466,12 +466,11 @@ fn decode_complete_item(
     let output_start = output.len();
     output.resize(output_start + WORD_BYTES, 0);
     let mut payload = 1;
-    let mut remaining = tag;
-    while remaining != 0 {
-        let lane = remaining.trailing_zeros() as usize;
-        output[output_start + lane] = input[payload];
-        payload += 1;
-        remaining &= remaining - 1;
+    for lane in 0..WORD_BYTES {
+        if tag & (1 << lane) != 0 {
+            output[output_start + lane] = input[payload];
+            payload += 1;
+        }
     }
     if tag == u8::MAX {
         ensure_output_limit(output.len(), raw_bytes, max_output_bytes)?;
