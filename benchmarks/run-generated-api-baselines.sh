@@ -104,6 +104,8 @@ workloads=(
     generated-builder-list
     direct-builder-struct-list
     generated-builder-struct-list
+    direct-builder-struct-list-hot
+    generated-builder-struct-list-hot
 )
 
 run_workload() {

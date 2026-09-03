@@ -439,6 +439,42 @@ void benchmarkGeneratedStructListBuilder(size_t passes) {
   std::cout << elapsed.count() << '\t' << checksum << '\n';
 }
 
+void benchmarkDirectStructListHot(size_t passes) {
+  capnp::MallocMessageBuilder message;
+  auto root = message.initRoot<capnp::AnyPointer>().initAsAnyStruct(9, 28);
+  auto list = root.getPointerSection()[17].initAsListOfAnyStruct(1, 1, 2);
+  auto write = [](auto& elements, size_t pass) {
+    uint32_t values[2];
+    structListBuilderValues(pass, values);
+    for (uint32_t index = 0; index < 2; ++index) {
+      writeData<uint32_t>(elements[index].getDataSection(), 0, values[index]);
+    }
+  };
+  auto started = std::chrono::steady_clock::now();
+  auto checksum = measureBuilder(list, write, structListBuilderFingerprint, passes);
+  auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now() - started);
+  std::cout << elapsed.count() << '\t' << checksum << '\n';
+}
+
+void benchmarkGeneratedStructListHot(size_t passes) {
+  capnp::MallocMessageBuilder message;
+  auto root = message.initRoot<WireFixture>();
+  auto list = root.initStructs(2);
+  auto write = [](auto& elements, size_t pass) {
+    uint32_t values[2];
+    structListBuilderValues(pass, values);
+    for (uint32_t index = 0; index < 2; ++index) {
+      elements[index].setValue(values[index]);
+    }
+  };
+  auto started = std::chrono::steady_clock::now();
+  auto checksum = measureBuilder(list, write, structListBuilderFingerprint, passes);
+  auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now() - started);
+  std::cout << elapsed.count() << '\t' << checksum << '\n';
+}
+
 uint64_t directScalarFingerprint(capnp::AnyStruct::Reader root) {
   auto data = root.getDataSection();
   uint64_t value = data.size() > 0 && (data[0] & 1) != 0;
@@ -645,7 +681,7 @@ uint64_t measure(Root root, Fingerprint fingerprint, size_t passes) {
 
 int main(int argc, char** argv) {
   if (argc != 4) {
-    std::cerr << "usage: cpp-generated-api direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups|borrowed-direct-lists|borrowed-lists|borrowed-direct-nested|borrowed-nested|borrowed-direct-struct-lists|borrowed-struct-lists|borrowed-direct-evolution|borrowed-evolution|borrowed-direct-defaults|borrowed-defaults|direct-builder-scalars|generated-builder-scalars|direct-builder-blobs|generated-builder-blobs|direct-builder-struct|generated-builder-struct|direct-builder-list|generated-builder-list|direct-builder-struct-list|generated-builder-struct-list PASSES FIXTURE\n";
+    std::cerr << "usage: cpp-generated-api direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups|borrowed-direct-lists|borrowed-lists|borrowed-direct-nested|borrowed-nested|borrowed-direct-struct-lists|borrowed-struct-lists|borrowed-direct-evolution|borrowed-evolution|borrowed-direct-defaults|borrowed-defaults|direct-builder-scalars|generated-builder-scalars|direct-builder-blobs|generated-builder-blobs|direct-builder-struct|generated-builder-struct|direct-builder-list|generated-builder-list|direct-builder-struct-list|generated-builder-struct-list|direct-builder-struct-list-hot|generated-builder-struct-list-hot PASSES FIXTURE\n";
     return 2;
   }
   auto mode = std::string_view(argv[1]);
@@ -688,6 +724,14 @@ int main(int argc, char** argv) {
   }
   if (mode == "generated-builder-struct-list") {
     benchmarkGeneratedStructListBuilder(passes);
+    return 0;
+  }
+  if (mode == "direct-builder-struct-list-hot") {
+    benchmarkDirectStructListHot(passes);
+    return 0;
+  }
+  if (mode == "generated-builder-struct-list-hot") {
+    benchmarkGeneratedStructListHot(passes);
     return 0;
   }
   auto words = mode == "borrowed-direct-defaults" || mode == "borrowed-defaults"

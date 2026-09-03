@@ -91,7 +91,14 @@ def main() -> None:
             for shape in ("scalars", "blobs"):
                 write_incremental(writer, medians, by_run, ownership, shape)
         if ("cpp", "direct-builder-scalars") in medians:
-            for shape in ("scalars", "blobs", "struct", "list", "struct-list"):
+            for shape in (
+                "scalars",
+                "blobs",
+                "struct",
+                "list",
+                "struct-list",
+                "struct-list-hot",
+            ):
                 direct_case = f"direct-builder-{shape}"
                 generated_case = f"generated-builder-{shape}"
                 if ("cpp", direct_case) in medians:

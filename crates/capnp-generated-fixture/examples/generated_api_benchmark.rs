@@ -34,7 +34,7 @@ const EMPTY_FRAME: &[u8] = &[0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let mode = args.next().ok_or(
-        "usage: generated_api_benchmark direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups|borrowed-direct-lists|borrowed-lists|borrowed-direct-nested|borrowed-nested|borrowed-direct-struct-lists|borrowed-struct-lists|borrowed-direct-evolution|borrowed-evolution|borrowed-direct-defaults|borrowed-defaults|direct-builder-scalars|generated-builder-scalars|direct-builder-blobs|generated-builder-blobs|direct-builder-struct|generated-builder-struct|direct-builder-list|generated-builder-list|direct-builder-struct-list|generated-builder-struct-list PASSES",
+        "usage: generated_api_benchmark direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups|borrowed-direct-lists|borrowed-lists|borrowed-direct-nested|borrowed-nested|borrowed-direct-struct-lists|borrowed-struct-lists|borrowed-direct-evolution|borrowed-evolution|borrowed-direct-defaults|borrowed-defaults|direct-builder-scalars|generated-builder-scalars|direct-builder-blobs|generated-builder-blobs|direct-builder-struct|generated-builder-struct|direct-builder-list|generated-builder-list|direct-builder-struct-list|generated-builder-struct-list|direct-builder-struct-list-hot|generated-builder-struct-list-hot PASSES",
     )?;
     let passes = args.next().ok_or("missing passes")?.parse::<usize>()?;
     if args.next().is_some()
@@ -71,6 +71,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 | "generated-builder-list"
                 | "direct-builder-struct-list"
                 | "generated-builder-struct-list"
+                | "direct-builder-struct-list-hot"
+                | "generated-builder-struct-list-hot"
         )
     {
         return Err("expected a known mode and positive PASSES".into());
@@ -294,6 +296,45 @@ fn run_builder_benchmark(
             &mut builder,
             write_generated_list,
             list_builder_fingerprint,
+        )?
+    } else if mode == "direct-builder-struct-list-hot" {
+        let node = schema
+            .node(wire_fixture::TYPE_ID)
+            .ok_or("WireFixture schema is missing")?;
+        let NodeKind::Struct(structure) = &node.kind else {
+            return Err("WireFixture is not a struct".into());
+        };
+        let mut builder =
+            arena.init_root_struct(structure.data_word_count, structure.pointer_count)?;
+        let mut list = builder.init_struct_list(17, 2, 1, 1)?;
+        started = Instant::now();
+        measure_builder(
+            passes,
+            &mut list,
+            |list, pass| -> Result<(), capnp_message::ArenaError> {
+                let values = struct_list_builder_values(pass);
+                for (index, value) in values.into_iter().enumerate() {
+                    list.get(index as u32)?.set_u32(0, value, 0)?;
+                }
+                Ok(())
+            },
+            struct_list_builder_fingerprint,
+        )?
+    } else if mode == "generated-builder-struct-list-hot" {
+        let mut builder = wire_fixture::Builder::init_root(schema, &mut arena)?;
+        let mut list = builder.init_structs(2)?;
+        started = Instant::now();
+        measure_builder(
+            passes,
+            &mut list,
+            |list, pass| -> Result<(), capnp_schema::DynamicError> {
+                let values = struct_list_builder_values(pass);
+                for (index, value) in values.into_iter().enumerate() {
+                    list.get(index as u32)?.set_value(value)?;
+                }
+                Ok(())
+            },
+            struct_list_builder_fingerprint,
         )?
     } else if mode == "direct-builder-struct-list" {
         let node = schema
