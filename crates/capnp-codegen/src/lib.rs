@@ -2765,37 +2765,40 @@ fn emit_builder_field(
                             writeln!(output, "        }}").map_err(|_| GenerateError::Format)?;
                             return Ok(());
                         }
-                        if let Type::Struct { type_id, brand } = element.as_ref()
-                            && brand.scopes.is_empty()
-                        {
-                            let child = schema
-                                .node(*type_id)
-                                .ok_or(GenerateError::UnknownType(*type_id))?;
-                            if generic_parameters(schema, child).is_empty() {
-                                let NodeKind::Struct(child_structure) = &child.kind else {
-                                    return Err(GenerateError::UnknownType(*type_id));
-                                };
-                                let target = struct_reader_type(
-                                    schema,
-                                    *type_id,
-                                    Some(brand),
-                                    names,
-                                    context,
-                                )?;
-                                writeln!(output, "        #[inline(always)]\n        pub fn init_{method}(&mut self, element_count: u32) -> Result<StructListBuilder<'schema, '_, {target}>, capnp_schema::DynamicError> {{")
+                        if let Type::Struct { type_id, brand } = element.as_ref() {
+                            if brand.scopes.is_empty() {
+                                let child = schema
+                                    .node(*type_id)
+                                    .ok_or(GenerateError::UnknownType(*type_id))?;
+                                if generic_parameters(schema, child).is_empty() {
+                                    let NodeKind::Struct(child_structure) = &child.kind else {
+                                        return Err(GenerateError::UnknownType(*type_id));
+                                    };
+                                    let target = struct_reader_type(
+                                        schema,
+                                        *type_id,
+                                        Some(brand),
+                                        names,
+                                        context,
+                                    )?;
+                                    writeln!(output, "        #[inline(always)]\n        pub fn init_{method}(&mut self, element_count: u32) -> Result<StructListBuilder<'schema, '_, {target}>, capnp_schema::DynamicError> {{")
                                     .map_err(|_| GenerateError::Format)?;
-                                writeln!(output, "            let schema = self.inner.schema();")
+                                    writeln!(
+                                        output,
+                                        "            let schema = self.inner.schema();"
+                                    )
                                     .map_err(|_| GenerateError::Format)?;
-                                writeln!(output, "            let inner = self.inner.init_struct_list_slot({offset}, element_count, {}, {})?;", child_structure.data_word_count, child_structure.pointer_count)
+                                    writeln!(output, "            let inner = self.inner.init_struct_list_slot({offset}, element_count, {}, {})?;", child_structure.data_word_count, child_structure.pointer_count)
                                     .map_err(|_| GenerateError::Format)?;
-                                writeln!(
+                                    writeln!(
                                     output,
                                     "            Ok(StructListBuilder::from_parts(schema, inner))"
                                 )
                                 .map_err(|_| GenerateError::Format)?;
-                                writeln!(output, "        }}")
-                                    .map_err(|_| GenerateError::Format)?;
-                                return Ok(());
+                                    writeln!(output, "        }}")
+                                        .map_err(|_| GenerateError::Format)?;
+                                    return Ok(());
+                                }
                             }
                         }
                     }
