@@ -14,7 +14,7 @@ expected_raw_lines=$((1 + expected_cases * 2 * 11))
 expected_summary_lines=$((1 + expected_cases * 2))
 expected_comparison_lines=$((1 + expected_cases))
 expected_incremental_lines=3
-if [[ "$expected_cases" == 6 || "$expected_cases" == 8 ]]; then expected_incremental_lines=5; fi
+if ((expected_cases >= 6)); then expected_incremental_lines=5; fi
 
 grep -Fx 'cpp_oracle_commit=e7c9cd96f1505b5ae486db7821006c2f5dce5b5b' "$result_dir/metadata.txt"
 grep -Fx 'schema=conformance/schemas/wire-fixture.capnp' "$result_dir/metadata.txt"

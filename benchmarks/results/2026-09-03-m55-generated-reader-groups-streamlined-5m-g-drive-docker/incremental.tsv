@@ -1,0 +1,5 @@
+shape	cpp_generated_minus_direct_ns	native_generated_minus_direct_ns	incremental_native_over_cpp	direct_native_over_cpp	generated_native_over_cpp
+generated-scalars	-0.5650	118.9773	below-resolution	4.562	20.063
+generated-blobs	-0.3114	467.7687	below-resolution	2.165	15.258
+borrowed-scalars	-1.1469	-3.3335	below-resolution	1.241	1.106
+borrowed-blobs	2.4106	-4.6554	below-resolution	0.725	0.680

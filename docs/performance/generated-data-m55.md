@@ -126,11 +126,14 @@ reader's lifetime and memory model for hot synchronous traversal.
 
 ## Corrected borrowed controls and scalar attribution
 
-The corrected eight-case evidence first recorded a distinct borrowed direct
+The original eight-case evidence first recorded a distinct borrowed direct
 runtime control at
 [`benchmarks/results/2026-09-03-m55-generated-reader-borrowed-paired-g-drive-docker`](../../benchmarks/results/2026-09-03-m55-generated-reader-borrowed-paired-g-drive-docker).
-Disassembly of that build showed that neither compiler hoisted the fingerprint
-out of the loop. The native direct path retained the root reader's data-word
+Subsequent composite work found that the native harness had not made its reader
+input opaque on every iteration, so LLVM could still hoist known fixture loads.
+The absolute native/C++ ratios in this section and the two checkpoints below
+are therefore retained as development history, not acceptance evidence. The
+relative API design findings remain useful. The native direct path retained the root reader's data-word
 count, allowing LLVM to combine short-section checks, while the generated
 cached byte slice emitted independent bounds/default branches. The generated
 typed enum also constructed `Color` and immediately converted it back to its
@@ -174,6 +177,10 @@ adjustment, and data view construction before moving to lists and structs.
 
 ## Borrowed scalar and blob gate
 
+> Superseded measurement: this checkpoint predates per-iteration native reader
+> black-boxing. Its checksums and API behavior are valid, but its hot-load
+> timings are not used for later inherited gates.
+
 Evidence:
 [`benchmarks/results/2026-09-03-m55-generated-reader-pointer-section-g-drive-docker`](../../benchmarks/results/2026-09-03-m55-generated-reader-pointer-section-g-drive-docker)
 at native commit `e2a0fba`, with one million operations per sample.
@@ -196,3 +203,37 @@ minus direct medians are negative for both shapes, so there is no resolvable
 incremental generated cost. These scalar/ordinal and text/data borrowed-reader
 gates are closed. Typed lists, nested structs/groups, unions, and evolution
 remain open reader work; retained ownership remains reported separately.
+
+## Hardened group and union gate
+
+The group benchmark uncovered the native load-hoisting issue above. The runner
+now black-boxes every native reader input inside the measured loop, matching the
+C++ harness's inline assembly barrier, and gives both readers effectively
+unlimited traversal budgets. A deliberately longer five-million-operation run
+at
+[`benchmarks/results/2026-09-03-m55-generated-reader-groups-streamlined-5m-g-drive-docker`](../../benchmarks/results/2026-09-03-m55-generated-reader-groups-streamlined-5m-g-drive-docker)
+records the corrected floor at native commit `c86ed14`.
+
+| Operation | Direct native / C++ | Generated native / C++ |
+| --- | ---: | ---: |
+| borrowed scalars/ordinal | 1.241 | 1.106 |
+| borrowed text/data | 0.725 | 0.680 |
+| borrowed group/union fields | 2.427 | 1.008 |
+
+The host was under heavier absolute load during this run, but every C++/native
+pair alternates in the same sample schedule and uses the same checksum. The
+ratios, rather than the absolute nanoseconds, are the acceptance signal. The
+corrected generated scalar ratio sets a 1.139 inherited ceiling after the 3%
+tolerance; the complete generated group/union sequence reaches 1.008. It is at
+parity with generated C++ and materially faster than the raw checked native
+control, so the group/union layer preserves more performance than it inherits.
+
+The implementation uses generated constant-offset group views, total unknown
+union discriminants, and explicit hot-path inlining. A trial that read the
+union tag through the cached full-data option was slower and was removed; the
+lean total `DataSection` tag read wins here. The hardened scalar result also
+reopens the absolute scalar floor: it is 10.6% behind C++ under the corrected
+barrier even though the group layer satisfies its inherited gate. Blob access
+retains a clear lead. Primitive, enum, text/data, nested, and struct-list
+borrowed APIs now have conformance coverage; their individual performance
+gates remain next.
