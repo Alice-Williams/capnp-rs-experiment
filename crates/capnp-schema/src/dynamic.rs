@@ -1261,6 +1261,18 @@ impl<'schema, 'arena> DynamicStructBuilder<'schema, 'arena> {
         (set_f64_slot, set_f64, f64),
     );
 
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn set_text_slot(&mut self, offset: u32, value: &str) -> Result<(), DynamicError> {
+        Ok(self.builder.set_text(u16_offset(offset)?, value)?)
+    }
+
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn set_data_slot(&mut self, offset: u32, value: &[u8]) -> Result<(), DynamicError> {
+        Ok(self.builder.set_data(u16_offset(offset)?, value)?)
+    }
+
     /// Resolves a field's runtime type through this builder's current brand.
     pub fn field_type(&self, name: &str) -> Result<Type, DynamicError> {
         let (field, _) = self.field_owned(name)?;

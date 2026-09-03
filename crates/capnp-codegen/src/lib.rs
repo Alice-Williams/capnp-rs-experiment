@@ -1282,7 +1282,7 @@ fn emit_borrowed_reader_field(
     }
     if let (Type::Enum { type_id, .. }, Value::Enum(default)) = (ty, default_value) {
         let name = names.reference(*type_id, true)?;
-        let ordinal_method = format!("{method}_ordinal");
+        let ordinal_method = rust_snake(&format!("{}_ordinal", field.name));
         let ordinal_type = Type::UInt16;
         let ordinal_default = Value::UInt16(*default);
         let fallback = format!("self.data.get_u16({offset}, {default})");
@@ -2633,7 +2633,7 @@ fn emit_builder_field(
             ..
         } => {
             if field.discriminant_value.is_none()
-                && emit_direct_scalar_setter(output, &method, *offset, ty, default_value, names)?
+                && emit_direct_slot_setter(output, &method, *offset, ty, default_value, names)?
             {
                 return Ok(());
             }
@@ -2702,7 +2702,7 @@ fn emit_builder_field(
     Ok(())
 }
 
-fn emit_direct_scalar_setter(
+fn emit_direct_slot_setter(
     output: &mut String,
     method: &str,
     offset: u32,
@@ -2783,6 +2783,16 @@ fn emit_direct_scalar_setter(
                 format!("self.inner.set_u16_slot({offset}, value.ordinal(), {value})"),
             ))
         }
+        (Type::Text, Value::Text(_)) => Some((
+            "&str".to_owned(),
+            "value",
+            format!("self.inner.set_text_slot({offset}, value)"),
+        )),
+        (Type::Data, Value::Data(_)) => Some((
+            "&[u8]".to_owned(),
+            "value",
+            format!("self.inner.set_data_slot({offset}, value)"),
+        )),
         _ => None,
     };
     let Some((arg_type, argument, expression)) = direct else {
@@ -3108,6 +3118,26 @@ mod tests {
         assert!(
             generated
                 .source
+                .contains("self.inner.set_text_slot(0, value)")
+        );
+        assert!(
+            generated
+                .source
+                .contains("self.inner.set_data_slot(1, value)")
+        );
+        assert!(
+            !generated
+                .source
+                .contains("self.inner.set(\"text\", capnp_schema::DynamicInput::Text(value))")
+        );
+        assert!(
+            !generated
+                .source
+                .contains("self.inner.set(\"data\", capnp_schema::DynamicInput::Data(value))")
+        );
+        assert!(
+            generated
+                .source
                 .contains("if let Some(data) = self.full_data")
         );
         assert!(
@@ -3221,6 +3251,7 @@ mod tests {
             Err(GenerateError::UnknownRequestedFile(7))
         );
         assert_eq!(rust_snake("type"), "type_");
+        assert_eq!(rust_snake("type_ordinal"), "type_ordinal");
         assert_eq!(rust_snake("camelHTTPValue"), "camel_httpvalue");
         assert_eq!(rust_pascal("some-value"), "SomeValue");
     }
