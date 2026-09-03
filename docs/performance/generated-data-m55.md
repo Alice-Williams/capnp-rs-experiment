@@ -237,3 +237,35 @@ barrier even though the group layer satisfies its inherited gate. Blob access
 retains a clear lead. Primitive, enum, text/data, nested, and struct-list
 borrowed APIs now have conformance coverage; their individual performance
 gates remain next.
+
+## Borrowed list gate
+
+The first hardened mixed-list run measured the generated native path at 1.504x
+C++ for primitive, enum, text, data, and nested primitive-list access. Two
+runtime changes were retained: direct non-inline-composite list validation now
+avoids the generic pointer-kind path, and primitive list readers cache their
+validated segment and element coordinates. A broader pointer-list coordinate
+cache made the paired result worse and was reverted.
+
+The decisive change was explicit inlining across the generated wrapper and the
+checked runtime's list open/view/index path. These functions are small but span
+the codegen and message crates; leaving the decision to cross-crate heuristics
+cost roughly half of the complete operation. Final evidence at native commit
+`2588476` is in
+[`benchmarks/results/2026-09-03-m55-generated-reader-lists-final-5m-g-drive-docker`](../../benchmarks/results/2026-09-03-m55-generated-reader-lists-final-5m-g-drive-docker),
+again using five million operations, alternating implementations, opaque
+per-iteration reader inputs, and equal traversal limits.
+
+| Operation | C++ ns/op | Native ns/op | Native / C++ |
+| --- | ---: | ---: | ---: |
+| borrowed direct mixed lists | 98.7270 | 62.3907 | 0.632 |
+| borrowed generated mixed lists | 103.0098 | 63.4680 | 0.616 |
+
+The mixed generated operation is 38.4% faster than generated C++. More
+importantly, it preserves the lower pointer/blob advantage: this run's
+generated blob ratio is 0.604, giving an inherited ceiling of 0.622 with the
+3% tolerance, and generated lists reach 0.616. The native generated wrapper
+adds only 1.08 ns over its direct control versus 4.28 ns for C++, so static
+typing does not consume the lower-layer lead. The primitive, enum, text/data,
+and nested primitive-list gate is closed. Inline-composite struct-list element
+access and ordinary nested struct pointers remain separate gates.
