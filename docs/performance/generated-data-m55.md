@@ -322,3 +322,27 @@ improves on its paired direct-runtime ratio. The direct ratio permits a 0.923
 cumulative ceiling with tolerance; generated access reaches 0.860. Its native
 generated-minus-direct median is below timer resolution, while C++ adds
 0.42 ns. The inline-composite struct-list reader gate is closed.
+
+## Borrowed schema-evolution gate
+
+The evolution workload reads the C++ `evolution-v2` fixture through generated
+`evolution-v1` bindings in both languages. It combines a constant-offset
+scalar, an unknown newer enum ordinal, borrowed text, and the required
+`List(Struct)` to `List(UInt32)` element upgrade. The paired direct control
+uses the same v1 field layout and checked runtime operations, so newer fields
+remain outside both timed paths while the compatible old view performs equal
+observable work.
+
+Final five-million-operation evidence at native commit `2a6cd59` is in
+[`benchmarks/results/2026-09-03-m55-generated-reader-evolution-final-5m-g-drive-docker`](../../benchmarks/results/2026-09-03-m55-generated-reader-evolution-final-5m-g-drive-docker).
+
+| Operation | C++ ns/op | Native ns/op | Native / C++ |
+| --- | ---: | ---: | ---: |
+| borrowed direct v1-over-v2 read | 25.0847 | 19.8368 | 0.791 |
+| borrowed generated v1-over-v2 read | 25.3498 | 19.6268 | 0.774 |
+
+Generated native evolution access is 22.6% faster than generated C++ and
+improves on the paired direct-runtime ratio. The direct ratio permits a 0.815
+cumulative ceiling with tolerance; generated access reaches 0.774. Its native
+generated-minus-direct median is again below timer resolution. The old-reader
+over new-writer schema-evolution reader gate is closed.
