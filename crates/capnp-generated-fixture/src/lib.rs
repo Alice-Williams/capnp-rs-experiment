@@ -635,6 +635,20 @@ mod tests {
                     .set_value(202)
                     .expect("second struct list scalar");
             }
+            {
+                let mut texts = root.init_texts(2).expect("typed Text list init");
+                texts.set(0, "left").expect("first Text list element");
+                texts.set(1, "right").expect("second Text list element");
+            }
+            {
+                let mut blobs = root.init_data_blobs(2).expect("typed Data list init");
+                blobs
+                    .set(0, &[1, 2, 3])
+                    .expect("first Data list element");
+                blobs
+                    .set(1, &[4, 5])
+                    .expect("second Data list element");
+            }
         }
         let message = OwnedMessage::new(arena.into_segments(), ReaderLimits::default())
             .expect("native generated message validates");
@@ -679,6 +693,24 @@ mod tests {
                 .value()
                 .expect("value"),
             88
+        );
+        assert_eq!(
+            reader
+                .texts()
+                .expect("Text list")
+                .expect("non-null Text list")
+                .get(1)
+                .expect("second Text element"),
+            "right"
+        );
+        assert_eq!(
+            reader
+                .data_blobs()
+                .expect("Data list")
+                .expect("non-null Data list")
+                .get(0)
+                .expect("first Data element"),
+            vec![1, 2, 3]
         );
     }
 

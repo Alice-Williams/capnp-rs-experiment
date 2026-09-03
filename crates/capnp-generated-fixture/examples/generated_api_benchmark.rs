@@ -8,7 +8,7 @@ use capnp_io::{FrameLimits, FrameRead, parse_frame};
 use capnp_message::{
     BorrowedMessage, ExclusiveArena, OwnedMessage, ReaderLimits, StructBuilder, StructReadError,
 };
-use capnp_schema::{CompiledSchema, DynamicInput, LoadLimits, NodeKind};
+use capnp_schema::{CompiledSchema, LoadLimits, NodeKind};
 
 const SEED: u64 = 0x4d59_5df4_d0f3_3173;
 const REQUEST: &[u8] = include_bytes!(concat!(
@@ -553,8 +553,8 @@ fn write_generated_pointer_list(
 ) -> Result<(), capnp_schema::DynamicError> {
     let values = POINTER_LIST_TEXT[pass & 1];
     let mut list = builder.init_texts(2)?;
-    list.set(0, DynamicInput::Text(values[0]))?;
-    list.set(1, DynamicInput::Text(values[1]))
+    list.set(0, values[0])?;
+    list.set(1, values[1])
 }
 
 fn pointer_list_builder_fingerprint(pass: usize) -> u64 {

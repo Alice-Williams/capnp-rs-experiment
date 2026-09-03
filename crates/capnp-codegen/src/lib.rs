@@ -295,6 +295,56 @@ impl<'schema, 'arena, T: StructListElement> StructListBuilder<'schema, 'arena, T
     }
 }
 
+/// A generated, typed builder for `List(Text)`.
+pub struct TextListBuilder<'arena> {
+    inner: capnp_message::PointerListBuilder<'arena>,
+}
+
+impl<'arena> TextListBuilder<'arena> {
+    #[allow(dead_code)]
+    fn from_inner(inner: capnp_message::PointerListBuilder<'arena>) -> Self {
+        Self { inner }
+    }
+
+    pub fn len(&self) -> u32 {
+        self.inner.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    #[inline(always)]
+    pub fn set(&mut self, index: u32, value: &str) -> Result<(), capnp_schema::DynamicError> {
+        Ok(self.inner.set_text(index, value)?)
+    }
+}
+
+/// A generated, typed builder for `List(Data)`.
+pub struct DataListBuilder<'arena> {
+    inner: capnp_message::PointerListBuilder<'arena>,
+}
+
+impl<'arena> DataListBuilder<'arena> {
+    #[allow(dead_code)]
+    fn from_inner(inner: capnp_message::PointerListBuilder<'arena>) -> Self {
+        Self { inner }
+    }
+
+    pub fn len(&self) -> u32 {
+        self.inner.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    #[inline(always)]
+    pub fn set(&mut self, index: u32, value: &[u8]) -> Result<(), capnp_schema::DynamicError> {
+        Ok(self.inner.set_data(index, value)?)
+    }
+}
+
 #[doc(hidden)]
 pub trait StructListElement {
     const TYPE_ID: u64;
@@ -2765,6 +2815,23 @@ fn emit_builder_field(
                             writeln!(output, "        }}").map_err(|_| GenerateError::Format)?;
                             return Ok(());
                         }
+                        if matches!(element.as_ref(), Type::Text | Type::Data) {
+                            let builder_type = if matches!(element.as_ref(), Type::Text) {
+                                "TextListBuilder"
+                            } else {
+                                "DataListBuilder"
+                            };
+                            writeln!(output, "        #[inline(always)]\n        pub fn init_{method}(&mut self, element_count: u32) -> Result<{builder_type}<'_>, capnp_schema::DynamicError> {{")
+                                .map_err(|_| GenerateError::Format)?;
+                            writeln!(output, "            let inner = self.inner.wire_builder().init_pointer_list({offset}, element_count).map_err(capnp_schema::DynamicError::from)?;")
+                                .map_err(|_| GenerateError::Format)?;
+                            writeln!(
+                                output,
+                                "            Ok({builder_type}::from_inner(inner))\n        }}"
+                            )
+                            .map_err(|_| GenerateError::Format)?;
+                            return Ok(());
+                        }
                         if let Type::Struct { type_id, brand } = element.as_ref() {
                             if brand.scopes.is_empty() {
                                 let child = schema
@@ -3315,6 +3382,12 @@ mod tests {
                 .source
                 .contains("self.inner.init_list(\"structs\"")
         );
+        assert!(
+            generated
+                .source
+                .contains("self.inner.wire_builder().init_pointer_list(15, element_count)")
+        );
+        assert!(!generated.source.contains("self.inner.init_list(\"texts\""));
         assert!(
             generated
                 .source
