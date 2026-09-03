@@ -146,3 +146,26 @@ The prepared cases again show how unstable sub-nanosecond denominator gaps are:
 all three are slower by only 0.25–0.27 ns yet produce 1.07–1.09 ratios. The
 earlier pointer-sublayer evidence remains the performance gate, while the final
 runner will batch prepared operations before enforcing their numeric ceiling.
+
+## Schema-independent graph-copy baseline
+
+Evidence:
+`benchmarks/results/2026-09-03-m53-build-copy-baseline-g-drive-docker`
+
+The first graph-copy fixture is an exact one-segment, 11-word graph containing
+a one-word root and a 64-byte data child. The prepared lower case copies and
+checksums the same 88 bytes without arena allocation or pointer traversal. Both
+implementations produce the same semantic and wire checksums.
+
+| Case | C++ ns/message | Rust ns/message | Rust / C++ |
+| --- | ---: | ---: | ---: |
+| prepared 88-byte copy | 8.5592 | 7.0293 | 0.821 |
+| validated graph copy | 94.4765 | 172.9730 | 1.831 |
+| paired graph-copy increment | 87.3452 | 166.5819 | 1.907 |
+
+This is a real native gap. Source tracing identifies two avoidable costs in the
+success path: `copy_words_from()` allocates a temporary `Vec` for each copied
+region even though safe callers cannot mutably alias the borrowed source, and
+the iterative copier allocates its work-list `Vec` for this two-object graph.
+The first graph-copy optimization removes the per-region byte copies while
+retaining the existing rollback and hostile-input behavior.
