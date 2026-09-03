@@ -140,6 +140,9 @@ fn read_isolated_roots(
 fn blob_fingerprint(
     root: &StructReader<'_, '_, LocalTraversalBudget>,
 ) -> Result<u64, StructReadError> {
+    if root.pointer_count() < 2 {
+        return Ok(0);
+    }
     let text = root.read_text(0, None)?;
     let data = root.read_data(1, None)?;
     let mut fingerprint = (text.len() as u64).rotate_left(11) ^ (data.len() as u64).rotate_left(23);

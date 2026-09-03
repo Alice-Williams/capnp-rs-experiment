@@ -213,6 +213,15 @@ impl<'context, 'data, B: TraversalBudget> StructReader<'context, 'data, B> {
         self.reference
     }
 
+    /// Returns the number of pointer slots present in the encoded struct.
+    #[inline(always)]
+    pub const fn pointer_count(self) -> usize {
+        match self.reference {
+            Some(reference) => reference.pointer_count as usize,
+            None => 0,
+        }
+    }
+
     /// Returns another schema view over the same bytes without charging or descending.
     pub const fn group(self) -> Self {
         self
@@ -371,14 +380,29 @@ impl<'context, 'data, B: TraversalBudget> StructReader<'context, 'data, B> {
     {
         if default.is_none() {
             return match self.pointer_location(index)? {
-                Some(location) => {
-                    Ok(self
-                        .segments
-                        .read_text(location, self.budget, self.nesting)?)
-                }
+                Some(location) => self.read_text_at(location),
                 None => Ok(TextReader::empty()),
             };
         }
+        self.read_text_with_default(index, default)
+    }
+
+    #[inline(never)]
+    fn read_text_at(&self, location: WireLocation) -> Result<TextReader<'data>, StructReadError> {
+        Ok(self
+            .segments
+            .read_text(location, self.budget, self.nesting)?)
+    }
+
+    #[inline(never)]
+    fn read_text_with_default<'reader>(
+        &'reader self,
+        index: u16,
+        default: Option<PointerDefault<'reader, 'data>>,
+    ) -> Result<TextReader<'data>, StructReadError>
+    where
+        'context: 'reader,
+    {
         match self.select_pointer(index, default)? {
             Some((segments, location)) => {
                 Ok(segments.read_text(location, self.budget, self.nesting)?)
@@ -398,14 +422,29 @@ impl<'context, 'data, B: TraversalBudget> StructReader<'context, 'data, B> {
     {
         if default.is_none() {
             return match self.pointer_location(index)? {
-                Some(location) => {
-                    Ok(self
-                        .segments
-                        .read_data(location, self.budget, self.nesting)?)
-                }
+                Some(location) => self.read_data_at(location),
                 None => Ok(DataReader::empty()),
             };
         }
+        self.read_data_with_default(index, default)
+    }
+
+    #[inline(never)]
+    fn read_data_at(&self, location: WireLocation) -> Result<DataReader<'data>, StructReadError> {
+        Ok(self
+            .segments
+            .read_data(location, self.budget, self.nesting)?)
+    }
+
+    #[inline(never)]
+    fn read_data_with_default<'reader>(
+        &'reader self,
+        index: u16,
+        default: Option<PointerDefault<'reader, 'data>>,
+    ) -> Result<DataReader<'data>, StructReadError>
+    where
+        'context: 'reader,
+    {
         match self.select_pointer(index, default)? {
             Some((segments, location)) => {
                 Ok(segments.read_data(location, self.budget, self.nesting)?)
@@ -500,6 +539,7 @@ mod tests {
         assert_eq!(reader.pointer_location(0), Ok(None));
         assert_eq!(reader.group().reference(), reader.reference());
         assert_eq!(reader.data_byte_len(), 0);
+        assert_eq!(reader.pointer_count(), 0);
         assert_eq!(reader.read_u64(0, 7), Ok(7));
     }
 
@@ -517,6 +557,7 @@ mod tests {
             .read_root_struct(&budget, NestingLimit::new(1))
             .expect("root struct is valid");
         assert_eq!(reader.data_byte_len(), 8);
+        assert_eq!(reader.pointer_count(), 0);
         assert_eq!(reader.read_u64(0, 0), Ok(0x0123_4567_89ab_cdef));
         assert_eq!(reader.read_u64(1, 7), Ok(7));
     }
