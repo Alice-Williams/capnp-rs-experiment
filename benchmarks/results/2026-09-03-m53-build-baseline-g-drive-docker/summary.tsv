@@ -1,0 +1,9 @@
+implementation	case	shape	passes	runs	mean_ns_per_message	median_ns_per_message	min_ns_per_message	max_ns_per_message
+cpp	fresh	direct	100000	9	79.1712	82.8520	61.8779	92.4609
+cpp	fresh	far	100000	9	228.3720	227.7699	202.1294	255.5136
+cpp	prepared	direct	100000	9	14.9447	15.0794	11.5681	18.0827
+cpp	prepared	far	100000	9	20.7662	21.1730	18.2677	23.9773
+native	fresh	direct	100000	9	110.0974	109.1055	97.9154	123.5969
+native	fresh	far	100000	9	222.0199	218.3830	191.1334	267.1737
+native	prepared	direct	100000	9	19.9079	19.5479	16.7366	21.9971
+native	prepared	far	100000	9	25.4463	26.0695	21.6551	27.7827

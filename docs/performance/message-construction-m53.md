@@ -1,0 +1,48 @@
+# M53 message-construction performance
+
+M53 is in progress. Its first checked-in baseline isolates prepared word writes
+from fresh arena construction for a direct root and a forced single-far root.
+It uses the pinned C++ commit
+`e7c9cd96f1505b5ae486db7821006c2f5dce5b5b`, identical logical values, the
+same used word counts, two warmups, nine alternating samples, and 100,000
+messages per sample.
+
+## Initial baseline
+
+Evidence: `benchmarks/results/2026-09-03-m53-build-baseline-g-drive-docker`
+
+| Case | Shape | C++ ns/message | Rust ns/message | Rust / C++ |
+| --- | --- | ---: | ---: | ---: |
+| prepared storage | direct `[3]` | 15.0794 | 19.5479 | 1.296 |
+| fresh arena | direct `[3]` | 82.8520 | 109.1055 | 1.317 |
+| prepared storage | far `[1,3]` | 21.1730 | 26.0695 | 1.231 |
+| fresh arena | far `[1,3]` | 227.7699 | 218.3830 | 0.959 |
+
+Paired subtraction attributes 65.9633 ns/message to C++ direct construction
+and 88.5565 ns/message to native direct construction, a 1.343 ratio. For the
+single-far shape it attributes 208.7911 ns/message to C++ and 196.3179 ns/message
+to native, a 0.940 ratio.
+
+These are diagnostic baselines, not passing M53 results. In particular, the
+prepared cases currently include a small-buffer byte hash whose Rust/C++ code
+generation differs; that observation overhead is a large fraction of the
+measurement and must be normalized or isolated before using prepared ratios as
+the inherited M50 gate. The fresh results still expose a clear direct-arena gap
+and a distinct far-allocation result worth profiling independently.
+
+## Traced paths
+
+- Native fresh construction creates an `ExclusiveArena`, a segment-descriptor
+  `Vec`, and one byte `Vec` per segment. Each object extends the used byte length
+  and `emit_struct()` chooses a direct, single-far, or double-far pointer.
+- Pinned C++ `MallocMessageBuilder` lazily creates its internal `BuilderArena`.
+  It uses `calloc()` for owned segments. When an object does not fit, C++ asks
+  the new segment for the object plus a one-word landing pad in one allocation.
+- Native's forced single-far fixture first allocates the object in a new segment
+  and then appends its landing pad. C++ places the landing pad before the object.
+  The graphs and used segment sizes match, but their physical word order does
+  not; semantic checksums are therefore compared across implementations while
+  stable wire checksums are retained per implementation.
+
+The next attribution step separates hashing from writes and records allocation
+counts/capacities before changing arena representation or allocation policy.
