@@ -2626,67 +2626,174 @@ fn emit_builder_field(
             .map_err(|_| GenerateError::Format)?;
             writeln!(output, "        }}").map_err(|_| GenerateError::Format)?;
         }
-        FieldKind::Slot { ty, .. } => match ty {
-            Type::Struct { type_id, brand } => {
-                let target = struct_builder_type(schema, *type_id, Some(brand), names, context)?;
-                writeln!(output, "        pub fn init_{method}(&mut self) -> Result<{target}, capnp_schema::DynamicError> {{")
-                    .map_err(|_| GenerateError::Format)?;
-                writeln!(
-                    output,
-                    "            Ok(<{target}>::from_dynamic(self.inner.init_struct({:?})?))",
-                    field.name
-                )
-                .map_err(|_| GenerateError::Format)?;
-                writeln!(output, "        }}").map_err(|_| GenerateError::Format)?;
+        FieldKind::Slot {
+            offset,
+            ty,
+            default_value,
+            ..
+        } => {
+            if field.discriminant_value.is_none()
+                && emit_direct_scalar_setter(output, &method, *offset, ty, default_value, names)?
+            {
+                return Ok(());
             }
-            Type::List(_) => {
-                writeln!(output, "        pub fn init_{method}(&mut self, element_count: u32) -> Result<capnp_schema::DynamicListBuilder<'schema, '_>, capnp_schema::DynamicError> {{")
+            match ty {
+                Type::Struct { type_id, brand } => {
+                    let target =
+                        struct_builder_type(schema, *type_id, Some(brand), names, context)?;
+                    writeln!(output, "        pub fn init_{method}(&mut self) -> Result<{target}, capnp_schema::DynamicError> {{")
                     .map_err(|_| GenerateError::Format)?;
-                writeln!(
-                    output,
-                    "            self.inner.init_list({:?}, element_count)",
-                    field.name
-                )
-                .map_err(|_| GenerateError::Format)?;
-                writeln!(output, "        }}").map_err(|_| GenerateError::Format)?;
+                    writeln!(
+                        output,
+                        "            Ok(<{target}>::from_dynamic(self.inner.init_struct({:?})?))",
+                        field.name
+                    )
+                    .map_err(|_| GenerateError::Format)?;
+                    writeln!(output, "        }}").map_err(|_| GenerateError::Format)?;
+                }
+                Type::List(_) => {
+                    writeln!(output, "        pub fn init_{method}(&mut self, element_count: u32) -> Result<capnp_schema::DynamicListBuilder<'schema, '_>, capnp_schema::DynamicError> {{")
+                    .map_err(|_| GenerateError::Format)?;
+                    writeln!(
+                        output,
+                        "            self.inner.init_list({:?}, element_count)",
+                        field.name
+                    )
+                    .map_err(|_| GenerateError::Format)?;
+                    writeln!(output, "        }}").map_err(|_| GenerateError::Format)?;
+                }
+                Type::AnyPointer(AnyPointerType::Parameter { scope_id, index }) => {
+                    let parameter = parameter_name(context, *scope_id, *index)
+                        .unwrap_or("capnp_schema::DynamicValue");
+                    writeln!(output, "        pub fn set_{method}(&mut self, value: {parameter}) -> Result<(), capnp_schema::DynamicError>")
+                    .map_err(|_| GenerateError::Format)?;
+                    writeln!(output, "        where {parameter}: FieldInput\n        {{")
+                        .map_err(|_| GenerateError::Format)?;
+                    writeln!(
+                        output,
+                        "            value.set_field(&mut self.inner, {:?})",
+                        field.name
+                    )
+                    .map_err(|_| GenerateError::Format)?;
+                    writeln!(output, "        }}").map_err(|_| GenerateError::Format)?;
+                }
+                _ => {
+                    let Some((arg_type, input)) = builder_shape(ty, names)? else {
+                        return Ok(());
+                    };
+                    let argument = if matches!(ty, Type::Void) {
+                        "_value"
+                    } else {
+                        "value"
+                    };
+                    writeln!(output, "        pub fn set_{method}(&mut self, {argument}: {arg_type}) -> Result<(), capnp_schema::DynamicError> {{")
+                    .map_err(|_| GenerateError::Format)?;
+                    writeln!(
+                        output,
+                        "            self.inner.set({:?}, {input})",
+                        field.name
+                    )
+                    .map_err(|_| GenerateError::Format)?;
+                    writeln!(output, "        }}").map_err(|_| GenerateError::Format)?;
+                }
             }
-            Type::AnyPointer(AnyPointerType::Parameter { scope_id, index }) => {
-                let parameter = parameter_name(context, *scope_id, *index)
-                    .unwrap_or("capnp_schema::DynamicValue");
-                writeln!(output, "        pub fn set_{method}(&mut self, value: {parameter}) -> Result<(), capnp_schema::DynamicError>")
-                    .map_err(|_| GenerateError::Format)?;
-                writeln!(output, "        where {parameter}: FieldInput\n        {{")
-                    .map_err(|_| GenerateError::Format)?;
-                writeln!(
-                    output,
-                    "            value.set_field(&mut self.inner, {:?})",
-                    field.name
-                )
-                .map_err(|_| GenerateError::Format)?;
-                writeln!(output, "        }}").map_err(|_| GenerateError::Format)?;
-            }
-            _ => {
-                let Some((arg_type, input)) = builder_shape(ty, names)? else {
-                    return Ok(());
-                };
-                let argument = if matches!(ty, Type::Void) {
-                    "_value"
-                } else {
-                    "value"
-                };
-                writeln!(output, "        pub fn set_{method}(&mut self, {argument}: {arg_type}) -> Result<(), capnp_schema::DynamicError> {{")
-                    .map_err(|_| GenerateError::Format)?;
-                writeln!(
-                    output,
-                    "            self.inner.set({:?}, {input})",
-                    field.name
-                )
-                .map_err(|_| GenerateError::Format)?;
-                writeln!(output, "        }}").map_err(|_| GenerateError::Format)?;
-            }
-        },
+        }
     }
     Ok(())
+}
+
+fn emit_direct_scalar_setter(
+    output: &mut String,
+    method: &str,
+    offset: u32,
+    ty: &Type,
+    default: &capnp_schema::Value,
+    names: &Names,
+) -> Result<bool, GenerateError> {
+    use capnp_schema::Value;
+
+    let direct = match (ty, default) {
+        (Type::Void, Value::Void) => Some(("()".to_owned(), "_value", "Ok(())".to_owned())),
+        (Type::Bool, Value::Bool(value)) => Some((
+            "bool".to_owned(),
+            "value",
+            format!("self.inner.set_bool_slot({offset}, value, {value})"),
+        )),
+        (Type::Int8, Value::Int8(value)) => Some((
+            "i8".to_owned(),
+            "value",
+            format!("self.inner.set_i8_slot({offset}, value, {value})"),
+        )),
+        (Type::Int16, Value::Int16(value)) => Some((
+            "i16".to_owned(),
+            "value",
+            format!("self.inner.set_i16_slot({offset}, value, {value})"),
+        )),
+        (Type::Int32, Value::Int32(value)) => Some((
+            "i32".to_owned(),
+            "value",
+            format!("self.inner.set_i32_slot({offset}, value, {value})"),
+        )),
+        (Type::Int64, Value::Int64(value)) => Some((
+            "i64".to_owned(),
+            "value",
+            format!("self.inner.set_i64_slot({offset}, value, {value})"),
+        )),
+        (Type::UInt8, Value::UInt8(value)) => Some((
+            "u8".to_owned(),
+            "value",
+            format!("self.inner.set_u8_slot({offset}, value, {value})"),
+        )),
+        (Type::UInt16, Value::UInt16(value)) => Some((
+            "u16".to_owned(),
+            "value",
+            format!("self.inner.set_u16_slot({offset}, value, {value})"),
+        )),
+        (Type::UInt32, Value::UInt32(value)) => Some((
+            "u32".to_owned(),
+            "value",
+            format!("self.inner.set_u32_slot({offset}, value, {value})"),
+        )),
+        (Type::UInt64, Value::UInt64(value)) => Some((
+            "u64".to_owned(),
+            "value",
+            format!("self.inner.set_u64_slot({offset}, value, {value})"),
+        )),
+        (Type::Float32, Value::Float32(value)) => Some((
+            "f32".to_owned(),
+            "value",
+            format!(
+                "self.inner.set_f32_slot({offset}, value, f32::from_bits(0x{:08x}))",
+                value.to_bits()
+            ),
+        )),
+        (Type::Float64, Value::Float64(value)) => Some((
+            "f64".to_owned(),
+            "value",
+            format!(
+                "self.inner.set_f64_slot({offset}, value, f64::from_bits(0x{:016x}))",
+                value.to_bits()
+            ),
+        )),
+        (Type::Enum { type_id, .. }, Value::Enum(value)) => {
+            let name = names.reference(*type_id, true)?;
+            Some((
+                name,
+                "value",
+                format!("self.inner.set_u16_slot({offset}, value.ordinal(), {value})"),
+            ))
+        }
+        _ => None,
+    };
+    let Some((arg_type, argument, expression)) = direct else {
+        return Ok(false);
+    };
+    writeln!(
+        output,
+        "        #[inline(always)]\n        pub fn set_{method}(&mut self, {argument}: {arg_type}) -> Result<(), capnp_schema::DynamicError> {{ {expression} }}"
+    )
+    .map_err(|_| GenerateError::Format)?;
+    Ok(true)
 }
 
 fn builder_shape(ty: &Type, names: &Names) -> Result<Option<(String, String)>, GenerateError> {
@@ -2985,6 +3092,19 @@ mod tests {
         assert!(!generated.source.contains("self.inner.get(\"uint32Value\")"));
         assert!(generated.source.contains("pub struct BorrowedReader"));
         assert!(generated.source.contains("self.data.get_u32(5, 0)"));
+        assert!(
+            generated
+                .source
+                .contains("self.inner.set_u32_slot(5, value, 0)")
+        );
+        assert!(
+            generated
+                .source
+                .contains("self.inner.set_u32_slot(16, value, 123456)")
+        );
+        assert!(!generated.source.contains(
+            "self.inner.set(\"uint32Value\", capnp_schema::DynamicInput::UInt32(value))"
+        ));
         assert!(
             generated
                 .source

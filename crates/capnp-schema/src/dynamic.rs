@@ -1201,6 +1201,23 @@ pub struct DynamicStructBuilder<'schema, 'arena> {
     builder: StructBuilder<'arena>,
 }
 
+macro_rules! generated_slot_setters {
+    ($(($method:ident, $setter:ident, $ty:ty)),+ $(,)?) => {
+        $(
+            #[doc(hidden)]
+            #[inline(always)]
+            pub fn $method(
+                &mut self,
+                offset: u32,
+                value: $ty,
+                default: $ty,
+            ) -> Result<(), DynamicError> {
+                Ok(self.builder.$setter(offset, value, default)?)
+            }
+        )+
+    };
+}
+
 impl<'schema, 'arena> DynamicStructBuilder<'schema, 'arena> {
     pub fn root(
         schema: &'schema CompiledSchema,
@@ -1229,6 +1246,20 @@ impl<'schema, 'arena> DynamicStructBuilder<'schema, 'arena> {
     pub const fn type_id(&self) -> NodeId {
         self.type_id
     }
+
+    generated_slot_setters!(
+        (set_bool_slot, set_bool, bool),
+        (set_i8_slot, set_i8, i8),
+        (set_i16_slot, set_i16, i16),
+        (set_i32_slot, set_i32, i32),
+        (set_i64_slot, set_i64, i64),
+        (set_u8_slot, set_u8, u8),
+        (set_u16_slot, set_u16, u16),
+        (set_u32_slot, set_u32, u32),
+        (set_u64_slot, set_u64, u64),
+        (set_f32_slot, set_f32, f32),
+        (set_f64_slot, set_f64, f64),
+    );
 
     /// Resolves a field's runtime type through this builder's current brand.
     pub fn field_type(&self, name: &str) -> Result<Type, DynamicError> {
