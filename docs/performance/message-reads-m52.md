@@ -233,3 +233,23 @@ below it.
 
 Evidence:
 `benchmarks/results/2026-09-03-m52-scalars-final-audited-g-drive-docker/`.
+
+## Final scalar result
+
+Keeping the checked single- and double-far helpers in the same optimized unit
+as root opening restored enough two-segment headroom without changing scalar
+semantics.
+
+| Segments | Cumulative C++ ns | Cumulative Rust ns | Rust / C++ | Ceiling | Scalar-only Rust / C++ |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 47.8719 | 11.7484 | 0.245 | 0.331 | 0.848 |
+| 2 | 162.8375 | 25.4403 | 0.156 | 0.172 | 0.965 |
+| 64 | 564.7714 | 170.2120 | 0.301 | 0.349 | 0.671 |
+
+All cumulative and direct component gates pass. Same-run scalar-minus-root
+subtraction remains noisy because the component is only a few nanoseconds;
+the opaque `scalar-only` case is the acceptance measurement for that component.
+Borrowed text/data and retained reads remain open.
+
+Evidence:
+`benchmarks/results/2026-09-03-m52-scalars-final-far-inline-g-drive-docker/`.
