@@ -122,3 +122,27 @@ materialize and checksum every output word, and the double-far wire bytes match
 exactly. C++'s general builder arena/orphan machinery carries more bookkeeping
 and virtual allocation calls for these deliberately tiny forced segments;
 native's exclusive deterministic arena has less machinery on the same graph.
+
+## Safe scratch reuse
+
+Evidence: `benchmarks/results/2026-09-03-m53-build-reuse-g-drive-docker`
+
+`ExclusiveArena::reset()` now provides scoped scratch reuse. It requires
+exclusive access, zeros every used byte before releasing extra segments,
+retains the first segment's allocation, returns to the root-only state, and
+assigns a new arena identity so copied offsets cannot address the next message.
+The paired C++ case uses `MallocMessageBuilder`'s documented caller-provided
+first-segment scratch constructor, whose destructor zeros the used words.
+
+For the three-word direct message, median reuse cost is 46.1471 ns/message in
+C++ and 28.1443 ns/message in native Rust, a 0.610 ratio. Both implementations
+materialize and checksum the same wire words on every iteration, and both
+zero-state guarantees are checked outside the timed region as well as by native
+unit tests. Fresh direct construction remains independently measured at a
+0.976 cumulative ratio and 0.990 paired incremental ratio in the same run, so
+the reuse win does not substitute for or conceal fresh-allocation behavior.
+
+The prepared cases again show how unstable sub-nanosecond denominator gaps are:
+all three are slower by only 0.25–0.27 ns yet produce 1.07–1.09 ratios. The
+earlier pointer-sublayer evidence remains the performance gate, while the final
+runner will batch prepared operations before enforcing their numeric ceiling.
