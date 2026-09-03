@@ -77,10 +77,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         wire = wire.rotate_left(11) ^ fingerprint;
     }
     let elapsed = started.elapsed();
-    if let Some(arena) = &reuse_arena
-        && arena.as_segment() != [0; 8]
-    {
-        return Err("reused arena root storage was not cleared".into());
+    if let Some(arena) = &reuse_arena {
+        if arena.as_segment() != [0; 8] {
+            return Err("reused arena root storage was not cleared".into());
+        }
     }
     println!(
         "{}\t{}\t{}",
