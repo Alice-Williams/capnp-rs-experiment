@@ -186,3 +186,19 @@ bash benchmarks/run-m39-server-scheduling.sh benchmarks/results/<run-name>
 The checked-in qualification run is
 `results/2026-08-31-m31-g-drive-docker`. New configurations use the
 `M31_BENCH_*` variables and a fresh output directory.
+
+## M54 low-level packing comparison
+
+`run-packing-baselines.sh` compares fresh-output `pack` and `unpack` operations
+with the pinned C++ `PackedOutputStream` and `PackedInputStream`. Long zero runs,
+long raw runs, deterministic mixed/sparse words, and a repeated pinned wire
+fixture are measured independently. Paired byte-copy cases expose the inherited
+allocation and observation floor for both directions; the summarizer reports
+both cumulative and subtracted incremental native/C++ ratios.
+
+Run it inside the Linux development container from a committed worktree:
+
+```sh
+benchmarks/run-packing-baselines.sh \
+  benchmarks/results/DATE-m54-packing-baseline-g-drive-docker
+```

@@ -1,0 +1,17 @@
+case	shape	lower_case	lower_native_over_cpp	cumulative_native_over_cpp	cpp_increment_ns_per_word	native_increment_ns_per_word	incremental_native_over_cpp
+pack	mixed	copy-unpacked	0.896	0.754	6.9919	5.2426	0.750
+pack	raw	copy-unpacked	0.893	0.753	1.1673	0.8507	0.729
+pack	realistic	copy-unpacked	1.115	0.773	5.5786	4.2519	0.762
+pack	zero	copy-unpacked	1.214	1.041	0.3686	0.3531	0.958
+pack-stream	mixed	copy-unpacked	0.896	0.826	7.2245	5.9519	0.824
+pack-stream	raw	copy-unpacked	0.893	0.499	1.1067	0.4740	0.428
+pack-stream	realistic	copy-unpacked	1.115	0.804	6.2456	4.9666	0.795
+pack-stream	zero	copy-unpacked	1.214	0.661	0.4672	0.2107	0.451
+unpack	mixed	copy-packed	0.923	0.840	5.9013	4.9475	0.838
+unpack	raw	copy-packed	1.079	0.552	0.1902	-0.0139	-0.073
+unpack	realistic	copy-packed	0.826	0.805	5.9306	4.7748	0.805
+unpack	zero	copy-packed	0.691	0.894	0.2680	0.2414	0.901
+unpack-stream	mixed	copy-packed	0.923	0.846	7.3412	6.1996	0.844
+unpack-stream	raw	copy-packed	1.079	0.627	0.4482	0.1791	0.400
+unpack-stream	realistic	copy-packed	0.826	0.881	6.6121	5.8265	0.881
+unpack-stream	zero	copy-packed	0.691	0.455	0.3798	0.1708	0.450

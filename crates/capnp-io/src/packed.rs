@@ -80,6 +80,21 @@ impl PackedEncoder {
     }
 
     fn push_inner(&mut self, input: &mut &[u8]) -> Result<(), PackedError> {
+        if self.partial_len == 0
+            && matches!(self.run, EncodeRun::None)
+            && input.len() % WORD_BYTES == 0
+        {
+            if pack_complete_run_chunk(input, &mut self.output, self.max_output_bytes)? {
+                *input = &[];
+                return Ok(());
+            }
+            if ends_with_ordinary_word(input) {
+                pack_aligned_into(input, &mut self.output, self.max_output_bytes)?;
+                *input = &[];
+                return Ok(());
+            }
+        }
+
         if self.partial_len != 0 {
             let copied = (WORD_BYTES - self.partial_len).min(input.len());
             self.partial[self.partial_len..self.partial_len + copied]
@@ -251,6 +266,20 @@ impl PackedDecoder {
         }
     }
 
+    /// Creates a decoder with caller-selected initial output capacity.
+    ///
+    /// The allocation is capped at `max_output_bytes`; decoded growth remains
+    /// subject to the same limit checks as [`Self::new`]. This is useful when a
+    /// frame or transport layer already knows the expected unpacked size.
+    pub fn with_capacity(max_output_bytes: usize, initial_capacity: usize) -> Self {
+        Self {
+            output: Vec::with_capacity(initial_capacity.min(max_output_bytes)),
+            max_output_bytes,
+            state: DecodeState::Tag,
+            failed: false,
+        }
+    }
+
     pub fn push(&mut self, input: &[u8]) -> Result<(), PackedError> {
         if self.failed {
             return Err(PackedError::PreviousFailure);
@@ -265,6 +294,17 @@ impl PackedDecoder {
     fn push_inner(&mut self, input: &[u8]) -> Result<(), PackedError> {
         let mut cursor = 0;
         while cursor < input.len() {
+            if matches!(self.state, DecodeState::Tag) {
+                let consumed = decode_complete_item(
+                    &input[cursor..],
+                    &mut self.output,
+                    self.max_output_bytes,
+                )?;
+                if consumed != 0 {
+                    cursor += consumed;
+                    continue;
+                }
+            }
             match &mut self.state {
                 DecodeState::Tag => {
                     let tag = input[cursor];
@@ -392,6 +432,54 @@ impl PackedDecoder {
     }
 }
 
+#[inline(always)]
+fn decode_complete_item(
+    input: &[u8],
+    output: &mut Vec<u8>,
+    max_output_bytes: usize,
+) -> Result<usize, PackedError> {
+    let tag = input[0];
+    let payload_bytes = tag.count_ones() as usize;
+    let header_bytes = 1 + payload_bytes + usize::from(tag == 0 || tag == u8::MAX);
+    if input.len() < header_bytes {
+        return Ok(0);
+    }
+
+    ensure_output_limit(output.len(), WORD_BYTES, max_output_bytes)?;
+    if tag == 0 {
+        let additional_bytes = usize::from(input[1]) * WORD_BYTES;
+        let first_word_end = output.len() + WORD_BYTES;
+        ensure_output_limit(first_word_end, additional_bytes, max_output_bytes)?;
+        output.resize(first_word_end + additional_bytes, 0);
+        return Ok(2);
+    }
+
+    let raw_bytes = if tag == u8::MAX {
+        usize::from(input[1 + payload_bytes]) * WORD_BYTES
+    } else {
+        0
+    };
+    if input.len() < header_bytes + raw_bytes {
+        return Ok(0);
+    }
+
+    let output_start = output.len();
+    output.resize(output_start + WORD_BYTES, 0);
+    let mut payload = 1;
+    for lane in 0..WORD_BYTES {
+        if tag & (1 << lane) != 0 {
+            output[output_start + lane] = input[payload];
+            payload += 1;
+        }
+    }
+    if tag == u8::MAX {
+        ensure_output_limit(output.len(), raw_bytes, max_output_bytes)?;
+        let raw_start = header_bytes;
+        output.extend_from_slice(&input[raw_start..raw_start + raw_bytes]);
+    }
+    Ok(header_bytes + raw_bytes)
+}
+
 /// Packs a complete word-aligned byte slice with an explicit output bound.
 ///
 /// ```
@@ -408,15 +496,201 @@ impl PackedDecoder {
 /// # Ok::<(), capnp_io::PackedError>(())
 /// ```
 pub fn pack(input: &[u8], max_output_bytes: usize) -> Result<Vec<u8>, PackedError> {
-    let mut encoder = PackedEncoder::new(max_output_bytes);
-    encoder.push(input)?;
-    encoder.finish()
+    let mut output = Vec::new();
+    let complete_bytes = input.len() / WORD_BYTES * WORD_BYTES;
+    pack_aligned_into(&input[..complete_bytes], &mut output, max_output_bytes)?;
+    if complete_bytes != input.len() {
+        return Err(PackedError::UnalignedInput {
+            trailing_bytes: input.len() - complete_bytes,
+        });
+    }
+    Ok(output)
+}
+
+fn pack_aligned_into(
+    input: &[u8],
+    output: &mut Vec<u8>,
+    max_output_bytes: usize,
+) -> Result<(), PackedError> {
+    debug_assert_eq!(input.len() % WORD_BYTES, 0);
+    if pack_all_zero(input, output, max_output_bytes)? {
+        return Ok(());
+    }
+    let complete_bytes = input.len();
+    let mut offset = 0;
+    while offset < complete_bytes {
+        let word = &input[offset..offset + WORD_BYTES];
+        let tag = word_tag_slice(word);
+        if tag == 0 {
+            check_output_limit(output.len(), 2, max_output_bytes)?;
+            let mut additional_words = 0;
+            let mut following_words =
+                input[offset + WORD_BYTES..complete_bytes].chunks_exact(WORD_BYTES);
+            while additional_words < MAX_RUN_WORDS {
+                match following_words.next() {
+                    Some(next_word) if word_is_zero(next_word) => additional_words += 1,
+                    _ => break,
+                }
+            }
+            let next = offset + (additional_words + 1) * WORD_BYTES;
+            output.reserve(2);
+            output.extend_from_slice(&[
+                0,
+                u8::try_from(additional_words).expect("zero run is capped at the format limit"),
+            ]);
+            offset = next;
+        } else if tag == u8::MAX {
+            let run_start = offset + WORD_BYTES;
+            let mut next = run_start;
+            let mut additional_words = 0;
+            while additional_words < MAX_RUN_WORDS
+                && next < complete_bytes
+                && zero_byte_count_slice(&input[next..next + WORD_BYTES]) <= 1
+            {
+                additional_words += 1;
+                next += WORD_BYTES;
+            }
+            let encoded_len = 2 + WORD_BYTES + additional_words * WORD_BYTES;
+            check_raw_output_limit(output.len(), encoded_len, max_output_bytes)?;
+            output.reserve(encoded_len);
+            output.push(u8::MAX);
+            output.extend_from_slice(word);
+            output.push(
+                u8::try_from(additional_words).expect("raw run is capped at the format limit"),
+            );
+            output.extend_from_slice(&input[run_start..next]);
+            offset = next;
+        } else {
+            let encoded_len = 1 + tag.count_ones() as usize;
+            check_output_limit(output.len(), encoded_len, max_output_bytes)?;
+            output.push(tag);
+            let mut remaining = tag;
+            while remaining != 0 {
+                let lane = remaining.trailing_zeros() as usize;
+                output.push(word[lane]);
+                remaining &= remaining - 1;
+            }
+            offset += WORD_BYTES;
+        }
+    }
+    Ok(())
+}
+
+fn pack_all_zero(
+    input: &[u8],
+    output: &mut Vec<u8>,
+    max_output_bytes: usize,
+) -> Result<bool, PackedError> {
+    if input.is_empty() || !input.chunks_exact(WORD_BYTES).all(word_is_zero) {
+        return Ok(false);
+    }
+    let mut remaining_words = input.len() / WORD_BYTES;
+    while remaining_words != 0 {
+        check_output_limit(output.len(), 2, max_output_bytes)?;
+        let run_words = remaining_words.min(MAX_RUN_WORDS + 1);
+        output.extend_from_slice(&[
+            0,
+            u8::try_from(run_words - 1).expect("zero run is capped at the format limit"),
+        ]);
+        remaining_words -= run_words;
+    }
+    Ok(true)
 }
 
 pub fn unpack(input: &[u8], max_output_bytes: usize) -> Result<Vec<u8>, PackedError> {
-    let mut decoder = PackedDecoder::new(max_output_bytes);
-    decoder.push(input)?;
-    decoder.finish()
+    let mut output = Vec::new();
+    let mut cursor = 0;
+    while cursor < input.len() {
+        let tag = input[cursor];
+        cursor += 1;
+        ensure_output_limit(output.len(), WORD_BYTES, max_output_bytes)?;
+        if tag == 0 {
+            output.resize(output.len() + WORD_BYTES, 0);
+            let additional_words = *input
+                .get(cursor)
+                .ok_or(PackedError::MissingRunLength { tag: 0 })?;
+            cursor += 1;
+            let additional_bytes = usize::from(additional_words) * WORD_BYTES;
+            ensure_output_limit(output.len(), additional_bytes, max_output_bytes)?;
+            output.resize(output.len() + additional_bytes, 0);
+        } else {
+            let payload_bytes = tag.count_ones() as usize;
+            let available = input.len() - cursor;
+            if available < payload_bytes {
+                return Err(PackedError::TruncatedWord {
+                    tag,
+                    missing_bytes: (payload_bytes - available) as u8,
+                });
+            }
+            let output_start = output.len();
+            output.resize(output_start + WORD_BYTES, 0);
+            let mut payload = cursor;
+            for lane in 0..WORD_BYTES {
+                if tag & (1 << lane) != 0 {
+                    output[output_start + lane] = input[payload];
+                    payload += 1;
+                }
+            }
+            cursor = payload;
+
+            if tag == u8::MAX {
+                let additional_words = *input
+                    .get(cursor)
+                    .ok_or(PackedError::MissingRunLength { tag: u8::MAX })?;
+                cursor += 1;
+                let raw_bytes = usize::from(additional_words) * WORD_BYTES;
+                ensure_output_limit(output.len(), raw_bytes, max_output_bytes)?;
+                let available = input.len() - cursor;
+                if available < raw_bytes {
+                    return Err(PackedError::TruncatedRawRun {
+                        remaining_bytes: raw_bytes - available,
+                    });
+                }
+                output.extend_from_slice(&input[cursor..cursor + raw_bytes]);
+                cursor += raw_bytes;
+            }
+        }
+    }
+    Ok(output)
+}
+
+fn check_raw_output_limit(
+    current: usize,
+    encoded_len: usize,
+    limit: usize,
+) -> Result<(), PackedError> {
+    let first_word = current
+        .checked_add(2 + WORD_BYTES)
+        .ok_or(PackedError::OutputLimit {
+            requested: usize::MAX,
+            limit,
+        })?;
+    if first_word > limit {
+        return Err(PackedError::OutputLimit {
+            requested: first_word,
+            limit,
+        });
+    }
+    let requested = current
+        .checked_add(encoded_len)
+        .ok_or(PackedError::OutputLimit {
+            requested: usize::MAX,
+            limit,
+        })?;
+    if requested <= limit {
+        return Ok(());
+    }
+    let additional_that_fit = (limit - first_word) / WORD_BYTES;
+    let requested = additional_that_fit
+        .checked_add(1)
+        .and_then(|words| words.checked_mul(WORD_BYTES))
+        .and_then(|bytes| first_word.checked_add(bytes))
+        .unwrap_or(usize::MAX);
+    Err(PackedError::OutputLimit { requested, limit })
+}
+
+fn ensure_output_limit(current: usize, additional: usize, limit: usize) -> Result<(), PackedError> {
+    check_output_limit(current, additional, limit)
 }
 
 fn word_tag(word: &[u8; WORD_BYTES]) -> u8 {
@@ -425,7 +699,79 @@ fn word_tag(word: &[u8; WORD_BYTES]) -> u8 {
     })
 }
 
+fn word_tag_slice(word: &[u8]) -> u8 {
+    const LOW_SEVEN_BITS: u64 = 0x7f7f_7f7f_7f7f_7f7f;
+    const HIGH_BITS: u64 = 0x8080_8080_8080_8080;
+    const PACK_BYTE_LSBS: u64 = 0x0102_0408_1020_4080;
+
+    let value = u64::from_le_bytes(
+        word.try_into()
+            .expect("packing only computes tags for complete words"),
+    );
+    let nonzero_high_bits =
+        ((value & LOW_SEVEN_BITS).wrapping_add(LOW_SEVEN_BITS) | value) & HIGH_BITS;
+    ((nonzero_high_bits >> 7).wrapping_mul(PACK_BYTE_LSBS) >> 56) as u8
+}
+
+fn word_is_zero(word: &[u8]) -> bool {
+    u64::from_le_bytes(word.try_into().expect("packing only checks complete words")) == 0
+}
+
+fn ends_with_ordinary_word(input: &[u8]) -> bool {
+    if input.is_empty() {
+        return false;
+    }
+    let final_word = &input[input.len() - WORD_BYTES..];
+    let final_tag = word_tag_slice(final_word);
+    final_tag != 0 && final_tag != u8::MAX
+}
+
+fn pack_complete_run_chunk(
+    input: &[u8],
+    output: &mut Vec<u8>,
+    max_output_bytes: usize,
+) -> Result<bool, PackedError> {
+    if input.len() != (MAX_RUN_WORDS + 1) * WORD_BYTES {
+        return Ok(false);
+    }
+    let first_word = &input[..WORD_BYTES];
+    let first_tag = word_tag_slice(first_word);
+    if first_tag == 0
+        && input[WORD_BYTES..]
+            .chunks_exact(WORD_BYTES)
+            .all(word_is_zero)
+    {
+        check_output_limit(output.len(), 2, max_output_bytes)?;
+        output.extend_from_slice(&[0, u8::MAX]);
+        return Ok(true);
+    }
+    let mut is_raw_run = first_tag == u8::MAX;
+    if is_raw_run {
+        for word in input[WORD_BYTES..].chunks_exact(WORD_BYTES) {
+            if zero_byte_count_slice(word) > 1 {
+                is_raw_run = false;
+                break;
+            }
+        }
+    }
+    if is_raw_run {
+        let encoded_len = 2 + input.len();
+        check_raw_output_limit(output.len(), encoded_len, max_output_bytes)?;
+        output.reserve(encoded_len);
+        output.push(u8::MAX);
+        output.extend_from_slice(first_word);
+        output.push(u8::MAX);
+        output.extend_from_slice(&input[WORD_BYTES..]);
+        return Ok(true);
+    }
+    Ok(false)
+}
+
 fn zero_byte_count(word: &[u8; WORD_BYTES]) -> usize {
+    word.iter().filter(|byte| **byte == 0).count()
+}
+
+fn zero_byte_count_slice(word: &[u8]) -> usize {
     word.iter().filter(|byte| **byte == 0).count()
 }
 
@@ -596,6 +942,19 @@ mod tests {
     }
 
     #[test]
+    fn prepared_decoder_capacity_is_bounded_and_preserves_results() {
+        let packed = pack(CPP_UNPACKED, usize::MAX).expect("fixture packs");
+        let mut decoder = PackedDecoder::with_capacity(CPP_UNPACKED.len(), usize::MAX);
+        for chunk in packed.chunks(17) {
+            decoder.push(chunk).expect("prepared decoder accepts chunk");
+        }
+        assert_eq!(
+            decoder.finish().expect("prepared decoder finishes"),
+            CPP_UNPACKED
+        );
+    }
+
+    #[test]
     fn arbitrary_packed_bytes_always_terminate_under_the_output_bound() {
         let mut state = 0xa076_1d64_78bd_642f_u64;
         for length in 0..512 {
@@ -611,5 +970,68 @@ mod tests {
                 assert_eq!(output.len() % WORD_BYTES, 0);
             }
         }
+    }
+
+    #[test]
+    fn one_shot_fast_paths_preserve_streaming_results_and_errors() {
+        let inputs = [
+            vec![0_u8; 264 * WORD_BYTES],
+            vec![1_u8; 264 * WORD_BYTES],
+            CPP_UNPACKED.repeat(17),
+        ];
+        for input in &inputs {
+            let expected = pack(input, usize::MAX).expect("fixture packs");
+            for limit in 0..=expected.len() + WORD_BYTES {
+                let mut encoder = PackedEncoder::new(limit);
+                let streaming = match encoder.push(input) {
+                    Ok(()) => encoder.finish(),
+                    Err(error) => Err(error),
+                };
+                assert_eq!(pack(input, limit), streaming);
+            }
+        }
+
+        let mut state = 0xd6e8_feb8_6659_fd93_u64;
+        for length in 0..128 {
+            let mut packed = vec![0_u8; length];
+            for byte in &mut packed {
+                state = xorshift_for_test(state);
+                *byte = state as u8;
+            }
+            for limit in [0, 8, 64, 512] {
+                let mut decoder = PackedDecoder::new(limit);
+                let streaming = packed
+                    .chunks(3)
+                    .try_for_each(|chunk| decoder.push(chunk))
+                    .and_then(|()| decoder.finish());
+                assert_eq!(unpack(&packed, limit), streaming);
+            }
+        }
+    }
+
+    #[test]
+    fn parallel_byte_tag_matches_every_tag_and_nonzero_byte_class() {
+        for expected in 0_u8..=u8::MAX {
+            let mut word = [0_u8; WORD_BYTES];
+            for (lane, byte) in word.iter_mut().enumerate() {
+                if expected & (1 << lane) != 0 {
+                    *byte = lane as u8 + 1;
+                }
+            }
+            assert_eq!(word_tag_slice(&word), expected);
+        }
+        for value in [1, 0x7f, 0x80, u8::MAX] {
+            for lane in 0..WORD_BYTES {
+                let mut word = [0_u8; WORD_BYTES];
+                word[lane] = value;
+                assert_eq!(word_tag_slice(&word), 1 << lane);
+            }
+        }
+    }
+
+    fn xorshift_for_test(mut value: u64) -> u64 {
+        value ^= value << 13;
+        value ^= value >> 7;
+        value ^ (value << 17)
     }
 }
