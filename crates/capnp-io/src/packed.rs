@@ -420,11 +420,12 @@ pub fn pack(input: &[u8], max_output_bytes: usize) -> Result<Vec<u8>, PackedErro
             let mut next = offset + WORD_BYTES;
             while additional_words < MAX_RUN_WORDS
                 && next < complete_bytes
-                && input[next..next + WORD_BYTES].iter().all(|byte| *byte == 0)
+                && word_is_zero(&input[next..next + WORD_BYTES])
             {
                 additional_words += 1;
                 next += WORD_BYTES;
             }
+            output.reserve(2);
             output.extend_from_slice(&[
                 0,
                 u8::try_from(additional_words).expect("zero run is capped at the format limit"),
@@ -443,6 +444,7 @@ pub fn pack(input: &[u8], max_output_bytes: usize) -> Result<Vec<u8>, PackedErro
             }
             let encoded_len = 2 + WORD_BYTES + additional_words * WORD_BYTES;
             check_raw_output_limit(output.len(), encoded_len, max_output_bytes)?;
+            output.reserve(encoded_len);
             output.push(u8::MAX);
             output.extend_from_slice(word);
             output.push(
@@ -451,14 +453,18 @@ pub fn pack(input: &[u8], max_output_bytes: usize) -> Result<Vec<u8>, PackedErro
             output.extend_from_slice(&input[run_start..next]);
             offset = next;
         } else {
-            let encoded_len = 1 + tag.count_ones() as usize;
-            check_output_limit(output.len(), encoded_len, max_output_bytes)?;
-            output.push(tag);
+            let output_len = 1 + tag.count_ones() as usize;
+            check_output_limit(output.len(), output_len, max_output_bytes)?;
+            let mut encoded = [0_u8; 1 + WORD_BYTES];
+            encoded[0] = tag;
+            let mut encoded_len = 1;
             for byte in word {
                 if *byte != 0 {
-                    output.push(*byte);
+                    encoded[encoded_len] = *byte;
+                    encoded_len += 1;
                 }
             }
+            output.extend_from_slice(&encoded[..encoded_len]);
             offset += WORD_BYTES;
         }
     }
@@ -581,6 +587,10 @@ fn word_tag_slice(word: &[u8]) -> u8 {
         | (u8::from(word[5] != 0) << 5)
         | (u8::from(word[6] != 0) << 6)
         | (u8::from(word[7] != 0) << 7)
+}
+
+fn word_is_zero(word: &[u8]) -> bool {
+    word == [0; WORD_BYTES]
 }
 
 fn zero_byte_count(word: &[u8; WORD_BYTES]) -> usize {
