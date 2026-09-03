@@ -105,17 +105,39 @@ uint64_t readMany(
   return checksum;
 }
 
+uint64_t readIsolatedRoots(
+    kj::ArrayPtr<const kj::ArrayPtr<const capnp::word>> segments,
+    size_t passes) {
+  uint64_t checksum = SEED;
+  for (size_t pass = 0; pass < passes; ++pass) {
+    capnp::SegmentArrayMessageReader reader(segments);
+    auto root = reader.getRoot<capnp::AnyStruct>();
+    auto data = root.getDataSection();
+    uint64_t value = 0;
+    if (data.size() >= sizeof(value)) {
+      capnp::_::WireValue<uint64_t> wire;
+      std::memcpy(&wire, data.begin(), sizeof(wire));
+      value = wire.get();
+    }
+    auto fingerprint = uint64_t{segments.size()}
+        ^ std::rotl(uint64_t{data.size()}, 17)
+        ^ std::rotl(value, 37);
+    checksum = std::rotl(checksum, 9) ^ fingerprint;
+  }
+  return checksum;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
   if (argc != 4) {
-    std::cerr << "usage: cpp-message-read framing|root SEGMENTS PASSES\n";
+    std::cerr << "usage: cpp-message-read framing|root|isolated-root SEGMENTS PASSES\n";
     return 2;
   }
   auto mode = std::string_view(argv[1]);
   auto segmentCount = parseSize(argv[2]);
   auto passes = parseSize(argv[3]);
-  if (mode != "framing" && mode != "root") {
+  if (mode != "framing" && mode != "root" && mode != "isolated-root") {
     std::cerr << "unknown benchmark mode\n";
     return 2;
   }
@@ -124,7 +146,9 @@ int main(int argc, char** argv) {
   auto views = segmentViews(segments);
   auto encoded = capnp::messageToFlatArray(kj::arrayPtr(views.data(), views.size()));
   auto started = std::chrono::steady_clock::now();
-  auto checksum = readMany(encoded.asPtr(), segmentCount, mode == "root", passes);
+  auto checksum = mode == "isolated-root"
+      ? readIsolatedRoots(kj::arrayPtr(views.data(), views.size()), passes)
+      : readMany(encoded.asPtr(), segmentCount, mode == "root", passes);
   auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
       std::chrono::steady_clock::now() - started);
   std::cout << elapsed.count() << '\t' << checksum << '\n';

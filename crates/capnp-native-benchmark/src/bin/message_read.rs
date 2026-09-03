@@ -11,27 +11,63 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let mode = args
         .next()
-        .ok_or("usage: message_read framing|root SEGMENTS PASSES")?;
+        .ok_or("usage: message_read framing|root|isolated-root SEGMENTS PASSES")?;
     let segment_count = args
         .next()
         .ok_or("missing segment count")?
         .parse::<usize>()?;
     let passes = args.next().ok_or("missing pass count")?.parse::<usize>()?;
     if args.next().is_some()
-        || !matches!(mode.as_str(), "framing" | "root")
+        || !matches!(mode.as_str(), "framing" | "root" | "isolated-root")
         || !matches!(segment_count, 1 | 2 | 64)
         || passes == 0
     {
-        return Err("expected framing|root, SEGMENTS in {1,2,64}, and positive PASSES".into());
+        return Err(
+            "expected framing|root|isolated-root, SEGMENTS in {1,2,64}, and positive PASSES".into(),
+        );
     }
 
     let segments = fixture_segments(segment_count);
     let views: Vec<&[u8]> = segments.iter().map(Vec::as_slice).collect();
     let encoded = encode_frame(&views, FrameLimits::default())?;
+    let descriptors: Vec<Segment<'_>> = views
+        .iter()
+        .map(|bytes| Segment::from_bytes(bytes).expect("fixture segments are word-aligned"))
+        .collect();
     let started = Instant::now();
-    let checksum = read_many(&encoded, mode == "root", passes)?;
+    let checksum = if mode == "isolated-root" {
+        read_isolated_roots(&descriptors, passes)?
+    } else {
+        read_many(&encoded, mode == "root", passes)?
+    };
     println!("{}\t{}", started.elapsed().as_nanos(), checksum);
     Ok(())
+}
+
+fn read_isolated_roots(
+    segments: &[Segment<'_>],
+    passes: usize,
+) -> Result<u64, Box<dyn std::error::Error>> {
+    let mut checksum = SEED;
+    for _ in 0..passes {
+        let message = MessageSegments::from_descriptors(segments)?;
+        let budget = LocalTraversalBudget::new(16);
+        let root = message.read_struct(
+            WireLocation {
+                segment_id: 0,
+                word_offset: 0,
+            },
+            &budget,
+            NestingLimit::new(8),
+        )?;
+        let data = root.data_section()?;
+        let value = data.read_u64(0, 0)?;
+        let fingerprint = segments.len() as u64
+            ^ (data.as_bytes().len() as u64).rotate_left(17)
+            ^ value.rotate_left(37);
+        checksum = checksum.rotate_left(9) ^ fingerprint;
+    }
+    Ok(black_box(checksum))
 }
 
 fn fixture_segments(count: usize) -> Vec<Vec<u8>> {
