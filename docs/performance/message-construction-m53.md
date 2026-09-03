@@ -169,3 +169,46 @@ region even though safe callers cannot mutably alias the borrowed source, and
 the iterative copier allocates its work-list `Vec` for this two-object graph.
 The first graph-copy optimization removes the per-region byte copies while
 retaining the existing rollback and hostile-input behavior.
+
+## Schema-independent graph-copy result
+
+Evidence:
+`benchmarks/results/2026-09-03-m53-build-one-pass-zero-g-drive-docker`
+
+The optimized path removes the temporary region buffer, keeps its first copy
+task and rollback checkpoint inline, specializes direct root-struct and byte-list
+validation, and retains the arena's first segment descriptor inline. Segment
+storage now has a separate used-length cursor: reset zeros each used byte once,
+while later safe growth can reuse that already-initialized storage without a
+second fill. Fresh arenas initialize their complete first segment in one pass,
+matching C++'s one-shot `calloc()` behavior. No optimization adds `unsafe`.
+
+The paired scratch-copy case was essential attribution evidence. Before the
+arena changes, reusable native graph copy was already close to or faster than
+C++, while fresh native copy retained a large gap. That isolated the remaining
+cost in arena allocation and initialization rather than wire copying. The final
+paired run reports:
+
+| Case | C++ ns/message | Rust ns/message | Rust / C++ |
+| --- | ---: | ---: | ---: |
+| prepared 88-byte copy | 17.9570 | 14.1403 | 0.787 |
+| reusable validated graph copy | 240.0116 | 234.1260 | 0.975 |
+| fresh validated graph copy | 265.7662 | 264.3411 | 0.995 |
+| paired fresh-copy increment | 244.1322 | 250.3023 | 1.025 |
+
+All copy-specific cumulative and incremental ratios clear the 1.03 M53 ceiling.
+Both implementations materialize the same 11 wire words and report identical
+semantic and wire checksums. The high absolute times in this run reflect shared
+host load, but the runner alternates implementation order within every sample;
+the gate uses paired medians and is supported by interleaved CPU-pinned
+before/after measurements. Those measurements attribute about 9% to the compact
+root-validation fast path, 8–17% (depending on message size) to one-pass segment
+initialization, and about 13% on reused graph copy to avoiding a second zero fill.
+
+The inline first descriptor also reduces one-segment arena memory overhead by
+one heap allocation and one allocation header. Multi-segment arenas still use a
+growable `Vec` for additional descriptors, so their asymptotic descriptor memory
+is unchanged. Retaining initialized bytes after reset does not increase allocated
+capacity—the old implementation already retained that capacity—but it keeps the
+safe `Vec` length at its high-water mark internally while exposing only the
+used prefix through every public segment view and ownership conversion.

@@ -70,4 +70,14 @@ if [[ "$gate_mode" == final ]]; then
         awk -F '\t' 'NR == 1 { next } $4 > 1.03 { exit 1 } END { if (NR != 2) exit 1 }' \
             "$result_dir/copy-incremental.tsv"
     fi
+elif [[ "$gate_mode" == copy-final ]]; then
+    awk -F '\t' '
+      NR == 1 { next }
+      $1 == "copy-prepared" { seen_prepared = 1; if ($5 > 1.03) exit 1 }
+      $1 == "copy" { seen_copy = 1; if ($5 > 1.03) exit 1 }
+      $1 == "copy-reuse" { seen_reuse = 1; if ($5 > 1.03) exit 1 }
+      END { if (!seen_prepared || !seen_copy || !seen_reuse) exit 1 }
+    ' "$result_dir/comparison.tsv"
+    awk -F '\t' 'NR == 1 { next } $4 > 1.03 { exit 1 } END { if (NR != 2) exit 1 }' \
+        "$result_dir/copy-incremental.tsv"
 fi
