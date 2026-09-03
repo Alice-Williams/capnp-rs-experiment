@@ -293,5 +293,32 @@ Generated native nested-struct access is 47.7% faster than generated C++ and
 comfortably preserves the paired direct-runtime ratio, whose 3% tolerance
 allows a 0.682 cumulative ceiling. C++ adds 2.02 ns for its generated wrapper;
 the native generated-minus-direct median is below timer resolution. Ordinary
-nested struct pointers are therefore closed. Inline-composite struct-list
-element access remains a separate reader gate.
+nested struct pointers are therefore closed.
+
+## Borrowed inline-composite struct-list gate
+
+The initial paired struct-list run placed native direct element access at
+1.776x C++ and generated access at 1.639x. Explicit inlining first brought both
+to approximate parity. The remaining duplicated work was in the checked
+runtime: every element lookup reconstructed the already validated list layout,
+reselected its segment, and resliced the element data.
+
+`StructListReader` now caches its validated segment, length, element stride,
+data width, and pointer width when the list is opened. Each element lookup
+performs only its required index, nesting, and checked-coordinate work and
+constructs the borrowed data view once. This preserves primitive-to-struct and
+pointer-to-struct upgrade semantics and adds no `unsafe` code.
+
+Final five-million-operation evidence at native commit `964df29` is in
+[`benchmarks/results/2026-09-03-m55-generated-reader-struct-lists-final-5m-g-drive-docker`](../../benchmarks/results/2026-09-03-m55-generated-reader-struct-lists-final-5m-g-drive-docker).
+
+| Operation | C++ ns/op | Native ns/op | Native / C++ |
+| --- | ---: | ---: | ---: |
+| borrowed direct struct-list element | 17.3854 | 15.5757 | 0.896 |
+| borrowed generated struct-list element | 17.8094 | 15.3211 | 0.860 |
+
+Generated native struct-list access is 14.0% faster than generated C++ and
+improves on its paired direct-runtime ratio. The direct ratio permits a 0.923
+cumulative ceiling with tolerance; generated access reaches 0.860. Its native
+generated-minus-direct median is below timer resolution, while C++ adds
+0.42 ns. The inline-composite struct-list reader gate is closed.
