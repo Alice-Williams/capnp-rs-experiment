@@ -496,6 +496,22 @@ mod tests {
         let nodes = reader.structs().expect("borrowed struct list");
         assert_eq!(nodes.len(), 2);
         assert_eq!(nodes.get(1).expect("borrowed struct element").value(), 2);
+        let texts = reader.texts().expect("borrowed text list");
+        assert_eq!(texts.len(), 3);
+        assert_eq!(
+            texts.get(2).expect("borrowed text element").to_str(),
+            Ok("βeta")
+        );
+        let blobs = reader.data_blobs().expect("borrowed data list");
+        assert_eq!(blobs.len(), 2);
+        assert_eq!(
+            blobs.get(1).expect("borrowed data element").as_bytes(),
+            &[0xde, 0xad, 0xbe, 0xef]
+        );
+        let nested = reader.nested_lists().expect("borrowed nested lists");
+        let first = nested.get(0).expect("borrowed nested primitive list");
+        assert_eq!(first.len(), 3);
+        assert_eq!(first.get(2).expect("borrowed nested element"), u16::MAX);
         assert!(
             reader
                 .text()
@@ -546,6 +562,24 @@ mod tests {
             reader
                 .structs()
                 .expect("missing struct list defaults empty")
+                .is_empty()
+        );
+        assert!(
+            reader
+                .texts()
+                .expect("missing text list defaults empty")
+                .is_empty()
+        );
+        assert!(
+            reader
+                .data_blobs()
+                .expect("missing data list defaults empty")
+                .is_empty()
+        );
+        assert!(
+            reader
+                .nested_lists()
+                .expect("missing nested list defaults empty")
                 .is_empty()
         );
     }

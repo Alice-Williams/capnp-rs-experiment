@@ -1283,10 +1283,24 @@ fn emit_borrowed_reader_field(
         if matches!(default.kind, capnp_schema::OpaquePointerKind::Null) {
             let wrapper = borrowed_list_wrapper_name(field);
             match element.as_ref() {
+                Type::Text | Type::Data => {
+                    return writeln!(
+                        output,
+                        "        pub fn {method}(&self) -> Result<{wrapper}<'context, 'data, B>, capnp_message::ListReadError> {{ Ok({wrapper} {{ inner: self.pointers.read_list({offset})?.as_pointers()? }}) }}"
+                    )
+                    .map_err(|_| GenerateError::Format);
+                }
                 Type::Enum { .. } => {
                     return writeln!(
                         output,
                         "        pub fn {method}(&self) -> Result<{wrapper}<'context, 'data, B>, capnp_message::ListReadError> {{ Ok({wrapper} {{ inner: self.pointers.read_list({offset})?.as_primitive::<u16>()? }}) }}"
+                    )
+                    .map_err(|_| GenerateError::Format);
+                }
+                Type::List(nested) if borrowed_primitive_rust_type(nested).is_some() => {
+                    return writeln!(
+                        output,
+                        "        pub fn {method}(&self) -> Result<{wrapper}<'context, 'data, B>, capnp_message::ListReadError> {{ Ok({wrapper} {{ inner: self.pointers.read_list({offset})?.as_pointers()? }}) }}"
                     )
                     .map_err(|_| GenerateError::Format);
                 }
@@ -1395,12 +1409,32 @@ fn emit_borrowed_list_wrapper(
     }
     let wrapper = borrowed_list_wrapper_name(field);
     let (inner, get_type, get_expression) = match element.as_ref() {
+        Type::Text => (
+            "capnp_message::PointerListReader<'context, 'data, B>".to_owned(),
+            "capnp_message::TextReader<'data>".to_owned(),
+            "self.inner.read_text(index)".to_owned(),
+        ),
+        Type::Data => (
+            "capnp_message::PointerListReader<'context, 'data, B>".to_owned(),
+            "capnp_message::DataReader<'data>".to_owned(),
+            "self.inner.read_data(index)".to_owned(),
+        ),
         Type::Enum { type_id, .. } => {
             let target = names.reference(*type_id, true)?;
             (
                 "capnp_message::PrimitiveListReader<'context, 'data, B, u16>".to_owned(),
                 target.clone(),
                 format!("Ok({target}::from_ordinal(self.inner.get(index)?))"),
+            )
+        }
+        Type::List(nested) => {
+            let Some(rust_type) = borrowed_primitive_rust_type(nested) else {
+                return Ok(());
+            };
+            (
+                "capnp_message::PointerListReader<'context, 'data, B>".to_owned(),
+                format!("capnp_message::PrimitiveListReader<'context, 'data, B, {rust_type}>"),
+                format!("self.inner.get_list(index)?.as_primitive::<{rust_type}>()"),
             )
         }
         Type::Struct { type_id, brand } if brand.scopes.is_empty() => {
@@ -1450,6 +1484,24 @@ fn borrowed_primitive_list(rust_type: &str) -> (String, String) {
         format!("capnp_message::PrimitiveListReader<'context, 'data, B, {rust_type}>"),
         format!("as_primitive::<{rust_type}>()"),
     )
+}
+
+fn borrowed_primitive_rust_type(ty: &Type) -> Option<&'static str> {
+    match ty {
+        Type::Void => Some("()"),
+        Type::Bool => Some("bool"),
+        Type::Int8 => Some("i8"),
+        Type::Int16 => Some("i16"),
+        Type::Int32 => Some("i32"),
+        Type::Int64 => Some("i64"),
+        Type::UInt8 => Some("u8"),
+        Type::UInt16 => Some("u16"),
+        Type::UInt32 => Some("u32"),
+        Type::UInt64 => Some("u64"),
+        Type::Float32 => Some("f32"),
+        Type::Float64 => Some("f64"),
+        _ => None,
+    }
 }
 
 fn borrowed_total_data_value(
@@ -2916,6 +2968,16 @@ mod tests {
             generated
                 .source
                 .contains("pub struct BorrowedStructsListReader")
+        );
+        assert!(
+            generated
+                .source
+                .contains("pub struct BorrowedTextsListReader")
+        );
+        assert!(
+            generated
+                .source
+                .contains("pub struct BorrowedNestedListsListReader")
         );
     }
 
