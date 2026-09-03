@@ -460,3 +460,28 @@ input dispatch performed once for Text and again for Data. This attribution is
 also visible structurally in generated source; constant pointer offsets are
 already available to codegen. The next change removes that reflection only for
 ordinary non-union Text/Data setters.
+
+## Blob-builder gate
+
+Generated non-union Text and Data setters now embed their pointer offsets and
+call checked `StructBuilder` blob primitives directly. They retain the same
+copying, allocation, pointer emission, and output-limit behavior as the dynamic
+path, but no longer perform field-name lookup, clone field metadata, resolve a
+runtime type, or dispatch through `DynamicInput`. Union blob setters retain the
+dynamic activation path so that their discriminants remain correct.
+
+Final five-million-operation evidence at native commit `af9846c` is in
+[`benchmarks/results/2026-09-03-m55-generated-builder-blobs-final-5m-g-drive-docker`](../../benchmarks/results/2026-09-03-m55-generated-builder-blobs-final-5m-g-drive-docker).
+
+| Operation | C++ ns/op | Native ns/op | Native / C++ |
+| --- | ---: | ---: | ---: |
+| direct Text/Data writes | 28.0623 | 36.4282 | 1.298 |
+| generated Text/Data writes | 27.6996 | 35.6529 | 1.287 |
+
+The generated native path is 92.1% faster than its pre-specialization baseline
+and slightly improves on the paired direct-runtime ratio. Its 1.287 cumulative
+ratio stays below the inherited 1.337 ceiling including tolerance. Generated
+and direct medians differ by less than one nanosecond in both languages, so the
+incremental cost is below timer resolution. The ordinary Text/Data builder gate
+is closed; struct, list, union, default, and evolution builder gates remain
+open.
