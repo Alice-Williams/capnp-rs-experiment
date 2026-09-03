@@ -372,3 +372,31 @@ The direct ratio permits a 0.412 cumulative ceiling with tolerance; generated
 access reaches 0.206. Native generated wrapping adds only 0.03 ns versus
 2.78 ns for C++. Together with scalar default-XOR coverage, the generated
 reader default gate is closed.
+
+## Retained scalar-reader gate
+
+The retained reader owns its schema, immutable message, and prepared root
+coordinate. Its earlier scalar path nevertheless borrowed and resliced that
+retained coordinate for every generated field call. A generated reader now
+copies a schema-sized immutable data prefix once when it is constructed, then
+serves constant-offset scalar and enum access directly from that local prefix.
+Short evolution views retain their checked fallback. To prevent pathological
+generated-reader sizes, the optimization applies only when the complete data
+section is at most 128 bytes; larger schemas retain the allocation-free
+prepared-reader path.
+
+Final five-million-operation evidence for the optimized representation at
+native commit `39e8c36` is in
+[`benchmarks/results/2026-09-03-m55-retained-scalar-final-5m-g-drive-docker`](../../benchmarks/results/2026-09-03-m55-retained-scalar-final-5m-g-drive-docker).
+
+| Operation | C++ ns/op | Native ns/op | Native / C++ |
+| --- | ---: | ---: | ---: |
+| retained direct scalar sequence | 5.3541 | 32.5785 | 6.085 |
+| retained generated scalar sequence | 3.6730 | 5.1746 | 1.409 |
+
+The generated path falls from roughly 73 ns before caching to 5.17 ns and
+removes 84% of the native retained-control cost. Although retained native
+access remains 40.9% slower than generated C++ in absolute terms, it easily
+preserves the ownership model's paired 6.267 cumulative ceiling and adds no
+resolvable generated overhead. The retained scalar generated-API gate is
+closed; reducing the retained ownership floor itself remains lower-layer work.
