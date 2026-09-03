@@ -36,3 +36,7 @@ awk -F '\t' -v expected="$expected_results" -v passes="$expected_passes" '
 awk -F '\t' -v expected="$expected_summary" 'NR == 1 { next } NF != 9 || $6 <= 0 || $7 <= 0 || $8 <= 0 || $9 <= 0 { exit 1 } END { if (NR != expected) exit 1 }' "$result_dir/summary.tsv"
 awk -F '\t' -v expected="$expected_comparison" 'NR == 1 { next } NF != 5 || $3 <= 0 || $4 <= 0 || $5 <= 0 { exit 1 } END { if (NR != expected) exit 1 }' "$result_dir/comparison.tsv"
 awk -F '\t' 'NR == 1 { next } NF != 6 || $2 <= 0 || $3 <= 0 || $4 <= 0 || $5 <= 0 || $6 <= 0 { exit 1 } END { if (NR != 4) exit 1 }' "$result_dir/incremental.tsv"
+if test -e "$result_dir/scalar-incremental.tsv"; then
+    test "$(wc -l < "$result_dir/scalar-incremental.tsv")" -eq 4
+    awk -F '\t' 'NR == 1 { next } NF != 6 || $2 <= 0 || $3 <= 0 || $4 <= 0 || $5 <= 0 || $6 <= 0 { exit 1 } END { if (NR != 4) exit 1 }' "$result_dir/scalar-incremental.tsv"
+fi

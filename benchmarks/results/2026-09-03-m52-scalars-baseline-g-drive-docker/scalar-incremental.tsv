@@ -1,0 +1,4 @@
+segments	cpp_scalars_minus_root_ns	native_scalars_minus_root_ns	incremental_native_over_cpp	isolated_scalars_native_over_cpp	scalars_native_over_cpp
+1	2.7312	13.2873	4.865	0.526	0.469
+2	8.1738	17.2624	2.112	0.253	0.240
+64	7.5606	16.0239	2.119	0.263	0.345

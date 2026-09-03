@@ -97,8 +97,9 @@ for ((warmup = 1; warmup <= warmups; warmup++)); do run_sample "warmup-$warmup" 
 for ((run = 1; run <= runs; run++)); do run_sample "$run" "$((warmups + run))"; done
 
 python3 "$repo_root/tools/summarize-message-read-benchmarks.py" \
-    "$output/results.tsv" "$output/summary.tsv" "$output/comparison.tsv" "$output/incremental.tsv"
+    "$output/results.tsv" "$output/summary.tsv" "$output/comparison.tsv" \
+    "$output/incremental.tsv" "$output/scalar-incremental.tsv"
 awk -F '\t' 'NR == 1 { next } !($2 FS $3 in sum) { sum[$2 FS $3] = $7; next } $7 != sum[$2 FS $3] { exit 1 }' "$output/results.tsv"
-printf 'metadata=%s\nraw=%s\nsummary=%s\ncomparison=%s\nincremental=%s\n' \
+printf 'metadata=%s\nraw=%s\nsummary=%s\ncomparison=%s\nincremental=%s\nscalar_incremental=%s\n' \
     "$output/metadata.txt" "$output/results.tsv" "$output/summary.tsv" \
-    "$output/comparison.tsv" "$output/incremental.tsv"
+    "$output/comparison.tsv" "$output/incremental.tsv" "$output/scalar-incremental.tsv"

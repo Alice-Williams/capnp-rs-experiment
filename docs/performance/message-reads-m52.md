@@ -181,3 +181,32 @@ reads remain open M52 work.
 
 Evidence:
 `benchmarks/results/2026-09-03-m52-root-final-inlined-g-drive-docker/`.
+
+## Scalar-read baseline
+
+The next layer reads nine scalar views from the root data word: bool, unsigned
+8/16/32/64-bit values, signed 32-bit, float32, float64, and an enum-width
+ordinal. Nonzero schema defaults exercise XOR semantics, and the empty
+64-segment root exercises missing-field defaults. C++ uses the same checked
+data-section bounds and `WireValue` loads. Checksums match for every shape.
+
+| Segments | Cumulative C++ ns | Cumulative Rust ns | Rust / C++ | Scalar-only Rust / C++ |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 49.1035 | 23.0350 | 0.469 | 4.865 |
+| 2 | 176.9105 | 42.4760 | 0.240 | 2.112 |
+| 64 | 520.6610 | 179.8548 | 0.345 | 2.119 |
+
+The cumulative workloads are faster than C++, but this is not acceptable under
+the inherited-efficiency rule: paired scalar-minus-root medians show that Rust
+spends 13.2873–17.2624 ns while C++ spends 2.7312–8.1738 ns. The isolated
+scalar workload remains faster only because it includes Rust's much faster
+root opening. The gap is localized to `DataSection` scalar accessors; most are
+public cross-crate methods without inline annotations and each independently
+recomputes checked byte ranges.
+
+The summarizer now uses medians of same-run paired differences rather than
+subtracting independent medians. This prevents scheduler noise from producing
+a false negative increment while retaining the raw and marginal medians.
+
+Evidence:
+`benchmarks/results/2026-09-03-m52-scalars-baseline-g-drive-docker/`.
