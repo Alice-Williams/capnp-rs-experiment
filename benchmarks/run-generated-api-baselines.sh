@@ -96,6 +96,8 @@ workloads=(
     borrowed-defaults
     direct-builder-scalars
     generated-builder-scalars
+    direct-builder-blobs
+    generated-builder-blobs
 )
 
 run_workload() {

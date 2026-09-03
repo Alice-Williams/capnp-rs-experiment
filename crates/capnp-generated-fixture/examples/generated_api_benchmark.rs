@@ -34,7 +34,7 @@ const EMPTY_FRAME: &[u8] = &[0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let mode = args.next().ok_or(
-        "usage: generated_api_benchmark direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups|borrowed-direct-lists|borrowed-lists|borrowed-direct-nested|borrowed-nested|borrowed-direct-struct-lists|borrowed-struct-lists|borrowed-direct-evolution|borrowed-evolution|borrowed-direct-defaults|borrowed-defaults|direct-builder-scalars|generated-builder-scalars PASSES",
+        "usage: generated_api_benchmark direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups|borrowed-direct-lists|borrowed-lists|borrowed-direct-nested|borrowed-nested|borrowed-direct-struct-lists|borrowed-struct-lists|borrowed-direct-evolution|borrowed-evolution|borrowed-direct-defaults|borrowed-defaults|direct-builder-scalars|generated-builder-scalars|direct-builder-blobs|generated-builder-blobs PASSES",
     )?;
     let passes = args.next().ok_or("missing passes")?.parse::<usize>()?;
     if args.next().is_some()
@@ -63,6 +63,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 | "borrowed-defaults"
                 | "direct-builder-scalars"
                 | "generated-builder-scalars"
+                | "direct-builder-blobs"
+                | "generated-builder-blobs"
         )
     {
         return Err("expected a known mode and positive PASSES".into());
@@ -72,8 +74,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         REQUEST,
         LoadLimits::default(),
     )?);
-    if mode == "direct-builder-scalars" || mode == "generated-builder-scalars" {
-        return run_scalar_builder_benchmark(&mode, passes, &schema);
+    if mode.contains("builder-") {
+        return run_builder_benchmark(&mode, passes, &schema);
     }
     let FrameRead::Message { frame, remaining } = parse_frame(FRAME, FrameLimits::default())?
     else {
@@ -160,12 +162,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn run_scalar_builder_benchmark(
+fn run_builder_benchmark(
     mode: &str,
     passes: usize,
     schema: &CompiledSchema,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut arena = ExclusiveArena::new(32, 1_024)?;
+    let max_words = if mode.ends_with("builder-blobs") {
+        u32::try_from(
+            passes
+                .checked_mul(2)
+                .and_then(|words| words.checked_add(64))
+                .ok_or("builder benchmark arena size overflow")?,
+        )?
+    } else {
+        1_024
+    };
+    let mut arena = ExclusiveArena::new(max_words, max_words)?;
     let started;
     let checksum = if mode == "direct-builder-scalars" {
         let node = schema
@@ -177,11 +189,46 @@ fn run_scalar_builder_benchmark(
         let mut builder =
             arena.init_root_struct(structure.data_word_count, structure.pointer_count)?;
         started = Instant::now();
-        measure_builder(passes, &mut builder, write_direct_scalars)?
+        measure_builder(
+            passes,
+            &mut builder,
+            write_direct_scalars,
+            scalar_builder_fingerprint,
+        )?
+    } else if mode == "generated-builder-scalars" {
+        let mut builder = wire_fixture::Builder::init_root(schema, &mut arena)?;
+        started = Instant::now();
+        measure_builder(
+            passes,
+            &mut builder,
+            write_generated_scalars,
+            scalar_builder_fingerprint,
+        )?
+    } else if mode == "direct-builder-blobs" {
+        let node = schema
+            .node(wire_fixture::TYPE_ID)
+            .ok_or("WireFixture schema is missing")?;
+        let NodeKind::Struct(structure) = &node.kind else {
+            return Err("WireFixture is not a struct".into());
+        };
+        let mut builder =
+            arena.init_root_struct(structure.data_word_count, structure.pointer_count)?;
+        started = Instant::now();
+        measure_builder(
+            passes,
+            &mut builder,
+            write_direct_blobs,
+            blob_builder_fingerprint,
+        )?
     } else {
         let mut builder = wire_fixture::Builder::init_root(schema, &mut arena)?;
         started = Instant::now();
-        measure_builder(passes, &mut builder, write_generated_scalars)?
+        measure_builder(
+            passes,
+            &mut builder,
+            write_generated_blobs,
+            blob_builder_fingerprint,
+        )?
     };
     println!("{}\t{}", started.elapsed().as_nanos(), checksum);
     Ok(())
@@ -191,13 +238,44 @@ fn measure_builder<B, E>(
     passes: usize,
     builder: &mut B,
     mut write: impl FnMut(&mut B, usize) -> Result<(), E>,
+    fingerprint: impl Fn(usize) -> u64,
 ) -> Result<u64, E> {
     let mut checksum = SEED;
     for pass in 0..passes {
         write(black_box(&mut *builder), pass)?;
-        checksum = checksum.rotate_left(9) ^ scalar_builder_fingerprint(pass);
+        checksum = checksum.rotate_left(9) ^ fingerprint(pass);
     }
     Ok(black_box(checksum))
+}
+
+const BUILDER_TEXT: [&str; 2] = ["capnp-a", "capnp-b"];
+const BUILDER_DATA: [[u8; 8]; 2] = [*b"data---a", *b"data---b"];
+
+fn write_direct_blobs(
+    builder: &mut StructBuilder<'_>,
+    pass: usize,
+) -> Result<(), capnp_message::ArenaError> {
+    let selected = pass & 1;
+    builder.set_text(0, BUILDER_TEXT[selected])?;
+    builder.set_data(1, &BUILDER_DATA[selected])
+}
+
+fn write_generated_blobs(
+    builder: &mut wire_fixture::Builder<'_, '_>,
+    pass: usize,
+) -> Result<(), capnp_schema::DynamicError> {
+    let selected = pass & 1;
+    builder.set_text(BUILDER_TEXT[selected])?;
+    builder.set_data(&BUILDER_DATA[selected])
+}
+
+fn blob_builder_fingerprint(pass: usize) -> u64 {
+    let selected = pass & 1;
+    let text = BUILDER_TEXT[selected].as_bytes();
+    let data = &BUILDER_DATA[selected];
+    let mut value = (text.len() as u64).rotate_left(11) ^ (data.len() as u64).rotate_left(23);
+    value ^= u64::from(text[0]).rotate_left(31) ^ u64::from(text[text.len() - 1]).rotate_left(37);
+    value ^ u64::from(data[0]).rotate_left(43) ^ u64::from(data[data.len() - 1]).rotate_left(47)
 }
 
 fn write_direct_scalars(

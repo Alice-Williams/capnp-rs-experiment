@@ -91,14 +91,18 @@ def main() -> None:
             for shape in ("scalars", "blobs"):
                 write_incremental(writer, medians, by_run, ownership, shape)
         if ("cpp", "direct-builder-scalars") in medians:
-            write_incremental_cases(
-                writer,
-                medians,
-                by_run,
-                "builder-scalars",
-                "direct-builder-scalars",
-                "generated-builder-scalars",
-            )
+            for shape in ("scalars", "blobs"):
+                direct_case = f"direct-builder-{shape}"
+                generated_case = f"generated-builder-{shape}"
+                if ("cpp", direct_case) in medians:
+                    write_incremental_cases(
+                        writer,
+                        medians,
+                        by_run,
+                        f"builder-{shape}",
+                        direct_case,
+                        generated_case,
+                    )
 
 
 def write_incremental_cases(

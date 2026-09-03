@@ -185,14 +185,49 @@ void writeGeneratedScalars(WireFixture::Builder& root, size_t pass) {
   root.setDefaulted(values.defaulted);
 }
 
-template <typename Root, typename Write>
-uint64_t measureBuilder(Root& root, Write write, size_t passes) {
+constexpr std::string_view BUILDER_TEXT[] = {"capnp-a", "capnp-b"};
+constexpr capnp::byte BUILDER_DATA[][8] = {
+  {'d', 'a', 't', 'a', '-', '-', '-', 'a'},
+  {'d', 'a', 't', 'a', '-', '-', '-', 'b'},
+};
+
+uint64_t blobBuilderFingerprint(size_t pass) {
+  auto selected = pass & 1;
+  auto text = BUILDER_TEXT[selected];
+  auto data = kj::arrayPtr(BUILDER_DATA[selected], size_t{8});
+  uint64_t value = std::rotl(uint64_t{text.size()}, 11)
+      ^ std::rotl(uint64_t{data.size()}, 23);
+  value ^= std::rotl(uint64_t{static_cast<uint8_t>(text.front())}, 31)
+      ^ std::rotl(uint64_t{static_cast<uint8_t>(text.back())}, 37);
+  return value ^ std::rotl(uint64_t{data.front()}, 43)
+      ^ std::rotl(uint64_t{data.back()}, 47);
+}
+
+void writeDirectBlobs(capnp::AnyStruct::Builder& root, size_t pass) {
+  auto selected = pass & 1;
+  auto text = BUILDER_TEXT[selected];
+  auto data = kj::arrayPtr(BUILDER_DATA[selected], size_t{8});
+  auto pointers = root.getPointerSection();
+  pointers[0].setAs<capnp::Text>(kj::StringPtr(text.data(), text.size()));
+  pointers[1].setAs<capnp::Data>(data);
+}
+
+void writeGeneratedBlobs(WireFixture::Builder& root, size_t pass) {
+  auto selected = pass & 1;
+  auto text = BUILDER_TEXT[selected];
+  root.setText(kj::StringPtr(text.data(), text.size()));
+  root.setData(kj::arrayPtr(BUILDER_DATA[selected], size_t{8}));
+}
+
+template <typename Root, typename Write, typename Fingerprint>
+uint64_t measureBuilder(
+    Root& root, Write write, Fingerprint fingerprint, size_t passes) {
   uint64_t checksum = SEED;
   for (size_t pass = 0; pass < passes; ++pass) {
     auto rootPointer = &root;
     asm volatile("" : "+r"(rootPointer) : : "memory");
     write(*rootPointer, pass);
-    checksum = std::rotl(checksum, 9) ^ scalarBuilderFingerprint(pass);
+    checksum = std::rotl(checksum, 9) ^ fingerprint(pass);
   }
   return checksum;
 }
@@ -201,7 +236,8 @@ void benchmarkDirectBuilder(size_t passes) {
   capnp::MallocMessageBuilder message;
   auto root = message.initRoot<capnp::AnyPointer>().initAsAnyStruct(9, 28);
   auto started = std::chrono::steady_clock::now();
-  auto checksum = measureBuilder(root, writeDirectScalars, passes);
+  auto checksum = measureBuilder(
+      root, writeDirectScalars, scalarBuilderFingerprint, passes);
   auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
       std::chrono::steady_clock::now() - started);
   std::cout << elapsed.count() << '\t' << checksum << '\n';
@@ -211,7 +247,36 @@ void benchmarkGeneratedBuilder(size_t passes) {
   capnp::MallocMessageBuilder message;
   auto root = message.initRoot<WireFixture>();
   auto started = std::chrono::steady_clock::now();
-  auto checksum = measureBuilder(root, writeGeneratedScalars, passes);
+  auto checksum = measureBuilder(
+      root, writeGeneratedScalars, scalarBuilderFingerprint, passes);
+  auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now() - started);
+  std::cout << elapsed.count() << '\t' << checksum << '\n';
+}
+
+void benchmarkDirectBlobBuilder(size_t passes) {
+  auto words = passes * 2 + 64;
+  auto scratch = kj::heapArray<capnp::word>(words);
+  capnp::MallocMessageBuilder message(
+      scratch.asPtr(), capnp::AllocationStrategy::FIXED_SIZE);
+  auto root = message.initRoot<capnp::AnyPointer>().initAsAnyStruct(9, 28);
+  auto started = std::chrono::steady_clock::now();
+  auto checksum = measureBuilder(
+      root, writeDirectBlobs, blobBuilderFingerprint, passes);
+  auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now() - started);
+  std::cout << elapsed.count() << '\t' << checksum << '\n';
+}
+
+void benchmarkGeneratedBlobBuilder(size_t passes) {
+  auto words = passes * 2 + 64;
+  auto scratch = kj::heapArray<capnp::word>(words);
+  capnp::MallocMessageBuilder message(
+      scratch.asPtr(), capnp::AllocationStrategy::FIXED_SIZE);
+  auto root = message.initRoot<WireFixture>();
+  auto started = std::chrono::steady_clock::now();
+  auto checksum = measureBuilder(
+      root, writeGeneratedBlobs, blobBuilderFingerprint, passes);
   auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
       std::chrono::steady_clock::now() - started);
   std::cout << elapsed.count() << '\t' << checksum << '\n';
@@ -423,7 +488,7 @@ uint64_t measure(Root root, Fingerprint fingerprint, size_t passes) {
 
 int main(int argc, char** argv) {
   if (argc != 4) {
-    std::cerr << "usage: cpp-generated-api direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups|borrowed-direct-lists|borrowed-lists|borrowed-direct-nested|borrowed-nested|borrowed-direct-struct-lists|borrowed-struct-lists|borrowed-direct-evolution|borrowed-evolution|borrowed-direct-defaults|borrowed-defaults|direct-builder-scalars|generated-builder-scalars PASSES FIXTURE\n";
+    std::cerr << "usage: cpp-generated-api direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups|borrowed-direct-lists|borrowed-lists|borrowed-direct-nested|borrowed-nested|borrowed-direct-struct-lists|borrowed-struct-lists|borrowed-direct-evolution|borrowed-evolution|borrowed-direct-defaults|borrowed-defaults|direct-builder-scalars|generated-builder-scalars|direct-builder-blobs|generated-builder-blobs PASSES FIXTURE\n";
     return 2;
   }
   auto mode = std::string_view(argv[1]);
@@ -434,6 +499,14 @@ int main(int argc, char** argv) {
   }
   if (mode == "generated-builder-scalars") {
     benchmarkGeneratedBuilder(passes);
+    return 0;
+  }
+  if (mode == "direct-builder-blobs") {
+    benchmarkDirectBlobBuilder(passes);
+    return 0;
+  }
+  if (mode == "generated-builder-blobs") {
+    benchmarkGeneratedBlobBuilder(passes);
     return 0;
   }
   auto words = mode == "borrowed-direct-defaults" || mode == "borrowed-defaults"
