@@ -2434,6 +2434,7 @@ impl<'arena> StructListBuilder<'arena> {
     }
 }
 
+#[inline(always)]
 fn check_index(index: u32, len: u32) -> Result<(), ArenaError> {
     if index < len {
         Ok(())

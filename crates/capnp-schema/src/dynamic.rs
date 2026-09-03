@@ -2161,6 +2161,7 @@ impl DynamicValue {
     }
 }
 
+#[inline(always)]
 fn u16_offset(value: u32) -> Result<u16, DynamicError> {
     u16::try_from(value).map_err(|_| type_mismatch("pointer offset fitting u16"))
 }
