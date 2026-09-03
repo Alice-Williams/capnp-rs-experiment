@@ -1274,7 +1274,14 @@ fn emit_struct(
             .map_err(|_| GenerateError::Format)?;
     }
     for field in &structure.fields {
-        emit_builder_field(output, schema, field, names, &parameters)?;
+        emit_builder_field(
+            output,
+            schema,
+            field,
+            structure.discriminant_offset,
+            names,
+            &parameters,
+        )?;
     }
     writeln!(output, "    }}").map_err(|_| GenerateError::Format)?;
 
@@ -2742,6 +2749,7 @@ fn emit_builder_field(
     output: &mut String,
     schema: &CompiledSchema,
     field: &Field,
+    discriminant_offset: u32,
     names: &Names,
     context: &[GenericParameter],
 ) -> Result<(), GenerateError> {
@@ -2749,14 +2757,25 @@ fn emit_builder_field(
     match &field.kind {
         FieldKind::Group { type_id } => {
             let target = struct_builder_type(schema, *type_id, None, names, context)?;
-            writeln!(output, "        pub fn {method}(&mut self) -> Result<{target}, capnp_schema::DynamicError> {{")
+            if context.is_empty() {
+                writeln!(output, "        #[inline(always)]\n        pub fn {method}(&mut self) -> Result<{target}, capnp_schema::DynamicError> {{")
+                    .map_err(|_| GenerateError::Format)?;
+                if let Some(discriminant) = field.discriminant_value {
+                    writeln!(output, "            self.inner.set_u16_slot({discriminant_offset}, {discriminant}, 0)?;")
+                        .map_err(|_| GenerateError::Format)?;
+                }
+                writeln!(output, "            Ok(<{target}>::from_generated(self.inner.group_slot::<0x{type_id:016x}>()))")
+                    .map_err(|_| GenerateError::Format)?;
+            } else {
+                writeln!(output, "        pub fn {method}(&mut self) -> Result<{target}, capnp_schema::DynamicError> {{")
+                    .map_err(|_| GenerateError::Format)?;
+                writeln!(
+                    output,
+                    "            Ok(<{target}>::from_dynamic(self.inner.group({:?})?))",
+                    field.name
+                )
                 .map_err(|_| GenerateError::Format)?;
-            writeln!(
-                output,
-                "            Ok(<{target}>::from_dynamic(self.inner.group({:?})?))",
-                field.name
-            )
-            .map_err(|_| GenerateError::Format)?;
+            }
             writeln!(output, "        }}").map_err(|_| GenerateError::Format)?;
         }
         FieldKind::Slot {
@@ -2765,9 +2784,17 @@ fn emit_builder_field(
             default_value,
             ..
         } => {
-            if field.discriminant_value.is_none()
-                && emit_direct_slot_setter(output, &method, *offset, ty, default_value, names)?
-            {
+            if emit_direct_slot_setter(
+                output,
+                &method,
+                *offset,
+                ty,
+                default_value,
+                field
+                    .discriminant_value
+                    .map(|value| (discriminant_offset, value)),
+                names,
+            )? {
                 return Ok(());
             }
             match ty {
@@ -2925,6 +2952,7 @@ fn emit_direct_slot_setter(
     offset: u32,
     ty: &Type,
     default: &capnp_schema::Value,
+    discriminant: Option<(u32, u16)>,
     names: &Names,
 ) -> Result<bool, GenerateError> {
     use capnp_schema::Value;
@@ -3012,9 +3040,14 @@ fn emit_direct_slot_setter(
         )),
         _ => None,
     };
-    let Some((arg_type, argument, expression)) = direct else {
+    let Some((arg_type, argument, mut expression)) = direct else {
         return Ok(false);
     };
+    if let Some((discriminant_offset, discriminant_value)) = discriminant {
+        expression = format!(
+            "{{ self.inner.set_u16_slot({discriminant_offset}, {discriminant_value}, 0)?; {expression} }}"
+        );
+    }
     writeln!(
         output,
         "        #[inline(always)]\n        pub fn set_{method}(&mut self, {argument}: {arg_type}) -> Result<(), capnp_schema::DynamicError> {{ {expression} }}"
@@ -3388,6 +3421,27 @@ mod tests {
                 .contains("self.inner.wire_builder().init_pointer_list(15, element_count)")
         );
         assert!(!generated.source.contains("self.inner.init_list(\"texts\""));
+        assert!(
+            generated
+                .source
+                .contains("self.inner.group_slot::<0xe32d831e5c824f86>()")
+        );
+        assert!(!generated.source.contains("self.inner.group(\"choice\")"));
+        assert!(
+            generated
+                .source
+                .contains("self.inner.set_u16_slot(19, 1, 0)?")
+        );
+        assert!(
+            generated
+                .source
+                .contains("self.inner.set_u64_slot(6, value, 0)")
+        );
+        assert!(
+            !generated
+                .source
+                .contains("self.inner.set(\"number\", capnp_schema::DynamicInput::UInt64(value))")
+        );
         assert!(
             generated
                 .source

@@ -1275,6 +1275,22 @@ impl<'schema, 'arena, const TYPE_ID: NodeId> GeneratedStructBuilder<'schema, 'ar
         &mut self.builder
     }
 
+    /// Reinterprets this struct's shared storage as a statically known group.
+    ///
+    /// Groups do not have their own pointer or allocation; generated code
+    /// supplies the child type ID and continues through the same checked wire
+    /// builder.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn group_slot<const CHILD_TYPE_ID: NodeId>(
+        &mut self,
+    ) -> GeneratedStructBuilder<'schema, '_, CHILD_TYPE_ID> {
+        GeneratedStructBuilder {
+            schema: self.schema,
+            builder: self.builder.group(),
+        }
+    }
+
     generated_slot_setters!(
         (set_bool_slot, set_bool, bool),
         (set_i8_slot, set_i8, i8),
