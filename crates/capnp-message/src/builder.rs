@@ -2405,6 +2405,7 @@ impl StructListBuilder<'_> {
         self.len() == 0
     }
 
+    #[inline(always)]
     pub fn get(&mut self, index: u32) -> Result<StructBuilder<'_>, ArenaError> {
         check_index(index, self.len())?;
         let (data_words, pointer_count) = self
