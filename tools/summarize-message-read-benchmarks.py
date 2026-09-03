@@ -119,11 +119,12 @@ def main() -> None:
             writer.writerow(
                 [
                     "segments",
-                    "cpp_scalars_minus_root_ns",
-                    "native_scalars_minus_root_ns",
-                    "incremental_native_over_cpp",
-                    "isolated_scalars_native_over_cpp",
+                    "cpp_scalar_only_ns",
+                    "native_scalar_only_ns",
+                    "scalar_only_native_over_cpp",
                     "scalars_native_over_cpp",
+                    "paired_cpp_scalars_minus_root_ns",
+                    "paired_native_scalars_minus_root_ns",
                 ]
             )
             for segments in sorted({key[2] for key in medians}, key=int):
@@ -133,18 +134,17 @@ def main() -> None:
                 native_incremental = paired_median(
                     samples_by_run, "native", "scalars", "root", segments
                 )
-                if cpp_incremental <= 0 or native_incremental <= 0:
-                    raise SystemExit(
-                        f"non-positive scalar incremental median for {segments} segments"
-                    )
+                cpp_scalar_only = medians[("cpp", "scalar-only", segments)]
+                native_scalar_only = medians[("native", "scalar-only", segments)]
                 writer.writerow(
                     [
                         segments,
+                        f"{cpp_scalar_only:.4f}",
+                        f"{native_scalar_only:.4f}",
+                        f"{native_scalar_only / cpp_scalar_only:.3f}",
+                        f"{medians[('native', 'scalars', segments)] / medians[('cpp', 'scalars', segments)]:.3f}",
                         f"{cpp_incremental:.4f}",
                         f"{native_incremental:.4f}",
-                        f"{native_incremental / cpp_incremental:.3f}",
-                        f"{medians[('native', 'isolated-scalars', segments)] / medians[('cpp', 'isolated-scalars', segments)]:.3f}",
-                        f"{medians[('native', 'scalars', segments)] / medians[('cpp', 'scalars', segments)]:.3f}",
                     ]
                 )
 

@@ -12,7 +12,7 @@ const VALUE: u64 = 0x0123_4567_89ab_cdef;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let mode = args.next().ok_or(
-        "usage: message_read framing|root|scalars|isolated-root|isolated-scalars SEGMENTS PASSES",
+            "usage: message_read framing|root|scalars|isolated-root|isolated-scalars|scalar-only SEGMENTS PASSES",
     )?;
     let segment_count = args
         .next()
@@ -22,13 +22,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if args.next().is_some()
         || !matches!(
             mode.as_str(),
-            "framing" | "root" | "scalars" | "isolated-root" | "isolated-scalars"
+            "framing" | "root" | "scalars" | "isolated-root" | "isolated-scalars" | "scalar-only"
         )
         || !matches!(segment_count, 1 | 2 | 64)
         || passes == 0
     {
         return Err(
-            "expected framing|root|scalars|isolated-root|isolated-scalars, SEGMENTS in {1,2,64}, and positive PASSES".into(),
+            "expected framing|root|scalars|isolated-root|isolated-scalars|scalar-only, SEGMENTS in {1,2,64}, and positive PASSES".into(),
         );
     }
 
@@ -39,6 +39,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .iter()
         .map(|bytes| Segment::from_bytes(bytes).expect("fixture segments are word-aligned"))
         .collect();
+    if mode == "scalar-only" {
+        let (elapsed, checksum) = read_scalar_only(&descriptors, passes)?;
+        println!("{}\t{}", elapsed.as_nanos(), checksum);
+        return Ok(());
+    }
     let started = Instant::now();
     let checksum = if matches!(mode.as_str(), "isolated-root" | "isolated-scalars") {
         read_isolated_roots(&descriptors, mode == "isolated-scalars", passes)?
@@ -52,6 +57,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     println!("{}\t{}", started.elapsed().as_nanos(), checksum);
     Ok(())
+}
+
+fn read_scalar_only(
+    segments: &[Segment<'_>],
+    passes: usize,
+) -> Result<(std::time::Duration, u64), Box<dyn std::error::Error>> {
+    let message = MessageSegments::from_descriptors(segments)?;
+    let budget = LocalTraversalBudget::new(16);
+    let root = message.read_root_struct(&budget, NestingLimit::new(8))?;
+    let data = root.data_section()?;
+    let mut checksum = SEED;
+    let started = Instant::now();
+    for _ in 0..passes {
+        checksum = checksum.rotate_left(9) ^ scalar_fingerprint(data)?;
+    }
+    Ok((started.elapsed(), black_box(checksum)))
 }
 
 fn read_isolated_roots(
@@ -76,6 +97,7 @@ fn read_isolated_roots(
     Ok(black_box(checksum))
 }
 
+#[inline(always)]
 fn scalar_fingerprint(data: DataSection<'_>) -> Result<u64, PrimitiveError> {
     let mut fingerprint = u64::from(data.read_bool(0, true)?);
     fingerprint = fingerprint.rotate_left(7) ^ u64::from(data.read_u8(0, 0x5a)?);

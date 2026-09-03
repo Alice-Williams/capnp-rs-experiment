@@ -60,6 +60,14 @@ uint64_t scalarFingerprint(kj::ArrayPtr<const capnp::byte> data) {
   return fingerprint;
 }
 
+uint64_t readScalarOnly(kj::ArrayPtr<const capnp::byte> data, size_t passes) {
+  uint64_t checksum = SEED;
+  for (size_t pass = 0; pass < passes; ++pass) {
+    checksum = std::rotl(checksum, 9) ^ scalarFingerprint(data);
+  }
+  return checksum;
+}
+
 void setWord(kj::Array<capnp::word>& segment, size_t index, uint64_t value) {
   auto wire = reinterpret_cast<capnp::_::WireValue<uint64_t>*>(segment.begin());
   wire[index].set(value);
@@ -176,14 +184,15 @@ uint64_t readIsolatedRoots(
 
 int main(int argc, char** argv) {
   if (argc != 4) {
-    std::cerr << "usage: cpp-message-read framing|root|scalars|isolated-root|isolated-scalars SEGMENTS PASSES\n";
+    std::cerr << "usage: cpp-message-read framing|root|scalars|isolated-root|isolated-scalars|scalar-only SEGMENTS PASSES\n";
     return 2;
   }
   auto mode = std::string_view(argv[1]);
   auto segmentCount = parseSize(argv[2]);
   auto passes = parseSize(argv[3]);
   if (mode != "framing" && mode != "root" && mode != "scalars"
-      && mode != "isolated-root" && mode != "isolated-scalars") {
+      && mode != "isolated-root" && mode != "isolated-scalars"
+      && mode != "scalar-only") {
     std::cerr << "unknown benchmark mode\n";
     return 2;
   }
@@ -191,6 +200,16 @@ int main(int argc, char** argv) {
   auto segments = makeSegments(segmentCount);
   auto views = segmentViews(segments);
   auto encoded = capnp::messageToFlatArray(kj::arrayPtr(views.data(), views.size()));
+  if (mode == "scalar-only") {
+    capnp::SegmentArrayMessageReader reader(kj::arrayPtr(views.data(), views.size()));
+    auto data = reader.getRoot<capnp::AnyStruct>().getDataSection();
+    auto started = std::chrono::steady_clock::now();
+    auto checksum = readScalarOnly(data, passes);
+    auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now() - started);
+    std::cout << elapsed.count() << '\t' << checksum << '\n';
+    return 0;
+  }
   auto started = std::chrono::steady_clock::now();
   auto isolated = mode == "isolated-root" || mode == "isolated-scalars";
   auto scalars = mode == "scalars" || mode == "isolated-scalars";

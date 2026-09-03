@@ -70,6 +70,9 @@ workloads=(
     'isolated-scalars 1'
     'isolated-scalars 2'
     'isolated-scalars 64'
+    'scalar-only 1'
+    'scalar-only 2'
+    'scalar-only 64'
 )
 
 run_workload() {

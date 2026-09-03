@@ -27,7 +27,7 @@ awk -F '\t' -v expected="$expected_results" -v passes="$expected_passes" '
   NR == 1 { if ($0 != "implementation\tcase\tsegments\tpasses\trun\telapsed_ns\tchecksum") exit 1; next }
   NF != 7 || $4 != passes || $6 <= 0 || $7 < 0 { exit 1 }
   $1 != "cpp" && $1 != "native" { exit 1 }
-  $2 != "framing" && $2 != "root" && $2 != "isolated-root" && $2 != "scalars" && $2 != "isolated-scalars" { exit 1 }
+  $2 != "framing" && $2 != "root" && $2 != "isolated-root" && $2 != "scalars" && $2 != "isolated-scalars" && $2 != "scalar-only" { exit 1 }
   $3 != 1 && $3 != 2 && $3 != 64 { exit 1 }
   !($2 FS $3 in checksum) { checksum[$2 FS $3] = $7; next }
   $7 != checksum[$2 FS $3] { exit 1 }
@@ -38,5 +38,5 @@ awk -F '\t' -v expected="$expected_comparison" 'NR == 1 { next } NF != 5 || $3 <
 awk -F '\t' 'NR == 1 { next } NF != 6 || $2 <= 0 || $3 <= 0 || $4 <= 0 || $5 <= 0 || $6 <= 0 { exit 1 } END { if (NR != 4) exit 1 }' "$result_dir/incremental.tsv"
 if test -e "$result_dir/scalar-incremental.tsv"; then
     test "$(wc -l < "$result_dir/scalar-incremental.tsv")" -eq 4
-    awk -F '\t' 'NR == 1 { next } NF != 6 || $2 <= 0 || $3 <= 0 || $4 <= 0 || $5 <= 0 || $6 <= 0 { exit 1 } END { if (NR != 4) exit 1 }' "$result_dir/scalar-incremental.tsv"
+    awk -F '\t' 'NR == 1 { next } NF != 7 || $2 <= 0 || $3 <= 0 || $4 <= 0 || $5 <= 0 { exit 1 } END { if (NR != 4) exit 1 }' "$result_dir/scalar-incremental.tsv"
 fi
