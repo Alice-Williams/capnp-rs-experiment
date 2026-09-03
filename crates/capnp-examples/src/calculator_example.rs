@@ -12,7 +12,7 @@ use capnp_rpc::{
     BoxFuture, CapabilityList, LocalCall, LocalClient, LocalRequest, LocalResponse, LocalService,
     MessageFuture, PipelineBuilder, PipelineTransform, RpcError, TypedReader,
 };
-use capnp_schema::{CompiledSchema, DynamicError, DynamicInput};
+use capnp_schema::{CompiledSchema, DynamicError};
 
 use crate::calculator::expression::Which;
 use crate::calculator::{
@@ -499,8 +499,9 @@ fn function_request_rpc(
     for (index, value) in values.iter().copied().enumerate() {
         list.set(
             u32::try_from(index).map_err(|_| missing("parameter index"))?,
-            DynamicInput::Float64(value),
-        )?;
+            value,
+        )
+        .map_err(DynamicError::from)?;
     }
     owned(arena)
 }
