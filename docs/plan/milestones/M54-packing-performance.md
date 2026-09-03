@@ -58,7 +58,7 @@ substitute for another.
 - [x] Record and verify the unmodified M54 baseline.
 - [x] Attribute each material gap with isolated phase, allocation-count, or
   profile evidence before changing implementation code.
-- [ ] Optimize one-shot and streaming paths while preserving safety, limits,
+- [x] Optimize one-shot and streaming paths while preserving safety, limits,
   and deterministic output.
 - [ ] Record final cumulative and incremental comparisons for every required
   direction, distribution, and ownership model.

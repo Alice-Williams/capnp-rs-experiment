@@ -52,6 +52,8 @@ mkdir -p -- "$output"
     printf 'cpp_oracle_commit=%s\n' "$cpp_commit"
     printf 'cpp_primitive=capnp::_::PackedOutputStream and capnp::_::PackedInputStream over in-memory KJ streams\n'
     printf 'native_primitive=capnp_io::pack and capnp_io::unpack\n'
+    printf 'native_stream_decode=PackedDecoder with caller-provided exact output capacity\n'
+    printf 'cpp_stream_decode=PackedInputStream with exact output array; pull reads may bypass the input buffer for raw runs\n'
     printf 'native_commit=%s\n' "$native_commit"
     printf 'cpp_binary_sha256=%s\n' "$(sha256sum "$cpp_benchmark" | cut -d ' ' -f1)"
     printf 'native_binary_sha256=%s\n' "$(sha256sum "$native_benchmark" | cut -d ' ' -f1)"

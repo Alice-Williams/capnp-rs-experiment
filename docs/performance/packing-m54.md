@@ -45,3 +45,63 @@ unambiguous:
 The paired copy ratios range from 0.828 to 1.299. M54 therefore evaluates both
 the cumulative ceiling inherited from each exact copy case and the isolated
 incremental codec ratio; no aggregate average hides an individual shape.
+
+## Prepared-streaming candidate
+
+Evidence:
+[`benchmarks/results/2026-09-03-m54-packing-prepared-decode-g-drive-docker`](../../benchmarks/results/2026-09-03-m54-packing-prepared-decode-g-drive-docker)
+at native commit `9ea8992fb64173a98dfe5c2ffe86d7da1f4a54d0`.
+
+| Operation | Shape | C++ ns/word | Native ns/word | Native / C++ | Incremental native / C++ |
+| --- | --- | ---: | ---: | ---: | ---: |
+| pack | zero | 0.5457 | 0.5681 | 1.041 | 0.958 |
+| pack | raw | 1.3659 | 1.0281 | 0.753 | 0.729 |
+| pack | mixed | 7.1754 | 5.4070 | 0.754 | 0.750 |
+| pack | realistic | 5.7485 | 4.4412 | 0.773 | 0.762 |
+| unpack | zero | 0.2763 | 0.2471 | 0.894 | 0.901 |
+| unpack | raw | 0.4156 | 0.2294 | 0.552 | below timer resolution |
+| unpack | mixed | 6.0466 | 5.0816 | 0.840 | 0.838 |
+| unpack | realistic | 6.0041 | 4.8355 | 0.805 | 0.805 |
+| pack stream | zero | 0.6443 | 0.4256 | 0.661 | 0.451 |
+| pack stream | raw | 1.3053 | 0.6515 | 0.499 | 0.428 |
+| pack stream | mixed | 7.4080 | 6.1163 | 0.826 | 0.824 |
+| pack stream | realistic | 6.4155 | 5.1559 | 0.804 | 0.795 |
+| unpack stream | zero | 0.3881 | 0.1765 | 0.455 | 0.450 |
+| unpack stream | raw | 0.6736 | 0.4224 | 0.627 | 0.400 |
+| unpack stream | mixed | 7.4864 | 6.3337 | 0.846 | 0.844 |
+| unpack stream | realistic | 6.6857 | 5.8872 | 0.881 | 0.881 |
+
+The one-shot zero pack ratio is above 1.0 but preserves its paired lower-layer
+ceiling (`1.041 <= 1.214 * 1.03`) and its isolated incremental transform is
+faster than C++. All other cumulative and resolvable incremental ratios are
+below 1.0. Raw one-shot unpack is so close to its allocation/copy floor that
+the native subtraction is negative; its complete isolated codec ratio of
+0.552 corroborates that this is timer resolution, not hidden slow work.
+
+The final implementation:
+
+- bypasses the arbitrary-chunk state machine for complete one-shot input;
+- scans zero words at 64-bit granularity without `unsafe` code;
+- writes raw runs directly instead of allocating and recopying a temporary
+  run `Vec`;
+- derives all eight nonzero-byte tag bits in parallel with safe integer SWAR;
+- walks only populated payload lanes for ordinary tags;
+- directly handles aligned streaming chunks that end at a canonical run or
+  ordinary-word boundary;
+- decodes complete streamed items without materializing resumable enum state;
+- permits a caller with a trusted expected size to pre-size decoder capacity,
+  while retaining the conservative default constructor and all output limits.
+
+The streaming comparison uses exact canonical bytes and deliberately
+misaligned 1,025-byte decode feeds. C++'s pull-oriented stream may bypass its
+input buffer when it requests the remainder of a raw run; Rust's push-oriented
+decoder cannot make that same call. Prepared output capacity is matched, and
+the byte-at-a-time correctness tests remain permanent, but pathological tiny
+external call overhead is not presented as codec throughput.
+
+This run is retained as optimization evidence rather than the final gate. Its
+32-byte zero-stream copy floor measured at a native/C++ ratio of 0.691, while
+complete zero-stream unpack measured 0.894. The transform itself is faster
+(`0.901` incremental), but the cumulative result does not preserve that
+sub-microbenchmark's unusually low ratio. A longer final run must resolve the
+short-output allocation noise or the zero decoder must improve further.

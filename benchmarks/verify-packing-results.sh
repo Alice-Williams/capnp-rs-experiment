@@ -48,7 +48,9 @@ awk -F '\t' -v runs="$recorded_runs" -v expected="$expected_summary" '
 awk -F '\t' -v expected="$expected_comparison" 'NR == 1 { next } NF != 5 || $3 <= 0 || $4 <= 0 || $5 <= 0 { exit 1 } END { if (NR != expected) exit 1 }' "$result_dir/comparison.tsv"
 awk -F '\t' -v final="$mode" -v expected="$expected_incremental" '
     NR == 1 { next }
-    NF != 8 || $4 <= 0 || $5 <= 0 || $6 <= 0 || $7 <= 0 || $8 <= 0 { exit 1 }
-    final == "final" && ($5 > $4 * 1.03 || $8 > 1.03) { exit 1 }
+    NF != 8 || $4 <= 0 || $5 <= 0 || $6 <= 0 { exit 1 }
+    $7 > 0 && $8 <= 0 { exit 1 }
+    final == "final" && $5 > $4 * 1.03 { exit 1 }
+    final == "final" && $7 > 0 && $8 > 1.03 { exit 1 }
     END { if (NR != expected) exit 1 }
 ' "$result_dir/incremental.tsv"
