@@ -79,10 +79,31 @@ pub fn read_frame<R: Read>(
     reader: &mut R,
     limits: FrameLimits,
 ) -> Result<Option<Vec<u8>>, IoFrameError> {
+    let mut frame = Vec::new();
+    if read_frame_reusing(reader, &mut frame, limits)? {
+        Ok(Some(frame))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Reads one bounded standard frame into a reusable caller-owned buffer.
+///
+/// A `true` result means the buffer contains one complete frame; `false` means
+/// the input was already at clean EOF and the buffer was cleared. Existing
+/// initialized storage is overwritten in place. On error, the buffer may still
+/// contain bytes from its previous frame alongside newly read data.
+#[inline]
+pub fn read_frame_reusing<R: Read>(
+    reader: &mut R,
+    frame: &mut Vec<u8>,
+    limits: FrameLimits,
+) -> Result<bool, IoFrameError> {
     let mut prefix = [0_u8; 8];
     let read = read_until_full(reader, &mut prefix)?;
     if read == 0 {
-        return Ok(None);
+        frame.clear();
+        return Ok(false);
     }
     if read < 4 {
         return Err(FrameError::TruncatedHeader { available: read }.into());
@@ -110,8 +131,41 @@ pub fn read_frame<R: Read>(
         }
         .into());
     }
+    if frame.capacity() >= table_len {
+        if frame.len() < table_len {
+            frame.resize(table_len, 0);
+        }
+        frame[..8].copy_from_slice(&prefix);
+        let table_read = read_until_full(reader, &mut frame[8..table_len])?;
+        if table_read != table_len - 8 {
+            return Err(FrameError::TruncatedSegmentTable {
+                expected: table_len,
+                available: table_read + 8,
+            }
+            .into());
+        }
+        let body_len = validated_body_len(&frame[..table_len], count_usize, limits)?;
+        let encoded_len = table_len
+            .checked_add(body_len)
+            .ok_or(FrameError::BodyLengthOverflow)?;
+        if frame.len() < encoded_len {
+            frame.resize(encoded_len, 0);
+        } else {
+            frame.truncate(encoded_len);
+        }
+        let body_read = read_until_full(reader, &mut frame[table_len..])?;
+        if body_read != body_len {
+            return Err(FrameError::TruncatedBody {
+                expected: body_len,
+                available: body_read,
+            }
+            .into());
+        }
+        return Ok(true);
+    }
     if table_len == 8 {
-        return finish_read_frame(reader, &prefix, count_usize, limits).map(Some);
+        finish_read_frame(reader, frame, &prefix, count_usize, limits)?;
+        return Ok(true);
     }
     const STACK_TABLE_SEGMENTS: usize = 64;
     const STACK_TABLE_LEN: usize = (STACK_TABLE_SEGMENTS / 2 + 1) * 8;
@@ -137,19 +191,56 @@ pub fn read_frame<R: Read>(
         .into());
     }
 
-    finish_read_frame(reader, table, count_usize, limits).map(Some)
+    finish_read_frame(reader, frame, table, count_usize, limits)?;
+    Ok(true)
 }
 
 fn finish_read_frame<R: Read>(
     reader: &mut R,
+    frame: &mut Vec<u8>,
     table: &[u8],
     count: usize,
     limits: FrameLimits,
-) -> Result<Vec<u8>, IoFrameError> {
+) -> Result<(), IoFrameError> {
+    let body_len = validated_body_len(table, count, limits)?;
+    let encoded_len = table
+        .len()
+        .checked_add(body_len)
+        .ok_or(FrameError::BodyLengthOverflow)?;
+    if frame.len() < encoded_len {
+        frame
+            .try_reserve_exact(encoded_len - frame.len())
+            .map_err(|_| io::Error::other("frame allocation failed"))?;
+        frame.resize(encoded_len, 0);
+    } else {
+        frame.truncate(encoded_len);
+    }
+    frame[..table.len()].copy_from_slice(table);
+    let body_read = read_until_full(reader, &mut frame[table.len()..])?;
+    if body_read != body_len {
+        return Err(FrameError::TruncatedBody {
+            expected: body_len,
+            available: body_read,
+        }
+        .into());
+    }
+    Ok(())
+}
+
+#[inline]
+fn validated_body_len(
+    table: &[u8],
+    count: usize,
+    limits: FrameLimits,
+) -> Result<usize, IoFrameError> {
     let mut total_words = 0_u64;
-    for index in 0..count {
-        let offset = 4 * (index + 1);
-        let words = read_u32_le(table, offset).expect("complete table");
+    let size_table = &table[4..4 + count * 4];
+    for encoded_words in size_table.chunks_exact(4) {
+        let words = u32::from_le_bytes(
+            encoded_words
+                .try_into()
+                .expect("chunks are exactly four bytes"),
+        );
         total_words = total_words
             .checked_add(u64::from(words))
             .ok_or(FrameError::TotalWordsOverflow)?;
@@ -161,35 +252,15 @@ fn finish_read_frame<R: Read>(
             .into());
         }
     }
-    let body_len = usize::try_from(
+    usize::try_from(
         total_words
             .checked_mul(8)
             .ok_or(FrameError::BodyLengthOverflow)?,
     )
-    .map_err(|_| FrameError::BodyLengthOverflow)?;
-    let encoded_len = table
-        .len()
-        .checked_add(body_len)
-        .ok_or(FrameError::BodyLengthOverflow)?;
-    let mut frame = Vec::new();
-    frame
-        .try_reserve_exact(encoded_len)
-        .map_err(|_| io::Error::other("frame allocation failed"))?;
-    frame.extend_from_slice(table);
-    let body_read = reader
-        .take(body_len as u64)
-        .read_to_end(&mut frame)
-        .map_err(IoFrameError::from)?;
-    if body_read != body_len {
-        return Err(FrameError::TruncatedBody {
-            expected: body_len,
-            available: body_read,
-        }
-        .into());
-    }
-    Ok(frame)
+    .map_err(|_| FrameError::BodyLengthOverflow.into())
 }
 
+#[inline]
 fn read_until_full<R: Read>(reader: &mut R, mut output: &mut [u8]) -> io::Result<usize> {
     let original = output.len();
     while !output.is_empty() {
@@ -464,6 +535,30 @@ mod tests {
                 None
             );
         }
+    }
+
+    #[test]
+    fn reusable_reader_preserves_capacity_across_concatenated_frames() {
+        let mut input_bytes = Vec::with_capacity(FRAME.len() * 2);
+        input_bytes.extend_from_slice(FRAME);
+        input_bytes.extend_from_slice(FRAME);
+        let mut input = Cursor::new(input_bytes);
+        let mut frame = Vec::with_capacity(FRAME.len());
+        let allocation = frame.as_ptr();
+
+        for _ in 0..2 {
+            assert!(
+                read_frame_reusing(&mut input, &mut frame, FrameLimits::default())
+                    .expect("frame reads")
+            );
+            assert_eq!(frame, FRAME);
+            assert_eq!(frame.as_ptr(), allocation);
+        }
+        assert!(
+            !read_frame_reusing(&mut input, &mut frame, FrameLimits::default()).expect("clean EOF")
+        );
+        assert!(frame.is_empty());
+        assert_eq!(frame.as_ptr(), allocation);
     }
 
     #[test]

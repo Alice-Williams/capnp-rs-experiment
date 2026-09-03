@@ -177,6 +177,45 @@ uint64_t streamReadMany(kj::ArrayPtr<const capnp::word> encoded, size_t passes) 
   return checksum;
 }
 
+uint64_t streamReadReuseMany(kj::ArrayPtr<const capnp::word> encoded, size_t passes) {
+  uint64_t checksum = SEED;
+  auto sourceBytes = encoded.asBytes();
+  auto frame = kj::heapArray<kj::byte>(sourceBytes.size());
+  for (size_t pass = 0; pass < passes; ++pass) {
+    kj::ArrayInputStream input(sourceBytes);
+    std::array<kj::byte, 264> table;
+    input.read(kj::arrayPtr(table.data(), size_t{8}));
+    auto wireTable = reinterpret_cast<const capnp::_::WireValue<uint32_t>*>(table.data());
+    auto segmentCount = size_t{wireTable[0].get()} + 1;
+    if (segmentCount == 0 || segmentCount > 512) {
+      throw std::invalid_argument("invalid segment count");
+    }
+    auto tableBytes = (segmentCount / 2 + 1) * 8;
+    if (tableBytes > 8) {
+      input.read(kj::arrayPtr(table.data() + 8, tableBytes - 8));
+    }
+    size_t bodyBytes = 0;
+    for (size_t index = 0; index < segmentCount; ++index) {
+      auto words = size_t{wireTable[index + 1].get()};
+      if (words > (SIZE_MAX - bodyBytes) / sizeof(capnp::word)) {
+        throw std::overflow_error("message size overflow");
+      }
+      bodyBytes += words * sizeof(capnp::word);
+    }
+    if (frame.size() != tableBytes + bodyBytes) {
+      throw std::invalid_argument("unexpected frame size");
+    }
+    std::memcpy(frame.begin(), table.data(), tableBytes);
+    input.read(frame.slice(tableBytes, frame.size()));
+    auto fingerprint = uint64_t{frame.size()}
+        ^ std::rotl(uint64_t{frame[0]}, 7)
+        ^ std::rotl(uint64_t{frame[frame.size() - 1]}, 19)
+        ^ std::rotl(uint64_t{wireTable[1].get()}, 31);
+    checksum = std::rotl(checksum, 9) ^ fingerprint;
+  }
+  return checksum;
+}
+
 uint64_t streamWriteMany(
     kj::ArrayPtr<const kj::ArrayPtr<const capnp::word>> segments,
     size_t encodedBytes,
@@ -218,6 +257,8 @@ int main(int argc, char** argv) {
     checksum = encodeMany(kj::arrayPtr(views.data(), views.size()), passes);
   } else if (mode == "stream-read") {
     checksum = streamReadMany(encoded.asPtr(), passes);
+  } else if (mode == "stream-read-reuse") {
+    checksum = streamReadReuseMany(encoded.asPtr(), passes);
   } else if (mode == "stream-write") {
     checksum = streamWriteMany(
         kj::arrayPtr(views.data(), views.size()), encoded.size() * 8, passes);

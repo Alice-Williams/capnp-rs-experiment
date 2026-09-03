@@ -34,5 +34,6 @@ pub use framing::{
 pub use packed::{PackedDecoder, PackedEncoder, PackedError, pack, unpack};
 #[cfg(feature = "std")]
 pub use std_io::{
-    BoundedWriter, IoFrameError, MappedFrame, read_frame, write_frame, write_prepared_frame,
+    BoundedWriter, IoFrameError, MappedFrame, read_frame, read_frame_reusing, write_frame,
+    write_prepared_frame,
 };

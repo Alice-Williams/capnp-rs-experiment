@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use capnp_io::{
     BorrowedFrameRead, FrameLimits, PreparedSegments, Segment, encode_frame, encode_prepared_frame,
-    parse_frame_into, read_frame, write_frame, write_prepared_frame,
+    parse_frame_into, read_frame, read_frame_reusing, write_frame, write_prepared_frame,
 };
 
 const SEED: u64 = 0x4d59_5df4_d0f3_3173;
@@ -45,6 +45,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "stream-read" => {
             let encoded = encode_frame(&views, limits)?;
             measure_io(|| stream_read_many(&encoded, limits, passes))?
+        }
+        "stream-read-reuse" => {
+            let encoded = encode_frame(&views, limits)?;
+            measure_io(|| stream_read_reuse_many(&encoded, limits, passes))?
         }
         "stream-write" => measure_io(|| stream_write_many(&views, limits, encoded_len, passes))?,
         "stream-write-prepared" => {
@@ -175,6 +179,29 @@ fn stream_read_many(
             .rotate_left(31);
         checksum = checksum.rotate_left(9) ^ fingerprint;
         black_box(frame);
+    }
+    Ok(black_box(checksum))
+}
+
+fn stream_read_reuse_many(
+    encoded: &[u8],
+    limits: FrameLimits,
+    passes: usize,
+) -> Result<u64, capnp_io::IoFrameError> {
+    let mut checksum = SEED;
+    let mut frame = vec![0; encoded.len()];
+    for _ in 0..passes {
+        let mut input = Cursor::new(encoded);
+        assert!(read_frame_reusing(&mut input, &mut frame, limits)?);
+        let fingerprint = (frame.len() as u64)
+            ^ u64::from(frame[0]).rotate_left(7)
+            ^ u64::from(frame[frame.len() - 1]).rotate_left(19)
+            ^ u64::from(u32::from_le_bytes(
+                frame[4..8].try_into().expect("frame header"),
+            ))
+            .rotate_left(31);
+        checksum = checksum.rotate_left(9) ^ fingerprint;
+        black_box(frame.as_slice());
     }
     Ok(black_box(checksum))
 }

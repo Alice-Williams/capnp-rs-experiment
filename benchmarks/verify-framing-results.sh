@@ -27,7 +27,7 @@ awk -F '\t' -v expected="$expected_results" -v cases="$expected_cases" -v passes
   NF != 7 || $4 != passes || $6 <= 0 || $7 < 0 { exit 1 }
   $1 != "cpp" && $1 != "native" { exit 1 }
   $2 != "parse" && $2 != "parse-noalloc" && $2 != "encode" && $2 != "encode-prepared" &&
-      $2 != "stream-read" && $2 != "stream-write" &&
+      $2 != "stream-read" && $2 != "stream-read-reuse" && $2 != "stream-write" &&
       $2 != "stream-write-prepared" { exit 1 }
   $3 != 1 && $3 != 2 && $3 != 64 { exit 1 }
   !($2 FS $3 in checksum) { checksum[$2 FS $3] = $7; next }
