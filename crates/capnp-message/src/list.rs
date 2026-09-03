@@ -800,6 +800,20 @@ impl<'context, 'data, B: TraversalBudget> StructElementReader<'context, 'data, B
         Ok(DataSection::from_validated_bytes(bytes))
     }
 
+    pub const fn pointer_section(self) -> crate::PointerSection<'context, 'data, B> {
+        let base = match self.pointer_start {
+            Some(location) => location,
+            None => WireLocation::ROOT,
+        };
+        crate::PointerSection::from_parts(
+            self.segments,
+            self.budget,
+            base,
+            self.pointer_count,
+            self.nesting,
+        )
+    }
+
     pub const fn group(self) -> Self {
         self
     }

@@ -116,6 +116,22 @@ impl<'context, 'data, B> Clone for PointerSection<'context, 'data, B> {
 impl<'context, 'data, B> Copy for PointerSection<'context, 'data, B> {}
 
 impl<'context, 'data, B: TraversalBudget> PointerSection<'context, 'data, B> {
+    pub(crate) const fn from_parts(
+        segments: &'context MessageSegments<'data>,
+        budget: &'context B,
+        base: WireLocation,
+        pointer_count: u16,
+        nesting: NestingLimit,
+    ) -> Self {
+        Self {
+            segments,
+            budget,
+            base,
+            pointer_count,
+            nesting,
+        }
+    }
+
     #[inline(always)]
     fn location(self, index: u16) -> Result<Option<WireLocation>, StructReadError> {
         if index >= self.pointer_count {
@@ -417,13 +433,13 @@ impl<'context, 'data, B: TraversalBudget> StructReader<'context, 'data, B> {
             }
             None => (WireLocation::ROOT, 0),
         };
-        Ok(PointerSection {
-            segments: self.segments,
-            budget: self.budget,
+        Ok(PointerSection::from_parts(
+            self.segments,
+            self.budget,
             base,
             pointer_count,
-            nesting: self.nesting,
-        })
+            self.nesting,
+        ))
     }
 
     #[inline(always)]

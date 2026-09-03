@@ -490,6 +490,12 @@ mod tests {
         let values = reader.uint16s().expect("borrowed primitive list");
         assert_eq!(values.len(), 3);
         assert_eq!(values.get(2).expect("borrowed primitive element"), u16::MAX);
+        let colors = reader.colors().expect("borrowed enum list");
+        assert_eq!(colors.len(), 3);
+        assert_eq!(colors.get(2).expect("borrowed enum element"), Color::Blue);
+        let nodes = reader.structs().expect("borrowed struct list");
+        assert_eq!(nodes.len(), 2);
+        assert_eq!(nodes.get(1).expect("borrowed struct element").value(), 2);
         assert!(
             reader
                 .text()
@@ -528,6 +534,18 @@ mod tests {
             reader
                 .uint16s()
                 .expect("missing list defaults empty")
+                .is_empty()
+        );
+        assert!(
+            reader
+                .colors()
+                .expect("missing enum list defaults empty")
+                .is_empty()
+        );
+        assert!(
+            reader
+                .structs()
+                .expect("missing struct list defaults empty")
                 .is_empty()
         );
     }

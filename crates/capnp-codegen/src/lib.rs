@@ -1183,6 +1183,8 @@ fn emit_borrowed_reader(
         .map_err(|_| GenerateError::Format)?;
     writeln!(output, "        #[doc(hidden)]\n        pub fn from_reader(inner: capnp_message::StructReader<'context, 'data, B>) -> Result<Self, capnp_message::StructReadError> {{ let data = inner.data_section()?; Ok(Self::from_sections(inner.pointer_section()?, data)) }}")
         .map_err(|_| GenerateError::Format)?;
+    writeln!(output, "        #[doc(hidden)]\n        pub fn from_element(inner: capnp_message::StructElementReader<'context, 'data, B>) -> Result<Self, capnp_message::ListReadError> {{ let data = inner.data_section()?; Ok(Self::from_sections(inner.pointer_section(), data)) }}")
+        .map_err(|_| GenerateError::Format)?;
     writeln!(output, "        #[doc(hidden)]\n        pub(super) fn from_sections(pointers: capnp_message::PointerSection<'context, 'data, B>, data: capnp_message::DataSection<'data>) -> Self {{ let full_data = data.as_bytes().get(..{data_bytes}).and_then(|bytes| bytes.try_into().ok()); Self {{ pointers, data, full_data }} }}")
         .map_err(|_| GenerateError::Format)?;
     for field in &structure.fields {
@@ -1216,6 +1218,9 @@ fn emit_borrowed_reader(
         writeln!(output, "            }}\n        }}").map_err(|_| GenerateError::Format)?;
     }
     writeln!(output, "    }}").map_err(|_| GenerateError::Format)?;
+    for field in &structure.fields {
+        emit_borrowed_list_wrapper(output, field, names)?;
+    }
     writeln!(output, "    impl<'context, 'data> BorrowedReader<'context, 'data, capnp_message::LocalTraversalBudget> {{")
         .map_err(|_| GenerateError::Format)?;
     writeln!(output, "        pub fn from_root(message: &'context capnp_message::BorrowedMessage<'data>) -> Result<Self, capnp_message::StructReadError> {{ Self::from_reader(message.root_struct()?) }}")
@@ -1276,6 +1281,24 @@ fn emit_borrowed_reader_field(
     }
     if let (Type::List(element), Value::List(default)) = (ty, default_value) {
         if matches!(default.kind, capnp_schema::OpaquePointerKind::Null) {
+            let wrapper = borrowed_list_wrapper_name(field);
+            match element.as_ref() {
+                Type::Enum { .. } => {
+                    return writeln!(
+                        output,
+                        "        pub fn {method}(&self) -> Result<{wrapper}<'context, 'data, B>, capnp_message::ListReadError> {{ Ok({wrapper} {{ inner: self.pointers.read_list({offset})?.as_primitive::<u16>()? }}) }}"
+                    )
+                    .map_err(|_| GenerateError::Format);
+                }
+                Type::Struct { brand, .. } if brand.scopes.is_empty() => {
+                    return writeln!(
+                        output,
+                        "        pub fn {method}(&self) -> Result<{wrapper}<'context, 'data, B>, capnp_message::ListReadError> {{ Ok({wrapper} {{ inner: self.pointers.read_list({offset})?.as_structs()? }}) }}"
+                    )
+                    .map_err(|_| GenerateError::Format);
+                }
+                _ => {}
+            }
             let list = match element.as_ref() {
                 Type::Void => Some((
                     "capnp_message::PrimitiveListReader<'context, 'data, B, ()>".to_owned(),
@@ -1346,6 +1369,80 @@ fn emit_borrowed_reader_field(
     };
     writeln!(output, "        pub fn {method}(&self) -> Result<{return_type}, capnp_message::StructReadError> {{ {expression} }}")
         .map_err(|_| GenerateError::Format)
+}
+
+fn borrowed_list_wrapper_name(field: &Field) -> String {
+    format!("Borrowed{}ListReader", rust_pascal(&field.name))
+}
+
+fn emit_borrowed_list_wrapper(
+    output: &mut String,
+    field: &Field,
+    names: &Names,
+) -> Result<(), GenerateError> {
+    use capnp_schema::Value;
+
+    let FieldKind::Slot {
+        ty: Type::List(element),
+        default_value: Value::List(default),
+        ..
+    } = &field.kind
+    else {
+        return Ok(());
+    };
+    if !matches!(default.kind, capnp_schema::OpaquePointerKind::Null) {
+        return Ok(());
+    }
+    let wrapper = borrowed_list_wrapper_name(field);
+    let (inner, get_type, get_expression) = match element.as_ref() {
+        Type::Enum { type_id, .. } => {
+            let target = names.reference(*type_id, true)?;
+            (
+                "capnp_message::PrimitiveListReader<'context, 'data, B, u16>".to_owned(),
+                target.clone(),
+                format!("Ok({target}::from_ordinal(self.inner.get(index)?))"),
+            )
+        }
+        Type::Struct { type_id, brand } if brand.scopes.is_empty() => {
+            let target = names.reference(*type_id, true)?;
+            (
+                "capnp_message::StructListReader<'context, 'data, B>".to_owned(),
+                format!("{target}::BorrowedReader<'context, 'data, B>"),
+                format!("{target}::BorrowedReader::from_element(self.inner.get(index)?)"),
+            )
+        }
+        _ => return Ok(()),
+    };
+    writeln!(
+        output,
+        "    #[derive(Debug)]\n    pub struct {wrapper}<'context, 'data, B: capnp_message::TraversalBudget> {{ inner: {inner} }}"
+    )
+    .map_err(|_| GenerateError::Format)?;
+    writeln!(output, "    impl<'context, 'data, B: capnp_message::TraversalBudget> Clone for {wrapper}<'context, 'data, B> {{ fn clone(&self) -> Self {{ *self }} }}")
+        .map_err(|_| GenerateError::Format)?;
+    writeln!(output, "    impl<'context, 'data, B: capnp_message::TraversalBudget> Copy for {wrapper}<'context, 'data, B> {{}}")
+        .map_err(|_| GenerateError::Format)?;
+    writeln!(
+        output,
+        "    impl<'context, 'data, B: capnp_message::TraversalBudget> {wrapper}<'context, 'data, B> {{"
+    )
+    .map_err(|_| GenerateError::Format)?;
+    writeln!(
+        output,
+        "        pub const fn len(self) -> u32 {{ self.inner.len() }}"
+    )
+    .map_err(|_| GenerateError::Format)?;
+    writeln!(
+        output,
+        "        pub const fn is_empty(self) -> bool {{ self.inner.is_empty() }}"
+    )
+    .map_err(|_| GenerateError::Format)?;
+    writeln!(
+        output,
+        "        pub fn get(self, index: u32) -> Result<{get_type}, capnp_message::ListReadError> {{ {get_expression} }}"
+    )
+    .map_err(|_| GenerateError::Format)?;
+    writeln!(output, "    }}").map_err(|_| GenerateError::Format)
 }
 
 fn borrowed_primitive_list(rust_type: &str) -> (String, String) {
@@ -2809,6 +2906,16 @@ mod tests {
             generated
                 .source
                 .contains("PrimitiveListReader<'context, 'data, B, u16>")
+        );
+        assert!(
+            generated
+                .source
+                .contains("pub struct BorrowedColorsListReader")
+        );
+        assert!(
+            generated
+                .source
+                .contains("pub struct BorrowedStructsListReader")
         );
     }
 
