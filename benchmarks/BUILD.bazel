@@ -263,6 +263,17 @@ sh_test(
 )
 
 sh_test(
+    name = "generated_api_builder_struct_baseline_results_test",
+    srcs = ["verify-generated-api-results.sh"],
+    args = [
+        "benchmarks/results/2026-09-03-m55-generated-builder-struct-baseline-100k-g-drive-docker",
+        "100000",
+        "26",
+    ],
+    data = glob(["results/2026-09-03-m55-generated-builder-struct-baseline-100k-g-drive-docker/**"]),
+)
+
+sh_test(
     name = "packing_baseline_results_test",
     srcs = ["verify-packing-results.sh"],
     args = ["benchmarks/results/2026-09-03-m54-packing-baseline-g-drive-docker"],

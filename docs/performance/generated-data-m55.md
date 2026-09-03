@@ -485,3 +485,26 @@ and direct medians differ by less than one nanosecond in both languages, so the
 incremental cost is below timer resolution. The ordinary Text/Data builder gate
 is closed; struct, list, union, default, and evolution builder gates remain
 open.
+
+## Struct-builder baseline
+
+The struct-builder workload initializes a fresh `Node` in the root's `node`
+slot and writes its scalar value on every iteration. Both implementations use a
+fixed-capacity one-segment arena, exclude root construction, and include child
+allocation, zeroing, pointer emission, typed child wrapping, and the scalar
+write. Evidence before generated struct-slot specialization is in
+[`benchmarks/results/2026-09-03-m55-generated-builder-struct-baseline-100k-g-drive-docker`](../../benchmarks/results/2026-09-03-m55-generated-builder-struct-baseline-100k-g-drive-docker)
+at native commit `e0f6ba2`.
+
+| Operation | C++ ns/op | Native ns/op | Native / C++ |
+| --- | ---: | ---: | ---: |
+| direct `Node` construction | 20.6430 | 15.5357 | 0.753 |
+| generated `Node` construction | 20.7850 | 120.7257 | 5.808 |
+
+The direct native construction path is 24.7% faster than C++, but the generated
+path loses that advantage to an additional 105.19 ns per operation. C++ adds
+only 0.18 ns at the generated layer. Source tracing attributes the Rust delta
+to field-name lookup, cloned field/type/brand metadata, runtime type
+resolution, and schema-node lookup before the same checked allocation and
+pointer emission. The next change embeds the pointer offset and child layout in
+the generated initializer while retaining the dynamic path for reflection.
