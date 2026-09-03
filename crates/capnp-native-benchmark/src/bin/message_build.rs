@@ -63,7 +63,7 @@ fn prepared_iteration(far: bool, first: u64, second: u64) -> u64 {
 }
 
 #[inline(never)]
-fn fresh_iteration(far: bool, first: u64, second: u64) -> Result<u64, Box<dyn std::error::Error>> {
+fn fresh_iteration(far: bool, first: u64, second: u64) -> Result<u64, capnp_message::ArenaError> {
     let mut arena = if far {
         ExclusiveArena::new_segmented(1, 3, 2, 4)?
     } else {
@@ -82,27 +82,34 @@ fn set_word(bytes: &mut [u8], index: usize, value: u64) {
     bytes[start..start + 8].copy_from_slice(&value.to_le_bytes());
 }
 
-#[inline(never)]
+#[inline(always)]
 fn hash_prepared(bytes: &[u8; 32], word_count: usize, segment_count: usize) -> u64 {
-    let hash = SEED ^ (segment_count as u64).rotate_left(17) ^ (word_count as u64).rotate_left(31);
-    hash_bytes(hash, &black_box(bytes)[..word_count * 8])
-}
-
-#[inline(never)]
-fn hash_segments(arena: &ExclusiveArena) -> u64 {
-    let segments = black_box(arena).segments();
-    let mut hash = SEED ^ (segments.len() as u64).rotate_left(17);
-    for (index, segment) in segments.enumerate() {
-        hash ^= (index as u64).rotate_left(7) ^ ((segment.len() / 8) as u64).rotate_left(31);
-        hash = hash_bytes(hash, segment);
+    let mut hash =
+        SEED ^ (segment_count as u64).rotate_left(17) ^ (word_count as u64).rotate_left(31);
+    for word in black_box(bytes)[..word_count * 8].chunks_exact(8) {
+        hash = hash.rotate_left(7) ^ read_word(word);
     }
     hash
 }
 
 #[inline(always)]
-fn hash_bytes(mut hash: u64, bytes: &[u8]) -> u64 {
-    for byte in bytes {
-        hash = (hash ^ u64::from(*byte)).wrapping_mul(0x100_0000_01b3);
+fn hash_segments(arena: &ExclusiveArena) -> u64 {
+    let segments = black_box(arena).segments();
+    let mut hash = SEED ^ (segments.len() as u64).rotate_left(17);
+    for (index, segment) in segments.enumerate() {
+        hash ^= (index as u64).rotate_left(7) ^ ((segment.len() / 8) as u64).rotate_left(31);
+        for word in segment.chunks_exact(8) {
+            hash = hash.rotate_left(7) ^ read_word(word);
+        }
     }
     hash
+}
+
+#[inline(always)]
+fn read_word(bytes: &[u8]) -> u64 {
+    u64::from_le_bytes(
+        bytes
+            .try_into()
+            .expect("word chunks are exactly eight bytes"),
+    )
 }

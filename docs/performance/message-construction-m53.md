@@ -44,5 +44,7 @@ and a distinct far-allocation result worth profiling independently.
   not; semantic checksums are therefore compared across implementations while
   stable wire checksums are retained per implementation.
 
-The next attribution step separates hashing from writes and records allocation
-counts/capacities before changing arena representation or allocation policy.
+The next attribution step equalizes the Rust and C++ benchmark function
+boundaries (the initial Rust prepared path had two extra non-inlined calls),
+then records allocation counts/capacities before changing arena representation
+or allocation policy.

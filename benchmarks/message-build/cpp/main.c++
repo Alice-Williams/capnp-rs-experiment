@@ -33,36 +33,43 @@ void setWord(capnp::byte* bytes, size_t index, uint64_t value) {
   std::memcpy(bytes + index * sizeof(uint64_t), &encoded, sizeof(encoded));
 }
 
-uint64_t hashBytes(uint64_t hash, const capnp::byte* bytes, size_t size) {
+__attribute__((always_inline)) inline uint64_t readWord(
+    const capnp::byte* bytes, size_t index) {
+  capnp::_::WireValue<uint64_t> encoded;
   auto pointer = bytes;
   asm volatile("" : "+r"(pointer) : : "memory");
-  for (size_t index = 0; index < size; ++index) {
-    hash = (hash ^ pointer[index]) * 0x100000001b3ull;
+  std::memcpy(&encoded, pointer + index * sizeof(uint64_t), sizeof(encoded));
+  return encoded.get();
+}
+
+__attribute__((always_inline)) inline uint64_t hashPrepared(
+    const std::array<capnp::word, 4>& words, size_t wordCount,
+    size_t segmentCount) {
+  uint64_t hash = SEED ^ std::rotl(uint64_t{segmentCount}, 17)
+      ^ std::rotl(uint64_t{wordCount}, 31);
+  auto bytes = reinterpret_cast<const capnp::byte*>(words.data());
+  for (size_t index = 0; index < wordCount; ++index) {
+    hash = std::rotl(hash, 7) ^ readWord(bytes, index);
   }
   return hash;
 }
 
-uint64_t hashPrepared(const std::array<capnp::word, 4>& words, size_t wordCount,
-                      size_t segmentCount) {
-  uint64_t hash = SEED ^ std::rotl(uint64_t{segmentCount}, 17)
-      ^ std::rotl(uint64_t{wordCount}, 31);
-  return hashBytes(hash, reinterpret_cast<const capnp::byte*>(words.data()),
-                   wordCount * sizeof(capnp::word));
-}
-
-uint64_t hashSegments(
+__attribute__((always_inline)) inline uint64_t hashSegments(
     kj::ArrayPtr<const kj::ArrayPtr<const capnp::word>> segments) {
   uint64_t hash = SEED ^ std::rotl(uint64_t{segments.size()}, 17);
   for (size_t index = 0; index < segments.size(); ++index) {
     hash ^= std::rotl(uint64_t{index}, 7)
         ^ std::rotl(uint64_t{segments[index].size()}, 31);
     auto bytes = segments[index].asBytes();
-    hash = hashBytes(hash, bytes.begin(), bytes.size());
+    for (size_t word = 0; word < segments[index].size(); ++word) {
+      hash = std::rotl(hash, 7) ^ readWord(bytes.begin(), word);
+    }
   }
   return hash;
 }
 
-uint64_t preparedIteration(bool far, uint64_t first, uint64_t second) {
+__attribute__((noinline)) uint64_t preparedIteration(
+    bool far, uint64_t first, uint64_t second) {
   std::array<capnp::word, 4> words{};
   auto bytes = reinterpret_cast<capnp::byte*>(words.data());
   if (far) {
@@ -80,7 +87,8 @@ uint64_t preparedIteration(bool far, uint64_t first, uint64_t second) {
   return hashPrepared(words, 3, 1);
 }
 
-uint64_t freshIteration(bool far, uint64_t first, uint64_t second) {
+__attribute__((noinline)) uint64_t freshIteration(
+    bool far, uint64_t first, uint64_t second) {
   capnp::MallocMessageBuilder message(
       far ? 1 : 3, capnp::AllocationStrategy::FIXED_SIZE);
   auto root = message.getRoot<capnp::AnyPointer>().initAsAnyStruct(2, 0);
