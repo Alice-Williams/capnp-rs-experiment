@@ -65,7 +65,7 @@ that both decoders necessarily perform and is not a valid lower-layer case.
   profile evidence before changing implementation code.
 - [x] Optimize one-shot and streaming paths while preserving safety, limits,
   and deterministic output.
-- [ ] Record final cumulative and incremental comparisons for every required
+- [x] Record final cumulative and incremental comparisons for every required
   direction, distribution, and ownership model.
 - [ ] Add Bazel evidence gates and pass full Cargo/MSRV/Bazel/Miri validation.
 

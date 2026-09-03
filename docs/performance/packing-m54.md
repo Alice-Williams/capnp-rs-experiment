@@ -111,3 +111,36 @@ with copying its compressed input rather than materializing its unpacked
 output. The final summarizer corrects unpack and unpack-stream to use the exact
 unpacked-output copy floor. The candidate files remain immutable evidence of
 the earlier analysis and are not used by the final ratio gate.
+
+## Final qualified comparison
+
+Evidence:
+[`benchmarks/results/2026-09-03-m54-packing-final-corrected-floor-g-drive-docker`](../../benchmarks/results/2026-09-03-m54-packing-final-corrected-floor-g-drive-docker)
+at native commit `48aeaf6b116c97f77d08234a80e01c4188cc6656`.
+This longer run uses 5,000 passes per sample and the corrected unpacked-output
+lower case.
+
+| Operation | Shape | C++ ns/word | Native ns/word | Native / C++ | Incremental native / C++ |
+| --- | --- | ---: | ---: | ---: | ---: |
+| pack | zero | 0.4409 | 0.3918 | 0.889 | 0.744 |
+| pack | raw | 1.2812 | 1.0369 | 0.809 | 0.794 |
+| pack | mixed | 5.9392 | 5.0336 | 0.848 | 0.843 |
+| pack | realistic | 5.2123 | 4.7581 | 0.913 | 0.910 |
+| unpack | zero | 0.2940 | 0.2051 | 0.697 | 0.092 |
+| unpack | raw | 0.3664 | 0.2471 | 0.674 | 0.430 |
+| unpack | mixed | 5.5018 | 4.5073 | 0.819 | 0.814 |
+| unpack | realistic | 5.1291 | 3.8799 | 0.756 | 0.748 |
+| pack stream | zero | 0.4946 | 0.3050 | 0.617 | 0.347 |
+| pack stream | raw | 1.2214 | 0.6918 | 0.566 | 0.505 |
+| pack stream | mixed | 7.0128 | 6.0610 | 0.864 | 0.861 |
+| pack stream | realistic | 5.2647 | 4.7184 | 0.896 | 0.893 |
+| unpack stream | zero | 0.2925 | 0.1752 | 0.599 | below timer resolution |
+| unpack stream | raw | 0.5064 | 0.2449 | 0.484 | 0.231 |
+| unpack stream | mixed | 5.9182 | 5.7690 | 0.975 | 0.974 |
+| unpack stream | realistic | 5.2225 | 5.0275 | 0.963 | 0.961 |
+
+All sixteen complete-operation ratios are below 1.0. Every cumulative ratio is
+within its paired lower-layer ceiling and every resolvable incremental ratio is
+below 1.0. Zero streaming unpack again falls below its measured unpacked-copy
+floor on the native side; its 0.599 isolated complete-operation ratio
+corroborates the below-resolution subtraction.

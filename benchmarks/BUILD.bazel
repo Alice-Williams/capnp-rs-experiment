@@ -111,6 +111,16 @@ sh_test(
 )
 
 sh_test(
+    name = "packing_final_results_test",
+    srcs = ["verify-packing-results.sh"],
+    args = [
+        "benchmarks/results/2026-09-03-m54-packing-final-corrected-floor-g-drive-docker",
+        "final",
+    ],
+    data = glob(["results/2026-09-03-m54-packing-final-corrected-floor-g-drive-docker/**"]),
+)
+
+sh_test(
     name = "message_build_baseline_results_test",
     srcs = ["verify-message-build-results.sh"],
     data = glob(["results/2026-09-03-m53-build-baseline-g-drive-docker/**"]),
