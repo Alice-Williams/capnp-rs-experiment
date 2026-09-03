@@ -49,6 +49,15 @@ kj::Array<capnp::word> readWords(const char* path) {
   return words;
 }
 
+kj::Array<capnp::word> emptyMessageWords() {
+  auto words = kj::heapArray<capnp::word>(2);
+  std::memset(words.begin(), 0, words.asBytes().size());
+  const uint32_t segmentWords = 1;
+  std::memcpy(words.asBytes().begin() + sizeof(uint32_t),
+              &segmentWords, sizeof(segmentWords));
+  return words;
+}
+
 template <typename T>
 T readData(kj::ArrayPtr<const capnp::byte> data, size_t index, T defaultValue = 0) {
   auto offset = index * sizeof(T);
@@ -231,6 +240,27 @@ uint64_t generatedEvolutionFingerprint(Record::Reader root) {
       root.getName().asBytes(), root.getValues()[1]);
 }
 
+uint64_t textFingerprint(kj::ArrayPtr<const capnp::byte> text) {
+  auto value = std::rotl(uint64_t{text.size()}, 17);
+  return value ^ std::rotl(
+      static_cast<uint64_t>(text.size() == 0 ? 0 : text[text.size() - 1]), 31);
+}
+
+uint64_t directDefaultFingerprint(capnp::AnyStruct::Reader root) {
+  auto pointers = root.getPointerSection();
+  if (pointers.size() > 25 && !pointers[25].isNull()) {
+    return textFingerprint(pointers[25].getAs<capnp::Text>().asBytes());
+  }
+  constexpr auto defaultText = std::string_view("default text");
+  return textFingerprint(kj::arrayPtr(
+      reinterpret_cast<const capnp::byte*>(defaultText.data()),
+      defaultText.size()));
+}
+
+uint64_t generatedDefaultFingerprint(WireFixture::Reader root) {
+  return textFingerprint(root.getDefaultText().asBytes());
+}
+
 template <typename Root, typename Fingerprint>
 uint64_t measure(Root root, Fingerprint fingerprint, size_t passes) {
   uint64_t checksum = SEED;
@@ -246,12 +276,14 @@ uint64_t measure(Root root, Fingerprint fingerprint, size_t passes) {
 
 int main(int argc, char** argv) {
   if (argc != 4) {
-    std::cerr << "usage: cpp-generated-api direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups|borrowed-direct-lists|borrowed-lists|borrowed-direct-nested|borrowed-nested|borrowed-direct-struct-lists|borrowed-struct-lists|borrowed-direct-evolution|borrowed-evolution PASSES FIXTURE\n";
+    std::cerr << "usage: cpp-generated-api direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups|borrowed-direct-lists|borrowed-lists|borrowed-direct-nested|borrowed-nested|borrowed-direct-struct-lists|borrowed-struct-lists|borrowed-direct-evolution|borrowed-evolution|borrowed-direct-defaults|borrowed-defaults PASSES FIXTURE\n";
     return 2;
   }
   auto mode = std::string_view(argv[1]);
   auto passes = parseSize(argv[2]);
-  auto words = readWords(argv[3]);
+  auto words = mode == "borrowed-direct-defaults" || mode == "borrowed-defaults"
+      ? emptyMessageWords()
+      : readWords(argv[3]);
   capnp::ReaderOptions options;
   options.traversalLimitInWords = std::numeric_limits<uint64_t>::max();
   capnp::FlatArrayMessageReader message(words.asPtr(), options);
@@ -286,6 +318,10 @@ int main(int argc, char** argv) {
     checksum = measure(message.getRoot<capnp::AnyStruct>(), directEvolutionFingerprint, passes);
   } else if (mode == "borrowed-evolution") {
     checksum = measure(message.getRoot<Record>(), generatedEvolutionFingerprint, passes);
+  } else if (mode == "borrowed-direct-defaults") {
+    checksum = measure(message.getRoot<capnp::AnyStruct>(), directDefaultFingerprint, passes);
+  } else if (mode == "borrowed-defaults") {
+    checksum = measure(message.getRoot<WireFixture>(), generatedDefaultFingerprint, passes);
   } else {
     std::cerr << "unknown benchmark mode\n";
     return 2;

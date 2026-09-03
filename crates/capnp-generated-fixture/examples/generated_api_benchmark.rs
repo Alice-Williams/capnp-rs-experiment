@@ -27,11 +27,12 @@ const EVOLUTION_FRAME: &[u8] = include_bytes!(concat!(
     "e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/",
     "evolution-v2-unpacked.bin"
 ));
+const EMPTY_FRAME: &[u8] = &[0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let mode = args.next().ok_or(
-        "usage: generated_api_benchmark direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups|borrowed-direct-lists|borrowed-lists|borrowed-direct-nested|borrowed-nested|borrowed-direct-struct-lists|borrowed-struct-lists|borrowed-direct-evolution|borrowed-evolution PASSES",
+        "usage: generated_api_benchmark direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups|borrowed-direct-lists|borrowed-lists|borrowed-direct-nested|borrowed-nested|borrowed-direct-struct-lists|borrowed-struct-lists|borrowed-direct-evolution|borrowed-evolution|borrowed-direct-defaults|borrowed-defaults PASSES",
     )?;
     let passes = args.next().ok_or("missing passes")?.parse::<usize>()?;
     if args.next().is_some()
@@ -56,6 +57,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 | "borrowed-struct-lists"
                 | "borrowed-direct-evolution"
                 | "borrowed-evolution"
+                | "borrowed-direct-defaults"
+                | "borrowed-defaults"
         )
     {
         return Err("expected a known mode and positive PASSES".into());
@@ -89,6 +92,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let evolution_message = parse_borrowed_message(EVOLUTION_FRAME)?;
     let evolution_direct = evolution_message.root_struct()?;
     let evolution = evolution_v1::record::BorrowedReader::from_root(&evolution_message)?;
+    let default_message = parse_borrowed_message(EMPTY_FRAME)?;
+    let default_direct = default_message.root_struct()?;
+    let default_reader = wire_fixture::BorrowedReader::from_root(&default_message)?;
     let message = owned_frame()?;
     let direct = message.root_struct()?.into_root();
     let generated = wire_fixture::Reader::from_root(schema, Arc::clone(&message))?;
@@ -135,6 +141,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             measure(passes, || direct_evolution_fingerprint(evolution_direct))?
         }
         "borrowed-evolution" => measure(passes, || borrowed_evolution_fingerprint(&evolution))?,
+        "borrowed-direct-defaults" => measure(passes, || {
+            direct_default_fingerprint(default_direct).map_err(Into::into)
+        })?,
+        "borrowed-defaults" => measure(passes, || {
+            borrowed_default_fingerprint(&default_reader).map_err(Into::into)
+        })?,
         _ => unreachable!(),
     };
     println!("{}\t{}", started.elapsed().as_nanos(), checksum);
@@ -415,6 +427,28 @@ fn evolution_fingerprint(
     value = value.rotate_left(19) ^ name.len() as u64;
     value = value.rotate_left(23) ^ u64::from(name.last().copied().unwrap_or_default());
     Ok(value.rotate_left(29) ^ u64::from(second_value))
+}
+
+fn direct_default_fingerprint<B: capnp_message::TraversalBudget>(
+    reader: capnp_message::StructReader<'_, '_, B>,
+) -> Result<u64, StructReadError> {
+    let reader = black_box(reader);
+    let text = reader
+        .pointer_section()?
+        .read_text_with_default(25, b"default text\0")?;
+    Ok(text_fingerprint(text.as_bytes()))
+}
+
+fn borrowed_default_fingerprint<B: capnp_message::TraversalBudget>(
+    reader: &wire_fixture::BorrowedReader<'_, '_, B>,
+) -> Result<u64, StructReadError> {
+    let reader = black_box(reader);
+    Ok(text_fingerprint(reader.default_text()?.as_bytes()))
+}
+
+fn text_fingerprint(text: &[u8]) -> u64 {
+    let value = (text.len() as u64).rotate_left(17);
+    value ^ u64::from(text.last().copied().unwrap_or_default()).rotate_left(31)
 }
 
 fn parse_borrowed_message(bytes: &[u8]) -> Result<BorrowedMessage<'_>, Box<dyn std::error::Error>> {

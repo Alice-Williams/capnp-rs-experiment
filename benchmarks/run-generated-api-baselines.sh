@@ -91,6 +91,8 @@ workloads=(
     borrowed-struct-lists
     borrowed-direct-evolution
     borrowed-evolution
+    borrowed-direct-defaults
+    borrowed-defaults
 )
 
 run_workload() {
