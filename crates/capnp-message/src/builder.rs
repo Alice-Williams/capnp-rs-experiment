@@ -647,6 +647,7 @@ impl ExclusiveArena {
         })
     }
 
+    #[inline]
     fn allocate_data_list(
         &mut self,
         element_size: ElementSize,
@@ -728,6 +729,7 @@ impl ExclusiveArena {
         )
     }
 
+    #[inline]
     fn emit_list(
         &mut self,
         pointer_location: WordOffset,
@@ -1984,6 +1986,7 @@ impl StructBuilder<'_> {
         })
     }
 
+    #[inline]
     pub fn set_text(&mut self, pointer_index: u16, value: &str) -> Result<(), ArenaError> {
         let count = value
             .len()
@@ -2002,6 +2005,7 @@ impl StructBuilder<'_> {
         Ok(())
     }
 
+    #[inline]
     pub fn set_data(&mut self, pointer_index: u16, value: &[u8]) -> Result<(), ArenaError> {
         let count = u32::try_from(value.len()).map_err(|_| ArenaError::AllocationOverflow)?;
         let slot = self.pointer_slot(pointer_index)?;
@@ -2118,6 +2122,7 @@ impl StructBuilder<'_> {
             .ok_or(ArenaError::AllocationOverflow)
     }
 
+    #[inline]
     fn pointer_slot(&self, index: u16) -> Result<WordOffset, ArenaError> {
         struct_pointer_slot(self.reference, index)
     }
@@ -2306,6 +2311,7 @@ impl PointerListBuilder<'_> {
         })
     }
 
+    #[inline]
     pub fn set_text(&mut self, index: u32, value: &str) -> Result<(), ArenaError> {
         let slot = self.slot(index)?;
         let count = value
@@ -2324,6 +2330,7 @@ impl PointerListBuilder<'_> {
         Ok(())
     }
 
+    #[inline]
     pub fn set_data(&mut self, index: u32, value: &[u8]) -> Result<(), ArenaError> {
         let slot = self.slot(index)?;
         let count = u32::try_from(value.len()).map_err(|_| ArenaError::AllocationOverflow)?;
@@ -2432,6 +2439,7 @@ fn relative_offset(pointer: WordOffset, target: WordOffset) -> Result<i32, Arena
     i32::try_from(value).map_err(|_| ArenaError::AllocationOverflow)
 }
 
+#[inline]
 fn struct_pointer_slot(reference: StructOffset, index: u16) -> Result<WordOffset, ArenaError> {
     if index >= reference.pointer_count {
         return Err(ArenaError::PointerIndexOutOfBounds {
