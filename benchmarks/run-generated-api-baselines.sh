@@ -55,7 +55,8 @@ mkdir -p -- "$output"
     printf 'schema=conformance/schemas/wire-fixture.capnp\n'
     printf 'fixture=wire-unpacked.bin\n'
     printf 'cpp_primitive=generated WireFixture::Reader paired with AnyStruct::Reader\n'
-    printf 'native_primitive=generated wire_fixture::Reader paired with retained StructReader\n'
+    printf 'native_retained_primitive=generated wire_fixture::Reader paired with retained StructReader\n'
+    printf 'native_borrowed_primitive=generated wire_fixture::BorrowedReader paired with BorrowedMessage root StructReader\n'
     printf 'native_commit=%s\n' "$native_commit"
     printf 'cpp_binary_sha256=%s\n' "$(sha256sum "$cpp_benchmark" | cut -d ' ' -f1)"
     printf 'native_binary_sha256=%s\n' "$(sha256sum "$native_benchmark" | cut -d ' ' -f1)"
@@ -105,7 +106,7 @@ python3 "$repo_root/tools/summarize-generated-api-benchmarks.py" \
     "$output/incremental.tsv"
 awk -F '\t' '
   NR == 1 { next }
-  { shape = $2; sub(/^(direct|generated)-/, "", shape) }
+  { shape = $2; sub(/^(direct|generated|borrowed)-/, "", shape) }
   !(shape in checksum) { checksum[shape] = $6; next }
   $6 != checksum[shape] { exit 1 }
 ' "$output/results.tsv"
