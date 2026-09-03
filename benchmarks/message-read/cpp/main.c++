@@ -104,6 +104,27 @@ uint64_t readBlobOnly(capnp::AnyStruct::Reader root, size_t passes) {
   return checksum;
 }
 
+uint64_t readRetainedRoot(
+    capnp::SegmentArrayMessageReader& reader, size_t passes) {
+  uint64_t checksum = SEED;
+  for (size_t pass = 0; pass < passes; ++pass) {
+    auto readerPointer = &reader;
+    asm volatile("" : "+r"(readerPointer) : : "memory");
+    auto root = readerPointer->getRoot<capnp::AnyStruct>();
+    auto data = root.getDataSection();
+    uint64_t value = 0;
+    if (data.size() >= sizeof(value)) {
+      capnp::_::WireValue<uint64_t> wire;
+      std::memcpy(&wire, data.begin(), sizeof(wire));
+      value = wire.get();
+    }
+    auto fingerprint = std::rotl(uint64_t{data.size()}, 17)
+        ^ std::rotl(value, 37);
+    checksum = std::rotl(checksum, 9) ^ fingerprint;
+  }
+  return checksum;
+}
+
 void setWord(kj::Array<capnp::word>& segment, size_t index, uint64_t value) {
   auto wire = reinterpret_cast<capnp::_::WireValue<uint64_t>*>(segment.begin());
   wire[index].set(value);
@@ -232,7 +253,7 @@ uint64_t readIsolatedRoots(
 
 int main(int argc, char** argv) {
   if (argc != 4) {
-    std::cerr << "usage: cpp-message-read framing|root|scalars|blobs|isolated-root|isolated-scalars|isolated-blobs|scalar-only|blob-only SEGMENTS PASSES\n";
+    std::cerr << "usage: cpp-message-read framing|root|scalars|blobs|isolated-root|isolated-scalars|isolated-blobs|scalar-only|blob-only|retained-root SEGMENTS PASSES\n";
     return 2;
   }
   auto mode = std::string_view(argv[1]);
@@ -242,7 +263,7 @@ int main(int argc, char** argv) {
       && mode != "blobs"
       && mode != "isolated-root" && mode != "isolated-scalars"
       && mode != "isolated-blobs" && mode != "scalar-only"
-      && mode != "blob-only") {
+      && mode != "blob-only" && mode != "retained-root") {
     std::cerr << "unknown benchmark mode\n";
     return 2;
   }
@@ -268,6 +289,18 @@ int main(int argc, char** argv) {
     auto root = reader.getRoot<capnp::AnyStruct>();
     auto started = std::chrono::steady_clock::now();
     auto checksum = readBlobOnly(root, passes);
+    auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now() - started);
+    std::cout << elapsed.count() << '\t' << checksum << '\n';
+    return 0;
+  }
+  if (mode == "retained-root") {
+    capnp::ReaderOptions options;
+    options.traversalLimitInWords = kj::maxValue;
+    capnp::SegmentArrayMessageReader reader(
+        kj::arrayPtr(views.data(), views.size()), options);
+    auto started = std::chrono::steady_clock::now();
+    auto checksum = readRetainedRoot(reader, passes);
     auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::steady_clock::now() - started);
     std::cout << elapsed.count() << '\t' << checksum << '\n';

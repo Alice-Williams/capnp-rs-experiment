@@ -3,8 +3,8 @@ use std::time::Instant;
 
 use capnp_io::{BorrowedFrameRead, FrameLimits, Segment, encode_frame, parse_frame_into};
 use capnp_message::{
-    DataSection, LocalTraversalBudget, MessageSegments, NestingLimit, PrimitiveError,
-    StructReadError, StructReader,
+    DataSection, LocalTraversalBudget, MessageSegments, NestingLimit, OwnedMessage, PrimitiveError,
+    ReaderLimits, StructReadError, StructReader,
 };
 
 const SEED: u64 = 0x4d59_5df4_d0f3_3173;
@@ -13,7 +13,7 @@ const VALUE: u64 = 0x0123_4567_89ab_cdef;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let mode = args.next().ok_or(
-            "usage: message_read framing|root|scalars|blobs|isolated-root|isolated-scalars|isolated-blobs|scalar-only|blob-only SEGMENTS PASSES",
+            "usage: message_read framing|root|scalars|blobs|isolated-root|isolated-scalars|isolated-blobs|scalar-only|blob-only|retained-root SEGMENTS PASSES",
     )?;
     let segment_count = args
         .next()
@@ -32,6 +32,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 | "isolated-blobs"
                 | "scalar-only"
                 | "blob-only"
+                | "retained-root"
         )
         || !matches!(segment_count, 1 | 2 | 64)
         || passes == 0
@@ -40,6 +41,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let segments = fixture_segments(segment_count);
+    if mode == "retained-root" {
+        let (elapsed, checksum) = read_retained_root(segments, passes)?;
+        println!("{}\t{}", elapsed.as_nanos(), checksum);
+        return Ok(());
+    }
     let views: Vec<&[u8]> = segments.iter().map(Vec::as_slice).collect();
     let encoded = encode_frame(&views, FrameLimits::default())?;
     let descriptors: Vec<Segment<'_>> = views
@@ -78,6 +84,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     println!("{}\t{}", started.elapsed().as_nanos(), checksum);
     Ok(())
+}
+
+fn read_retained_root(
+    segments: Vec<Vec<u8>>,
+    passes: usize,
+) -> Result<(std::time::Duration, u64), Box<dyn std::error::Error>> {
+    let message = OwnedMessage::new(
+        segments,
+        ReaderLimits {
+            traversal_words: u64::MAX,
+            nesting_levels: 8,
+        },
+    )?;
+    let root = message.root_struct()?;
+    let mut checksum = SEED;
+    let started = Instant::now();
+    for _ in 0..passes {
+        let fingerprint = black_box(root.root()).with_reader(|reader| {
+            Ok::<_, StructReadError>(
+                (reader.data_byte_len() as u64).rotate_left(17)
+                    ^ reader.read_u64(0, 0)?.rotate_left(37),
+            )
+        })??;
+        checksum = checksum.rotate_left(9) ^ fingerprint;
+    }
+    Ok((started.elapsed(), black_box(checksum)))
 }
 
 fn read_scalar_only(

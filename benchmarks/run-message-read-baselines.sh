@@ -82,6 +82,9 @@ workloads=(
     'blob-only 1'
     'blob-only 2'
     'blob-only 64'
+    'retained-root 1'
+    'retained-root 2'
+    'retained-root 64'
 )
 
 run_workload() {
