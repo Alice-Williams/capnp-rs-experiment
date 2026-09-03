@@ -610,12 +610,9 @@ mod tests {
             root.set_defaulted(123_456).expect("default XOR setter");
             {
                 let mut list = root.init_uint16s(3).expect("typed field list init");
-                list.set(0, capnp_schema::DynamicInput::UInt16(2))
-                    .expect("list 0");
-                list.set(1, capnp_schema::DynamicInput::UInt16(3))
-                    .expect("list 1");
-                list.set(2, capnp_schema::DynamicInput::UInt16(5))
-                    .expect("list 2");
+                list.set(0, 2).expect("list 0");
+                list.set(1, 3).expect("list 1");
+                list.set(2, 5).expect("list 2");
             }
             root.choice()
                 .expect("union group builder")

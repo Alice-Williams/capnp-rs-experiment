@@ -2669,9 +2669,24 @@ fn emit_builder_field(
                     }
                     writeln!(output, "        }}").map_err(|_| GenerateError::Format)?;
                 }
+                Type::List(element)
+                    if field.discriminant_value.is_none()
+                        && borrowed_primitive_rust_type(element).is_some() =>
+                {
+                    let rust_type = borrowed_primitive_rust_type(element)
+                        .expect("primitive type was checked above");
+                    writeln!(output, "        #[inline(always)]\n        pub fn init_{method}(&mut self, element_count: u32) -> Result<capnp_message::DataListBuilder<'_, {rust_type}>, capnp_schema::DynamicError> {{")
+                        .map_err(|_| GenerateError::Format)?;
+                    writeln!(
+                        output,
+                        "            self.inner.init_primitive_list_slot::<{rust_type}>({offset}, element_count)"
+                    )
+                    .map_err(|_| GenerateError::Format)?;
+                    writeln!(output, "        }}").map_err(|_| GenerateError::Format)?;
+                }
                 Type::List(_) => {
                     writeln!(output, "        pub fn init_{method}(&mut self, element_count: u32) -> Result<capnp_schema::DynamicListBuilder<'schema, '_>, capnp_schema::DynamicError> {{")
-                    .map_err(|_| GenerateError::Format)?;
+                        .map_err(|_| GenerateError::Format)?;
                     writeln!(
                         output,
                         "            self.inner.init_list({:?}, element_count)",
@@ -3162,6 +3177,16 @@ mod tests {
             !generated
                 .source
                 .contains("self.inner.init_struct(\"node\")")
+        );
+        assert!(
+            generated
+                .source
+                .contains("self.inner.init_primitive_list_slot::<u16>(9, element_count)")
+        );
+        assert!(
+            !generated
+                .source
+                .contains("self.inner.init_list(\"uint16s\"")
         );
         assert!(
             generated

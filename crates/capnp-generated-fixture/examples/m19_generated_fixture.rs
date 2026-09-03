@@ -23,9 +23,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         root.set_text("native generated")?;
         {
             let mut values = root.init_uint16s(3)?;
-            values.set(0, capnp_schema::DynamicInput::UInt16(2))?;
-            values.set(1, capnp_schema::DynamicInput::UInt16(3))?;
-            values.set(2, capnp_schema::DynamicInput::UInt16(5))?;
+            values.set(0, 2)?;
+            values.set(1, 3)?;
+            values.set(2, 5)?;
         }
         root.choice()?.set_number(444)?;
         root.init_node()?.set_value(88)?;

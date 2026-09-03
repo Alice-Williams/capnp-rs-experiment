@@ -383,7 +383,7 @@ fn write_generated_list(
     let values = list_builder_values(pass);
     let mut list = builder.init_uint16s(4)?;
     for (index, value) in values.into_iter().enumerate() {
-        list.set(index as u32, capnp_schema::DynamicInput::UInt16(value))?;
+        list.set(index as u32, value)?;
     }
     Ok(())
 }

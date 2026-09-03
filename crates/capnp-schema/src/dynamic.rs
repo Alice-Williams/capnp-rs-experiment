@@ -1304,6 +1304,20 @@ impl<'schema, 'arena> DynamicStructBuilder<'schema, 'arena> {
         })
     }
 
+    /// Initializes a statically generated primitive-list field without
+    /// repeating dynamic field and element-type lookup.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn init_primitive_list_slot<T: capnp_message::PrimitiveListValue>(
+        &mut self,
+        offset: u32,
+        element_count: u32,
+    ) -> Result<DataListBuilder<'_, T>, DynamicError> {
+        Ok(self
+            .builder
+            .init_list::<T>(u16_offset(offset)?, element_count)?)
+    }
+
     /// Resolves a field's runtime type through this builder's current brand.
     pub fn field_type(&self, name: &str) -> Result<Type, DynamicError> {
         let (field, _) = self.field_owned(name)?;
