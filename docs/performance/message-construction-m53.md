@@ -1,6 +1,6 @@
 # M53 message-construction performance
 
-M53 is in progress. Its first checked-in baseline isolates prepared word writes
+M53 is complete. Its first checked-in baseline isolates prepared word writes
 from fresh arena construction for a direct root and a forced single-far root.
 It uses the pinned C++ commit
 `e7c9cd96f1505b5ae486db7821006c2f5dce5b5b`, identical logical values, the
@@ -244,3 +244,23 @@ is 0.904, reusable graph copy is 0.810, and its paired increment is 0.911. The
 separate pointer-placement gate remains authoritative for the sub-nanosecond
 prepared direct case, whose ratio is timer-sensitive in mixed runs; its complete
 fresh and incremental construction results remain comfortably faster here.
+
+## Qualification
+
+The final branch passed all required gates in the Linux development container:
+
+- pinned upstream schema verification;
+- all workspace targets and doc tests on development Rust 1.98;
+- formatting and Clippy with warnings denied;
+- the bounded RPC fuzz and Level-1/maximum-parity soak smoke tests;
+- all three Loom exact-accounting/parallel-builder models;
+- all workspace targets on the declared Rust 1.85 MSRV;
+- `bazelisk test //...`, including the pointer-placement, graph-copy, and public
+  Data construction evidence gates;
+- all `capnp-wire` tests and the disjoint primitive-partition test under
+  Miri nightly `2026-08-31`.
+
+The final implementation remains `unsafe`-free. Exact allocation limits,
+checked pointer arithmetic, deterministic segment placement, zero-before-use,
+rollback, old-offset invalidation, and multi-segment behavior remain covered by
+the existing builder tests.

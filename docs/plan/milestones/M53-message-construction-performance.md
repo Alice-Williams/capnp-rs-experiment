@@ -1,6 +1,6 @@
 # M53 — Message-construction performance
 
-- Status: in-progress
+- Status: complete
 - Phase: 9
 - Depends on: M50, M52
 
@@ -65,7 +65,7 @@ substitute for the fresh-allocation result, or vice versa.
 - [x] Optimize only schema-independent construction paths while preserving
   safety, limits, and deterministic output.
 - [x] Record final cumulative and incremental comparisons.
-- [ ] Add Bazel evidence gates and pass full Cargo/MSRV/Bazel/Miri validation.
+- [x] Add Bazel evidence gates and pass full Cargo/MSRV/Bazel/Miri validation.
 
 ## Required exit evidence
 
