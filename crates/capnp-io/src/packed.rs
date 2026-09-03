@@ -80,6 +80,16 @@ impl PackedEncoder {
     }
 
     fn push_inner(&mut self, input: &mut &[u8]) -> Result<(), PackedError> {
+        if self.partial_len == 0
+            && matches!(self.run, EncodeRun::None)
+            && input.len() % WORD_BYTES == 0
+            && ends_at_flushable_boundary(input)
+        {
+            pack_aligned_into(input, &mut self.output, self.max_output_bytes)?;
+            *input = &[];
+            return Ok(());
+        }
+
         if self.partial_len != 0 {
             let copied = (WORD_BYTES - self.partial_len).min(input.len());
             self.partial[self.partial_len..self.partial_len + copied]
@@ -410,6 +420,22 @@ impl PackedDecoder {
 pub fn pack(input: &[u8], max_output_bytes: usize) -> Result<Vec<u8>, PackedError> {
     let mut output = Vec::new();
     let complete_bytes = input.len() / WORD_BYTES * WORD_BYTES;
+    pack_aligned_into(&input[..complete_bytes], &mut output, max_output_bytes)?;
+    if complete_bytes != input.len() {
+        return Err(PackedError::UnalignedInput {
+            trailing_bytes: input.len() - complete_bytes,
+        });
+    }
+    Ok(output)
+}
+
+fn pack_aligned_into(
+    input: &[u8],
+    output: &mut Vec<u8>,
+    max_output_bytes: usize,
+) -> Result<(), PackedError> {
+    debug_assert_eq!(input.len() % WORD_BYTES, 0);
+    let complete_bytes = input.len();
     let mut offset = 0;
     while offset < complete_bytes {
         let word = &input[offset..offset + WORD_BYTES];
@@ -466,12 +492,7 @@ pub fn pack(input: &[u8], max_output_bytes: usize) -> Result<Vec<u8>, PackedErro
             offset += WORD_BYTES;
         }
     }
-    if complete_bytes != input.len() {
-        return Err(PackedError::UnalignedInput {
-            trailing_bytes: input.len() - complete_bytes,
-        });
-    }
-    Ok(output)
+    Ok(())
 }
 
 pub fn unpack(input: &[u8], max_output_bytes: usize) -> Result<Vec<u8>, PackedError> {
@@ -592,6 +613,29 @@ fn word_tag_slice(word: &[u8]) -> u8 {
 
 fn word_is_zero(word: &[u8]) -> bool {
     u64::from_le_bytes(word.try_into().expect("packing only checks complete words")) == 0
+}
+
+fn ends_at_flushable_boundary(input: &[u8]) -> bool {
+    if input.is_empty() {
+        return false;
+    }
+    let final_word = &input[input.len() - WORD_BYTES..];
+    let final_tag = word_tag_slice(final_word);
+    if final_tag != 0 && final_tag != u8::MAX {
+        return true;
+    }
+    let run_bytes = (MAX_RUN_WORDS + 1) * WORD_BYTES;
+    if input.len() < run_bytes {
+        return false;
+    }
+    let trailing_run = &input[input.len() - run_bytes..];
+    if final_tag == 0 {
+        trailing_run.chunks_exact(WORD_BYTES).all(word_is_zero)
+    } else {
+        trailing_run
+            .chunks_exact(WORD_BYTES)
+            .all(|word| word.iter().all(|byte| *byte != 0))
+    }
 }
 
 fn zero_byte_count(word: &[u8; WORD_BYTES]) -> usize {
