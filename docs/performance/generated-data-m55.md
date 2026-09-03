@@ -437,3 +437,26 @@ come from generated lookup or metadata work. A future safe direct-data builder
 view may reduce this floor, but it must not hold an invalidatable slice across
 arena growth. Blob, struct, list, union, default, and evolution builder gates
 remain open.
+
+## Blob-builder baseline
+
+The fixed-capacity blob-builder workload appends alternating seven-byte Text
+and eight-byte Data values to a preallocated one-segment arena. Allocation and
+root creation are excluded equally; pointer emission, zero initialization, and
+payload copying remain inside each iteration. Evidence before generated
+pointer-slot specialization is in
+[`benchmarks/results/2026-09-03-m55-generated-builder-blobs-baseline-100k-g-drive-docker`](../../benchmarks/results/2026-09-03-m55-generated-builder-blobs-baseline-100k-g-drive-docker)
+at native commit `18767fd`.
+
+| Operation | C++ ns/op | Native ns/op | Native / C++ |
+| --- | ---: | ---: | ---: |
+| direct Text/Data writes | 76.8374 | 53.8327 | 0.701 |
+| generated Text/Data writes | 81.8621 | 453.8511 | 5.544 |
+
+The direct native path is 29.9% faster than its C++ control, while the generated
+path loses that advantage completely. The approximately 400 ns native delta is
+field-name lookup, owned field metadata, runtime type resolution, and dynamic
+input dispatch performed once for Text and again for Data. This attribution is
+also visible structurally in generated source; constant pointer offsets are
+already available to codegen. The next change removes that reflection only for
+ordinary non-union Text/Data setters.
