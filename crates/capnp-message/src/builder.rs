@@ -312,11 +312,12 @@ impl ExclusiveArena {
         if arena_id == u64::MAX {
             return Err(ArenaError::AllocationOverflow);
         }
+        let initialized_bytes = word_bytes(initial_capacity_words)?;
         let mut bytes = Vec::new();
         bytes
-            .try_reserve_exact(word_bytes(initial_capacity_words)?)
+            .try_reserve_exact(initialized_bytes)
             .map_err(|_| ArenaError::AllocationFailed)?;
-        bytes.resize(8, 0);
+        bytes.resize(initialized_bytes, 0);
         Ok(Self {
             arena_id,
             first_segment: SegmentStorage {
