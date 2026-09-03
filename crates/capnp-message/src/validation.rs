@@ -163,13 +163,14 @@ impl core::error::Error for ValidationError {}
 /// Immutable borrowed segments addressed only by stable coordinates.
 #[derive(Debug)]
 pub struct MessageSegments<'a> {
+    first: &'a [u8],
     segments: SegmentStorage<'a>,
 }
 
 #[derive(Debug)]
 enum SegmentStorage<'a> {
-    One(&'a [u8]),
-    Two([&'a [u8]; 2]),
+    One,
+    Two(&'a [u8]),
     Borrowed(&'a [&'a [u8]]),
     Descriptors(&'a [Segment<'a>]),
     Many(Box<[&'a [u8]]>),
@@ -179,12 +180,13 @@ impl<'a> MessageSegments<'a> {
     #[inline]
     pub fn new(segments: &[&'a [u8]]) -> Result<Self, ValidationError> {
         validate_segments(segments)?;
+        let first = segments[0];
         let segments = match segments {
-            [one] => SegmentStorage::One(one),
-            [first, second] => SegmentStorage::Two([first, second]),
+            [_] => SegmentStorage::One,
+            [_, second] => SegmentStorage::Two(second),
             many => SegmentStorage::Many(many.into()),
         };
-        Ok(Self { segments })
+        Ok(Self { first, segments })
     }
 
     /// Borrows caller-owned segment descriptors after validating their shape.
@@ -196,6 +198,7 @@ impl<'a> MessageSegments<'a> {
     pub fn new_borrowed(segments: &'a [&'a [u8]]) -> Result<Self, ValidationError> {
         validate_segments(segments)?;
         Ok(Self {
+            first: segments[0],
             segments: SegmentStorage::Borrowed(segments),
         })
     }
@@ -210,6 +213,7 @@ impl<'a> MessageSegments<'a> {
             return Err(ValidationError::TooManySegments);
         }
         Ok(Self {
+            first: segments[0].bytes(),
             segments: SegmentStorage::Descriptors(segments),
         })
     }
@@ -217,7 +221,7 @@ impl<'a> MessageSegments<'a> {
     #[inline]
     pub fn segment_count(&self) -> usize {
         match &self.segments {
-            SegmentStorage::One(_) => 1,
+            SegmentStorage::One => 1,
             SegmentStorage::Two(_) => 2,
             SegmentStorage::Borrowed(segments) => segments.len(),
             SegmentStorage::Descriptors(segments) => segments.len(),
@@ -227,10 +231,13 @@ impl<'a> MessageSegments<'a> {
 
     #[inline]
     pub fn segment(&self, id: u32) -> Option<&'a [u8]> {
+        if id == 0 {
+            return Some(self.first);
+        }
         let index = usize::try_from(id).ok()?;
         match &self.segments {
-            SegmentStorage::One(segment) => (index == 0).then_some(*segment),
-            SegmentStorage::Two(segments) => segments.get(index).copied(),
+            SegmentStorage::One => None,
+            SegmentStorage::Two(second) => (index == 1).then_some(*second),
             SegmentStorage::Borrowed(segments) => segments.get(index).copied(),
             SegmentStorage::Descriptors(segments) => {
                 segments.get(index).copied().map(Segment::bytes)
@@ -884,7 +891,7 @@ mod tests {
     fn one_and_two_segment_contexts_use_inline_storage() {
         let bytes = [0u8; 8];
         let one = MessageSegments::new(&[&bytes]).expect("one segment is valid");
-        assert!(matches!(one.segments, SegmentStorage::One(_)));
+        assert!(matches!(one.segments, SegmentStorage::One));
 
         let two = MessageSegments::new(&[&bytes, &bytes]).expect("two segments are valid");
         assert!(matches!(two.segments, SegmentStorage::Two(_)));
