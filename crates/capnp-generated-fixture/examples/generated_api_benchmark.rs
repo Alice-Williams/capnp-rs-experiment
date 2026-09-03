@@ -2,7 +2,7 @@ use std::hint::black_box;
 use std::sync::Arc;
 use std::time::Instant;
 
-use capnp_generated_fixture::wire::{Color, wire_fixture};
+use capnp_generated_fixture::wire::{Color, choice, wire_fixture};
 use capnp_io::{FrameLimits, FrameRead, parse_frame};
 use capnp_message::{BorrowedMessage, OwnedMessage, ReaderLimits, StructReadError};
 use capnp_schema::{CompiledSchema, LoadLimits};
@@ -24,7 +24,7 @@ const FRAME: &[u8] = include_bytes!(concat!(
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let mode = args.next().ok_or(
-        "usage: generated_api_benchmark direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs PASSES",
+        "usage: generated_api_benchmark direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups PASSES",
     )?;
     let passes = args.next().ok_or("missing passes")?.parse::<usize>()?;
     if args.next().is_some()
@@ -39,6 +39,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 | "generated-blobs"
                 | "borrowed-direct-blobs"
                 | "borrowed-blobs"
+                | "borrowed-direct-groups"
+                | "borrowed-groups"
         )
     {
         return Err("expected a known mode and positive PASSES".into());
@@ -95,6 +97,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             direct_blob_fingerprint(borrowed_direct).map_err(Into::into)
         })?,
         "borrowed-blobs" => measure(passes, || borrowed_blob_fingerprint(&borrowed))?,
+        "borrowed-direct-groups" => measure(passes, || {
+            direct_group_fingerprint(borrowed_direct).map_err(Into::into)
+        })?,
+        "borrowed-groups" => measure(passes, || Ok(borrowed_group_fingerprint(&borrowed)))?,
         _ => unreachable!(),
     };
     println!("{}\t{}", started.elapsed().as_nanos(), checksum);
@@ -209,6 +215,39 @@ fn blob_fingerprint(text: &[u8], data: &[u8]) -> u64 {
         value ^= u64::from(*first).rotate_left(43) ^ u64::from(*last).rotate_left(47);
     }
     value
+}
+
+fn direct_group_fingerprint<B: capnp_message::TraversalBudget>(
+    reader: capnp_message::StructReader<'_, '_, B>,
+) -> Result<u64, StructReadError> {
+    let data = reader.data_section()?;
+    Ok(group_fingerprint(
+        data.read_u16(19, 0)?,
+        data.read_u64(6, 0)?,
+        data.read_u64(7, 0)?,
+        data.read_bool(1, false)?,
+    ))
+}
+
+fn borrowed_group_fingerprint<B: capnp_message::TraversalBudget>(
+    reader: &wire_fixture::BorrowedReader<'_, '_, B>,
+) -> u64 {
+    let choice = reader.choice();
+    let tag = match choice.which() {
+        choice::Which::None => 0,
+        choice::Which::Number => 1,
+        choice::Which::Words => 2,
+        choice::Which::Unrecognized(value) => value,
+    };
+    let metadata = reader.metadata();
+    group_fingerprint(tag, choice.number(), metadata.created(), metadata.valid())
+}
+
+fn group_fingerprint(tag: u16, number: u64, created: u64, valid: bool) -> u64 {
+    let mut value = u64::from(tag);
+    value = value.rotate_left(17) ^ number;
+    value = value.rotate_left(23) ^ created;
+    value.rotate_left(29) ^ u64::from(valid)
 }
 
 fn owned_frame() -> Result<Arc<OwnedMessage>, Box<dyn std::error::Error>> {

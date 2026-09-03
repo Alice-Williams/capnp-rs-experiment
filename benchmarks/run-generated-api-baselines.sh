@@ -74,6 +74,8 @@ workloads=(
     generated-blobs
     borrowed-direct-blobs
     borrowed-blobs
+    borrowed-direct-groups
+    borrowed-groups
 )
 
 run_workload() {

@@ -123,6 +123,31 @@ uint64_t generatedBlobFingerprint(WireFixture::Reader root) {
   return blobFingerprint(root.getText().asBytes(), root.getData());
 }
 
+uint64_t groupFingerprint(
+    uint16_t tag, uint64_t number, uint64_t created, bool valid) {
+  uint64_t value = tag;
+  value = std::rotl(value, 17) ^ number;
+  value = std::rotl(value, 23) ^ created;
+  return std::rotl(value, 29) ^ uint64_t{valid};
+}
+
+uint64_t directGroupFingerprint(capnp::AnyStruct::Reader root) {
+  auto data = root.getDataSection();
+  return groupFingerprint(
+      readData<uint16_t>(data, 19),
+      readData<uint64_t>(data, 6),
+      readData<uint64_t>(data, 7),
+      data.size() > 0 && (data[0] & 2) != 0);
+}
+
+uint64_t generatedGroupFingerprint(WireFixture::Reader root) {
+  auto choice = root.getChoice();
+  auto metadata = root.getMetadata();
+  return groupFingerprint(
+      static_cast<uint16_t>(choice.which()), choice.getNumber(),
+      metadata.getCreated(), metadata.getValid());
+}
+
 template <typename Root, typename Fingerprint>
 uint64_t measure(Root root, Fingerprint fingerprint, size_t passes) {
   uint64_t checksum = SEED;
@@ -138,7 +163,7 @@ uint64_t measure(Root root, Fingerprint fingerprint, size_t passes) {
 
 int main(int argc, char** argv) {
   if (argc != 4) {
-    std::cerr << "usage: cpp-generated-api direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs PASSES FIXTURE\n";
+    std::cerr << "usage: cpp-generated-api direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups PASSES FIXTURE\n";
     return 2;
   }
   auto mode = std::string_view(argv[1]);
@@ -156,6 +181,10 @@ int main(int argc, char** argv) {
     checksum = measure(message.getRoot<capnp::AnyStruct>(), directBlobFingerprint, passes);
   } else if (mode == "generated-blobs" || mode == "borrowed-blobs") {
     checksum = measure(message.getRoot<WireFixture>(), generatedBlobFingerprint, passes);
+  } else if (mode == "borrowed-direct-groups") {
+    checksum = measure(message.getRoot<capnp::AnyStruct>(), directGroupFingerprint, passes);
+  } else if (mode == "borrowed-groups") {
+    checksum = measure(message.getRoot<WireFixture>(), generatedGroupFingerprint, passes);
   } else {
     std::cerr << "unknown benchmark mode\n";
     return 2;
