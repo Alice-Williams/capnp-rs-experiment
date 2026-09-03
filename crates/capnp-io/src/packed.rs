@@ -456,6 +456,7 @@ pub fn pack(input: &[u8], max_output_bytes: usize) -> Result<Vec<u8>, PackedErro
         } else {
             let encoded_len = 1 + tag.count_ones() as usize;
             check_output_limit(output.len(), encoded_len, max_output_bytes)?;
+            output.reserve(encoded_len);
             output.push(tag);
             for byte in word {
                 if *byte != 0 {
