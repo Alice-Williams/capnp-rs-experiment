@@ -159,3 +159,37 @@ readers and list schemas by value, so no equivalent ownership reconstruction is
 required between these immediately consumed operations. The next isolation
 extends the callback-scoped dynamic view to typed list and struct access plans,
 while retaining the owned dynamic values for callers that need them to escape.
+
+## Callback-scoped nested reflection gate
+
+Final evidence:
+[`benchmarks/results/2026-09-04-m56-reflection-nested-final-5m`](../../benchmarks/results/2026-09-04-m56-reflection-nested-final-5m)
+at native commit `ee96ce4399b5ce7308bc58ba7736c43d7f6d128f`.
+
+| Operation | C++ ns/op | Native ns/op | Native / C++ |
+| --- | ---: | ---: | ---: |
+| dynamic primitive-list element | 90.1311 | 29.3392 | 0.326 |
+| dynamic nested-struct scalar | 100.1701 | 28.9179 | 0.289 |
+| dynamic struct-list scalar | 143.0482 | 46.1999 | 0.323 |
+| dynamic nested-list scalar | 136.4062 | 43.8162 | 0.321 |
+
+`DynamicListField` and `DynamicStructField` resolve the field's runtime type,
+pointer offset, union metadata, and child brand once. Their callback-scoped
+views keep the original checked message and shared traversal budget borrowed
+across every nested hop. Primitive lists read directly from the open list;
+struct-list elements borrow their inline-composite reader; pointer-list
+elements borrow the nested list reader. Cached scalar fields read from the
+already-open child data section. Bounds, wire-kind, schema-allocation,
+containing-type, active-union, nesting, traversal, and schema-evolution checks
+remain on those paths. The access plans currently require the normal null
+pointer default; callers needing a non-null aggregate schema default retain the
+existing owned dynamic path.
+
+This removes the baseline's repeated `Arc`, runtime `Type`/`Brand`, and retained
+coordinate construction without changing the observed work or using `unsafe`.
+All Rust/C++ checksums agree. The four native medians fall by 77.4%, 78.0%,
+80.2%, and 83.1% respectively from the recorded baseline, and each cumulative
+ratio is better than the 0.413 borrowed-blob control in this same evidence run.
+The primitive-list, nested-struct, struct-list, and nested-list reflection gates
+are therefore closed. Active/unknown unions, defaults/evolution, enums, and
+builder reflection remain the next reflection shapes.
