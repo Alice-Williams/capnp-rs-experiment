@@ -1915,14 +1915,39 @@ impl StructBuilder<'_> {
         value: u64,
         default: u64,
     ) -> Result<(), ArenaError> {
-        let discriminant_byte = self.data_element_offset(discriminant_offset, 2)?;
-        let value_byte = self.data_element_offset(value_offset, 8)?;
+        let discriminant_relative = u64::from(discriminant_offset) * 2;
+        let discriminant_end = discriminant_relative + 2;
+        let value_relative = u64::from(value_offset) * 8;
+        let value_end = value_relative + 8;
+        let required = discriminant_end.max(value_end);
+        let available = u64::from(self.reference.data_words) * 8;
+        if required > available {
+            let (index, width) = if discriminant_end > available {
+                (discriminant_offset, 2)
+            } else {
+                (value_offset, 8)
+            };
+            return Err(ArenaError::IndexOutOfBounds {
+                index,
+                len: u32::try_from(available / width).unwrap_or(u32::MAX),
+            });
+        }
+
+        let data_start = byte_offset(self.reference.content)?;
+        let data_end = data_start
+            .checked_add(usize::try_from(required).map_err(|_| ArenaError::AllocationOverflow)?)
+            .ok_or(ArenaError::AllocationOverflow)?;
         let segment = self.arena.segment_mut(self.reference.content.segment_id)?;
-        // The offset checks above prove both writes fit the allocated struct;
-        // the arena invariant keeps that complete allocation in this segment.
-        segment[discriminant_byte..discriminant_byte + 2]
+        let data = segment
+            .get_mut(data_start..data_end)
+            .ok_or(ArenaError::AllocationOverflow)?;
+        let discriminant_byte =
+            usize::try_from(discriminant_relative).map_err(|_| ArenaError::AllocationOverflow)?;
+        let value_byte =
+            usize::try_from(value_relative).map_err(|_| ArenaError::AllocationOverflow)?;
+        data[discriminant_byte..discriminant_byte + 2]
             .copy_from_slice(&discriminant_value.to_le_bytes());
-        segment[value_byte..value_byte + 8].copy_from_slice(&(value ^ default).to_le_bytes());
+        data[value_byte..value_byte + 8].copy_from_slice(&(value ^ default).to_le_bytes());
         Ok(())
     }
 
