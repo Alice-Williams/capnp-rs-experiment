@@ -97,7 +97,8 @@ int main(int argc, char** argv) {
     } else if (mode == "dynamic-name") {
       observed = dynamicScalar(dynamicPointer->get(name), selector);
     } else if (mode == "dynamic-index") {
-      observed = dynamicScalar(dynamicPointer->get(selectedFields[selector]), selector);
+      observed = dynamicScalar(
+          dynamicPointer->get(fields[selectedFields[selector].getIndex()]), selector);
     } else {
       std::cerr << "unknown benchmark mode\n";
       return 2;
