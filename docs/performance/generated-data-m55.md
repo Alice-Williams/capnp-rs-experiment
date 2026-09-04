@@ -753,3 +753,46 @@ stable acceptance signal by itself; the final gate needs a longer run and an
 isolated generated/direct comparison. The next change emits constant-layout
 group access plus a union-aware scalar setter that writes the payload and tag
 through checked primitives without reflection.
+
+## Union builder gate
+
+Generated access to non-generic groups now embeds the group type ID, and the
+`UInt64` union setter embeds the discriminant offset, arm value, payload
+offset, and default. It therefore bypasses both dynamic field lookups and the
+runtime value switch. The checked message builder writes the discriminant and
+payload through one segment access, validates both destinations before either
+is changed, and proves the complete data range with one success-path bounds
+check. The failure path retains the original field-specific out-of-bounds
+error. No unchecked code or weaker mutation guarantee is used.
+
+The paired harness also retains the group builder and repeats only the union
+write. This removes group construction from both languages and corroborates
+the generated wrapper cost when subtraction of the full operations falls
+below timer resolution. Optimized disassembly shows that the retained direct
+and generated Rust success loops contain the same arena lookup, range check,
+two stores, and checksum instructions; their different error representations
+exist only on cold branches.
+
+Final five-million-operation evidence at native commit `e177c0e` is in
+[`benchmarks/results/2026-09-04-m55-union-builder-final-5m-v3`](../../benchmarks/results/2026-09-04-m55-union-builder-final-5m-v3).
+
+| Operation | C++ ns/op | Native ns/op | Native / C++ |
+| --- | ---: | ---: | ---: |
+| direct scalar-union selection and write | 0.7421 | 1.6436 | 2.215 |
+| generated scalar-union selection and write | 0.7516 | 1.5669 | 2.085 |
+| retained direct union write | 0.7498 | 1.6096 | 2.147 |
+| retained generated union write | 0.7556 | 1.5747 | 2.084 |
+
+Generated Rust is slightly faster than its direct Rust control in both the
+full and retained workloads. Its cumulative ratio improves on the paired
+direct-runtime ceiling, and both generated-minus-direct comparisons are below
+timer resolution. The result closes the generated union-builder gate.
+
+The absolute direct operation remains roughly 0.9 ns slower than C++ because
+`StructBuilder` deliberately retains a relocatable arena coordinate and
+revalidates the segment range, whereas the optimized C++ `AnyStruct::Builder`
+loop retains a native segment pointer and hoists its `ArrayPtr` bounds. At this
+sub-two-nanosecond scale the ratio magnifies a handful of instructions; the
+implementation keeps the safe coordinate representation needed for arena
+growth rather than introducing a cached raw pointer. Defaults and evolution
+builders remain open.
