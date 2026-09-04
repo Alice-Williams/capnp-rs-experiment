@@ -206,6 +206,21 @@ The initial reader checkpoint is intentionally narrower than the completed M55
 gate. Builder, list, struct/group, union/default, and evolution cases join this
 same runner before the milestone advances.
 
+## M56 schema and dynamic-reflection comparison
+
+`run-reflection-baselines.sh` starts M56 at the lowest tooling layer. It
+compares field-name lookup, field-index access, dynamic reads by name, and
+dynamic reads through the closest cached-field path over the same four scalar
+fields and pinned wire message. Schema loading, framing, and root construction
+are outside the timed region in both implementations.
+
+Run it inside the Linux development container from a committed worktree:
+
+```sh
+benchmarks/run-reflection-baselines.sh \
+  benchmarks/results/DATE-m56-reflection-baseline-g-drive-docker
+```
+
 ## M54 low-level packing comparison
 
 `run-packing-baselines.sh` compares fresh-output `pack` and `unpack` operations
