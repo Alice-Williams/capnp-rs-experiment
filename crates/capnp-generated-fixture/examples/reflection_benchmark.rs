@@ -25,7 +25,7 @@ const FRAME: &[u8] = include_bytes!(concat!(
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let mode = args.next().ok_or(
-        "usage: reflection_benchmark schema-name|schema-index|dynamic-name|dynamic-index|dynamic-field|dynamic-blobs-borrowed|dynamic-blobs-owned|dynamic-primitive-list|dynamic-nested-struct|dynamic-struct-list|dynamic-nested-list PASSES",
+        "usage: reflection_benchmark schema-name|schema-index|dynamic-name|dynamic-index|dynamic-field|dynamic-blobs-borrowed|dynamic-blobs-owned|dynamic-primitive-list|dynamic-nested-struct|dynamic-struct-list|dynamic-nested-list|dynamic-enum|dynamic-default|dynamic-union-active PASSES",
     )?;
     let passes = args.next().ok_or("missing passes")?.parse::<usize>()?;
     if args.next().is_some()
@@ -43,6 +43,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 | "dynamic-nested-struct"
                 | "dynamic-struct-list"
                 | "dynamic-nested-list"
+                | "dynamic-enum"
+                | "dynamic-default"
+                | "dynamic-union-active"
         )
     {
         return Err("expected a known mode and positive PASSES".into());
@@ -84,10 +87,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let nested_struct_field = dynamic.struct_field("node")?;
     let struct_list_field = dynamic.list_field("structs")?;
     let nested_list_field = dynamic.list_field("nestedLists")?;
+    let color_field = dynamic.field("color")?;
+    let defaulted_field = dynamic.field("defaulted")?;
+    let choice_field = dynamic.field("choice")?;
     let DynamicValue::Struct(Some(nested_probe)) = dynamic.get("node")? else {
         return Err("dynamic nested struct field has the wrong type".into());
     };
     let nested_value_field = nested_probe.field("value")?;
+    let DynamicValue::Struct(Some(choice_probe)) = dynamic.get_field(choice_field)? else {
+        return Err("dynamic union group has the wrong type".into());
+    };
+    let choice_number_field = choice_probe.field("number")?;
 
     let started = Instant::now();
     let mut checksum = SEED;
@@ -149,6 +159,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     outer.with_list(0, |inner| Ok(u64::from(inner.get_u16(2)?)))
                 })
             })?,
+            "dynamic-enum" => {
+                let DynamicValue::Enum(value) = black_box(&dynamic).get_field(color_field)? else {
+                    return Err("dynamic enum field has the wrong type".into());
+                };
+                u64::from(value.ordinal)
+            }
+            "dynamic-default" => {
+                let DynamicValue::UInt32(value) = black_box(&dynamic).get_field(defaulted_field)?
+                else {
+                    return Err("dynamic default field has the wrong type".into());
+                };
+                u64::from(value)
+            }
+            "dynamic-union-active" => {
+                let DynamicValue::Struct(Some(choice)) =
+                    black_box(&dynamic).get_field(choice_field)?
+                else {
+                    return Err("dynamic union group has the wrong type".into());
+                };
+                let active = choice
+                    .active_union_field()?
+                    .ok_or("dynamic union field is unknown")?;
+                let discriminant = active
+                    .discriminant_value
+                    .ok_or("dynamic union field lacks a discriminant")?;
+                let DynamicValue::UInt64(value) = choice.get_field(choice_number_field)? else {
+                    return Err("dynamic union value has the wrong type".into());
+                };
+                u64::from(discriminant).rotate_left(17) ^ value
+            }
             _ => unreachable!(),
         };
         checksum = checksum.rotate_left(9) ^ observed;

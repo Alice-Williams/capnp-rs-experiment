@@ -67,6 +67,7 @@ workloads=(
     schema-name schema-index dynamic-name dynamic-index dynamic-field
     dynamic-blobs-borrowed dynamic-blobs-owned
     dynamic-primitive-list dynamic-nested-struct dynamic-struct-list dynamic-nested-list
+    dynamic-enum dynamic-default dynamic-union-active
 )
 
 run_workload() {

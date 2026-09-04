@@ -77,7 +77,7 @@ uint64_t blobFingerprint(
 
 int main(int argc, char** argv) {
   if (argc != 4) {
-    std::cerr << "usage: cpp-reflection schema-name|schema-index|dynamic-name|dynamic-index|dynamic-field|dynamic-blobs-borrowed|dynamic-blobs-owned|dynamic-primitive-list|dynamic-nested-struct|dynamic-struct-list|dynamic-nested-list PASSES FIXTURE\n";
+    std::cerr << "usage: cpp-reflection schema-name|schema-index|dynamic-name|dynamic-index|dynamic-field|dynamic-blobs-borrowed|dynamic-blobs-owned|dynamic-primitive-list|dynamic-nested-struct|dynamic-struct-list|dynamic-nested-list|dynamic-enum|dynamic-default|dynamic-union-active PASSES FIXTURE\n";
     return 2;
   }
   auto mode = std::string_view(argv[1]);
@@ -101,6 +101,9 @@ int main(int argc, char** argv) {
   auto nodeField = schema.getFieldByName("node");
   auto structsField = schema.getFieldByName("structs");
   auto nestedListsField = schema.getFieldByName("nestedLists");
+  auto colorField = schema.getFieldByName("color");
+  auto defaultedField = schema.getFieldByName("defaulted");
+  auto choiceField = schema.getFieldByName("choice");
   auto nodeValueField = capnp::Schema::from<Node>().getFieldByName("value");
 
   auto started = std::chrono::steady_clock::now();
@@ -150,6 +153,16 @@ int main(int argc, char** argv) {
       auto outer = dynamicPointer->get(nestedListsField).as<capnp::DynamicList>();
       auto inner = outer[0].as<capnp::DynamicList>();
       observed = inner[2].as<uint16_t>();
+    } else if (mode == "dynamic-enum") {
+      observed = dynamicPointer->get(colorField).as<capnp::DynamicEnum>().getRaw();
+    } else if (mode == "dynamic-default") {
+      observed = dynamicPointer->get(defaultedField).as<uint32_t>();
+    } else if (mode == "dynamic-union-active") {
+      auto choice = dynamicPointer->get(choiceField).as<capnp::DynamicStruct>();
+      auto active = KJ_REQUIRE_NONNULL(choice.which());
+      auto discriminant = active.getProto().getDiscriminantValue();
+      observed = std::rotl(uint64_t{discriminant}, 17)
+          ^ choice.get(active).as<uint64_t>();
     } else {
       std::cerr << "unknown benchmark mode\n";
       return 2;
