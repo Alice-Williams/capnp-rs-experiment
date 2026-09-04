@@ -70,3 +70,29 @@ dispatch is about 31.80 ns in Rust versus 44.96 ns in C++ (0.707x); name-based
 dispatch is about 33.47 ns versus 42.54 ns (0.787x). Both the cumulative and
 incremental scalar-reflection gates are closed. Blob, list, nested struct,
 union, evolution, and builder reflection remain separate gates.
+
+## Dynamic blob-ownership baseline
+
+Evidence:
+[`benchmarks/results/2026-09-04-m56-reflection-blobs-baseline-5m`](../../benchmarks/results/2026-09-04-m56-reflection-blobs-baseline-5m)
+at native commit `beaa376e980381967ee4cfc6d1c6e526c4f784bf`.
+The two blob cases read the same Text and Data fields through cached field
+descriptors. The borrowed C++ case consumes its normal zero-copy views; the
+owned C++ control explicitly allocates and copies both payloads so that it
+matches the ownership contract of Rust's current `DynamicValue::Text(String)`
+and `DynamicValue::Data(Vec<u8>)`. Checksums are identical across both
+implementations and ownership modes.
+
+| Operation | C++ ns/op | Native ns/op | Native / C++ |
+| --- | ---: | ---: | ---: |
+| dynamic Text + Data, borrowed C++ view | 104.3371 | 167.8527 | 1.609 |
+| dynamic Text + Data, owned copies | 143.7810 | 162.9723 | 1.133 |
+
+The native owned path is 13.3% slower than the matched owned-copy control, but
+60.9% slower than C++'s natural reflection API. The 39.4 ns difference between
+the two C++ cases also demonstrates that allocation and payload copying are a
+material part of the apparent language gap. Scalar reflection remains faster
+in this same run, including the cached-field path at 0.577x C++, so the open
+work is specifically blob representation and conversion rather than descriptor
+dispatch. The next gate adds a lifetime-bound, zero-copy dynamic blob view while
+retaining the owned API for callers that need values to escape the reader.
