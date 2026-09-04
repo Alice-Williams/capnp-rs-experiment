@@ -34,7 +34,7 @@ const EMPTY_FRAME: &[u8] = &[0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let mode = args.next().ok_or(
-        "usage: generated_api_benchmark direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups|borrowed-direct-lists|borrowed-lists|borrowed-direct-nested|borrowed-nested|borrowed-direct-struct-lists|borrowed-struct-lists|borrowed-direct-evolution|borrowed-evolution|borrowed-direct-defaults|borrowed-defaults|direct-builder-scalars|generated-builder-scalars|direct-builder-blobs|generated-builder-blobs|direct-builder-struct|generated-builder-struct|direct-builder-list|generated-builder-list|direct-builder-struct-list|generated-builder-struct-list|direct-builder-struct-list-hot|generated-builder-struct-list-hot|direct-builder-pointer-list|generated-builder-pointer-list|direct-builder-union|generated-builder-union PASSES",
+        "usage: generated_api_benchmark direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups|borrowed-direct-lists|borrowed-lists|borrowed-direct-nested|borrowed-nested|borrowed-direct-struct-lists|borrowed-struct-lists|borrowed-direct-evolution|borrowed-evolution|borrowed-direct-defaults|borrowed-defaults|direct-builder-scalars|generated-builder-scalars|direct-builder-blobs|generated-builder-blobs|direct-builder-struct|generated-builder-struct|direct-builder-list|generated-builder-list|direct-builder-struct-list|generated-builder-struct-list|direct-builder-struct-list-hot|generated-builder-struct-list-hot|direct-builder-pointer-list|generated-builder-pointer-list|direct-builder-union|generated-builder-union|direct-builder-union-hot|generated-builder-union-hot PASSES",
     )?;
     let passes = args.next().ok_or("missing passes")?.parse::<usize>()?;
     if args.next().is_some()
@@ -77,6 +77,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 | "generated-builder-pointer-list"
                 | "direct-builder-union"
                 | "generated-builder-union"
+                | "direct-builder-union-hot"
+                | "generated-builder-union-hot"
         )
     {
         return Err("expected a known mode and positive PASSES".into());
@@ -353,6 +355,32 @@ fn run_builder_benchmark(
             write_generated_union,
             union_builder_fingerprint,
         )?
+    } else if mode == "direct-builder-union-hot" {
+        let node = schema
+            .node(wire_fixture::TYPE_ID)
+            .ok_or("WireFixture schema is missing")?;
+        let NodeKind::Struct(structure) = &node.kind else {
+            return Err("WireFixture is not a struct".into());
+        };
+        let mut builder =
+            arena.init_root_struct(structure.data_word_count, structure.pointer_count)?;
+        started = Instant::now();
+        measure_builder(
+            passes,
+            &mut builder,
+            write_direct_union,
+            union_builder_fingerprint,
+        )?
+    } else if mode == "generated-builder-union-hot" {
+        let mut root = wire_fixture::Builder::init_root(schema, &mut arena)?;
+        let mut builder = root.choice()?;
+        started = Instant::now();
+        measure_builder(
+            passes,
+            &mut builder,
+            write_generated_union_hot,
+            union_builder_fingerprint,
+        )?
     } else if mode == "direct-builder-struct-list-hot" {
         let node = schema
             .node(wire_fixture::TYPE_ID)
@@ -616,6 +644,13 @@ fn write_generated_union(
     pass: usize,
 ) -> Result<(), capnp_schema::DynamicError> {
     builder.choice()?.set_number(union_builder_value(pass))
+}
+
+fn write_generated_union_hot(
+    builder: &mut choice::Builder<'_, '_>,
+    pass: usize,
+) -> Result<(), capnp_schema::DynamicError> {
+    builder.set_number(union_builder_value(pass))
 }
 
 fn write_direct_scalars(

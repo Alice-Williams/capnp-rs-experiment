@@ -100,6 +100,7 @@ def main() -> None:
                 "struct-list-hot",
                 "pointer-list",
                 "union",
+                "union-hot",
             ):
                 direct_case = f"direct-builder-{shape}"
                 generated_case = f"generated-builder-{shape}"

@@ -573,6 +573,25 @@ void benchmarkGeneratedUnionBuilder(size_t passes) {
   std::cout << elapsed.count() << '\t' << checksum << '\n';
 }
 
+void benchmarkDirectUnionBuilderHot(size_t passes) {
+  benchmarkDirectUnionBuilder(passes);
+}
+
+void benchmarkGeneratedUnionBuilderHot(size_t passes) {
+  capnp::MallocMessageBuilder message;
+  auto root = message.initRoot<WireFixture>();
+  auto choice = root.getChoice();
+  auto write = [](auto& builder, size_t pass) {
+    builder.setNumber(unionBuilderValue(pass));
+  };
+  auto started = std::chrono::steady_clock::now();
+  auto checksum = measureBuilder(
+      choice, write, unionBuilderFingerprint, passes);
+  auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now() - started);
+  std::cout << elapsed.count() << '\t' << checksum << '\n';
+}
+
 uint64_t directScalarFingerprint(capnp::AnyStruct::Reader root) {
   auto data = root.getDataSection();
   uint64_t value = data.size() > 0 && (data[0] & 1) != 0;
@@ -779,7 +798,7 @@ uint64_t measure(Root root, Fingerprint fingerprint, size_t passes) {
 
 int main(int argc, char** argv) {
   if (argc != 4) {
-    std::cerr << "usage: cpp-generated-api direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups|borrowed-direct-lists|borrowed-lists|borrowed-direct-nested|borrowed-nested|borrowed-direct-struct-lists|borrowed-struct-lists|borrowed-direct-evolution|borrowed-evolution|borrowed-direct-defaults|borrowed-defaults|direct-builder-scalars|generated-builder-scalars|direct-builder-blobs|generated-builder-blobs|direct-builder-struct|generated-builder-struct|direct-builder-list|generated-builder-list|direct-builder-struct-list|generated-builder-struct-list|direct-builder-struct-list-hot|generated-builder-struct-list-hot|direct-builder-pointer-list|generated-builder-pointer-list|direct-builder-union|generated-builder-union PASSES FIXTURE\n";
+    std::cerr << "usage: cpp-generated-api direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups|borrowed-direct-lists|borrowed-lists|borrowed-direct-nested|borrowed-nested|borrowed-direct-struct-lists|borrowed-struct-lists|borrowed-direct-evolution|borrowed-evolution|borrowed-direct-defaults|borrowed-defaults|direct-builder-scalars|generated-builder-scalars|direct-builder-blobs|generated-builder-blobs|direct-builder-struct|generated-builder-struct|direct-builder-list|generated-builder-list|direct-builder-struct-list|generated-builder-struct-list|direct-builder-struct-list-hot|generated-builder-struct-list-hot|direct-builder-pointer-list|generated-builder-pointer-list|direct-builder-union|generated-builder-union|direct-builder-union-hot|generated-builder-union-hot PASSES FIXTURE\n";
     return 2;
   }
   auto mode = std::string_view(argv[1]);
@@ -846,6 +865,14 @@ int main(int argc, char** argv) {
   }
   if (mode == "generated-builder-union") {
     benchmarkGeneratedUnionBuilder(passes);
+    return 0;
+  }
+  if (mode == "direct-builder-union-hot") {
+    benchmarkDirectUnionBuilderHot(passes);
+    return 0;
+  }
+  if (mode == "generated-builder-union-hot") {
+    benchmarkGeneratedUnionBuilderHot(passes);
     return 0;
   }
   auto words = mode == "borrowed-direct-defaults" || mode == "borrowed-defaults"
