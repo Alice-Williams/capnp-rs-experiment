@@ -212,9 +212,11 @@ same runner before the milestone advances.
 compares field-name lookup, field-index access, dynamic reads by name or index,
 schema-checked prepared descriptors, borrowed blobs, primitive and nested
 lists, nested structs, enum/default reads, and known and unknown union
-discriminants over the same pinned schema and wire message. Schema loading,
-framing, root construction, descriptor resolution, and synthetic unknown-union
-fixture construction are outside the timed region in both implementations.
+discriminants over the same pinned schema and wire message. It also compares a
+v1 dynamic schema reading a v2 message with an unknown enum ordinal and a
+struct-list field viewed through its v1 primitive-list declaration. Schema
+loading, framing, root construction, descriptor resolution, and fixture
+construction are outside the timed region in both implementations.
 
 Run it inside the Linux development container from a committed worktree:
 

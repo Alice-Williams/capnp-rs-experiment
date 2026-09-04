@@ -296,3 +296,26 @@ The native median falls by 42.6% from baseline. Its 0.278 cumulative ratio is
 also materially better than the 0.448 borrowed-value control in the same run,
 so the unknown-union reader gate is closed. Schema evolution and builder
 reflection remain open.
+
+## Schema-evolution reader gate
+
+Final evidence:
+[`benchmarks/results/2026-09-04-m56-reflection-evolution-final-5m`](../../benchmarks/results/2026-09-04-m56-reflection-evolution-final-5m)
+at native commit `efbe22ff`.
+
+The v2 writer fixture is read through the compiled v1 schema on both sides.
+Each timed iteration dynamically reads the exact scalar and text values written
+by v2, preserves the v2-only enum value as unknown raw ordinal `2`, and views a
+v2 `List(Item)` field through v1's compatible `List(UInt32)` declaration. The
+second upgraded-list element is `42`. Schema loading, framing, root creation,
+field lookup, and fixture generation remain outside the timed region, and all
+C++/Rust checksums agree.
+
+| Operation | C++ ns/op | Native ns/op | Native / C++ |
+| --- | ---: | ---: | ---: |
+| dynamic v1-read-v2 evolution | 299.2500 | 100.2990 | 0.335 |
+| borrowed Text + Data control | 134.4009 | 60.6836 | 0.452 |
+
+The native evolution path is 66.5% faster than C++. Its 0.335 cumulative ratio
+is also better than the 0.452 borrowed-value control in the same run, so the
+schema-evolution reader gate is closed. Builder reflection remains open.
