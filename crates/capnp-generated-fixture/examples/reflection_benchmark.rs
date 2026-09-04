@@ -5,7 +5,9 @@ use std::time::Instant;
 use capnp_generated_fixture::wire::wire_fixture;
 use capnp_io::{FrameLimits, FrameRead, parse_frame};
 use capnp_message::{OwnedMessage, ReaderLimits};
-use capnp_schema::{CompiledSchema, DynamicStruct, DynamicValue, LoadLimits, NodeKind};
+use capnp_schema::{
+    CompiledSchema, DynamicScalarValue, DynamicStruct, DynamicValue, LoadLimits, NodeKind,
+};
 
 const SEED: u64 = 0x4d59_5df4_d0f3_3173;
 const SCALAR_NAMES: [&str; 4] = ["uint8Value", "uint16Value", "uint32Value", "uint64Value"];
@@ -87,17 +89,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let nested_struct_field = dynamic.struct_field("node")?;
     let struct_list_field = dynamic.list_field("structs")?;
     let nested_list_field = dynamic.list_field("nestedLists")?;
-    let color_field = dynamic.field("color")?;
-    let defaulted_field = dynamic.field("defaulted")?;
-    let choice_field = dynamic.field("choice")?;
+    let color_field = dynamic.scalar_field("color")?;
+    let defaulted_field = dynamic.scalar_field("defaulted")?;
+    let choice_field = dynamic.struct_field("choice")?;
     let DynamicValue::Struct(Some(nested_probe)) = dynamic.get("node")? else {
         return Err("dynamic nested struct field has the wrong type".into());
     };
     let nested_value_field = nested_probe.field("value")?;
-    let DynamicValue::Struct(Some(choice_probe)) = dynamic.get_field(choice_field)? else {
+    let DynamicValue::Struct(Some(choice_probe)) = dynamic.get("choice")? else {
         return Err("dynamic union group has the wrong type".into());
     };
-    let choice_number_field = choice_probe.field("number")?;
+    let choice_number_field = choice_probe.scalar_field("number")?;
 
     let started = Instant::now();
     let mut checksum = SEED;
@@ -160,35 +162,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 })
             })?,
             "dynamic-enum" => {
-                let DynamicValue::Enum(value) = black_box(&dynamic).get_field(color_field)? else {
+                let DynamicScalarValue::Enum { ordinal, .. } =
+                    black_box(&dynamic).get_scalar(&color_field)?
+                else {
                     return Err("dynamic enum field has the wrong type".into());
                 };
-                u64::from(value.ordinal)
+                u64::from(ordinal)
             }
             "dynamic-default" => {
-                let DynamicValue::UInt32(value) = black_box(&dynamic).get_field(defaulted_field)?
+                let DynamicScalarValue::UInt32(value) =
+                    black_box(&dynamic).get_scalar(&defaulted_field)?
                 else {
                     return Err("dynamic default field has the wrong type".into());
                 };
                 u64::from(value)
             }
-            "dynamic-union-active" => {
-                let DynamicValue::Struct(Some(choice)) =
-                    black_box(&dynamic).get_field(choice_field)?
-                else {
-                    return Err("dynamic union group has the wrong type".into());
-                };
-                let active = choice
-                    .active_union_field()?
-                    .ok_or("dynamic union field is unknown")?;
-                let discriminant = active
-                    .discriminant_value
-                    .ok_or("dynamic union field lacks a discriminant")?;
-                let DynamicValue::UInt64(value) = choice.get_field(choice_number_field)? else {
-                    return Err("dynamic union value has the wrong type".into());
-                };
-                u64::from(discriminant).rotate_left(17) ^ value
-            }
+            "dynamic-union-active" => black_box(&dynamic).with_view(|view| {
+                view.with_struct(&choice_field, |choice| {
+                    let active = choice.active_union_field()?.ok_or(
+                        capnp_schema::DynamicError::TypeMismatch {
+                            expected: "known dynamic union field",
+                        },
+                    )?;
+                    let discriminant = active.discriminant_value.ok_or(
+                        capnp_schema::DynamicError::TypeMismatch {
+                            expected: "dynamic union discriminant",
+                        },
+                    )?;
+                    let DynamicScalarValue::UInt64(value) =
+                        choice.get_scalar(&choice_number_field)?
+                    else {
+                        return Err(capnp_schema::DynamicError::TypeMismatch {
+                            expected: "UInt64 dynamic union value",
+                        });
+                    };
+                    Ok(u64::from(discriminant).rotate_left(17) ^ value)
+                })
+            })?,
             _ => unreachable!(),
         };
         checksum = checksum.rotate_left(9) ^ observed;
@@ -202,7 +212,7 @@ fn nested_u32(
     child: &capnp_schema::DynamicStructView<'_>,
     field: capnp_schema::DynamicField<'_>,
 ) -> Result<u64, capnp_schema::DynamicError> {
-    let DynamicValue::UInt32(value) = child.get_scalar(field)? else {
+    let DynamicValue::UInt32(value) = child.get_scalar_field(field)? else {
         return Err(capnp_schema::DynamicError::TypeMismatch {
             expected: "UInt32 benchmark field",
         });

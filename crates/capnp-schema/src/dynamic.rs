@@ -178,6 +178,52 @@ pub struct DynamicDataField<'schema> {
     union: Option<DynamicUnionAccess<'schema>>,
 }
 
+/// A copy-only result from a prepared dynamic scalar access.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum DynamicScalarValue {
+    Void,
+    Bool(bool),
+    Int8(i8),
+    Int16(i16),
+    Int32(i32),
+    Int64(i64),
+    UInt8(u8),
+    UInt16(u16),
+    UInt32(u32),
+    UInt64(u64),
+    Float32(f32),
+    Float64(f64),
+    Enum { type_id: NodeId, ordinal: u16 },
+}
+
+#[derive(Clone, Copy, Debug)]
+enum DynamicScalarKind {
+    Void,
+    Bool,
+    Int8,
+    Int16,
+    Int32,
+    Int64,
+    UInt8,
+    UInt16,
+    UInt32,
+    UInt64,
+    Float32,
+    Float64,
+    Enum { type_id: NodeId },
+}
+
+/// A reusable, type-checked access plan for one dynamic scalar field.
+#[derive(Clone, Copy, Debug)]
+pub struct DynamicScalarField<'schema> {
+    schema: &'schema Arc<CompiledSchema>,
+    type_id: NodeId,
+    offset: u32,
+    kind: DynamicScalarKind,
+    default: DynamicScalarValue,
+    union: Option<DynamicUnionAccess<'schema>>,
+}
+
 /// A reusable, type-checked access plan for one dynamic List field.
 #[derive(Clone, Debug)]
 pub struct DynamicListField<'schema> {
@@ -193,10 +239,16 @@ pub struct DynamicListField<'schema> {
 pub struct DynamicStructField<'schema> {
     schema: &'schema Arc<CompiledSchema>,
     type_id: NodeId,
-    offset: u16,
+    access: DynamicStructAccess,
     child_type_id: NodeId,
     child_brand: Brand,
     union: Option<DynamicUnionAccess<'schema>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum DynamicStructAccess {
+    Pointer(u16),
+    Group,
 }
 
 impl DynamicField<'_> {
@@ -490,6 +542,12 @@ impl DynamicStruct {
         self.prepare_data_field(field)
     }
 
+    /// Resolves and type-checks a reusable scalar access plan.
+    pub fn scalar_field(&self, name: &str) -> Result<DynamicScalarField<'_>, DynamicError> {
+        let field = self.field(name)?;
+        self.prepare_scalar_field(field)
+    }
+
     /// Resolves and type-checks a reusable List access plan.
     pub fn list_field(&self, name: &str) -> Result<DynamicListField<'_>, DynamicError> {
         let field = self.field(name)?;
@@ -535,10 +593,41 @@ impl DynamicStruct {
         self.prepare_data_field(field)
     }
 
+    /// Type-checks an indexed field as a reusable scalar access plan.
+    pub fn scalar_field_by_index(
+        &self,
+        index: usize,
+    ) -> Result<DynamicScalarField<'_>, DynamicError> {
+        let field = self.field_by_index(index)?;
+        self.prepare_scalar_field(field)
+    }
+
     #[inline(always)]
     pub fn get_field(&self, field: DynamicField<'_>) -> Result<DynamicValue, DynamicError> {
         let (field, structure) = self.require_field(field)?;
         self.read_field(field, structure)
+    }
+
+    /// Reads through a prepared scalar plan without constructing an owned
+    /// dynamic value or reopening an already validated root pointer.
+    #[inline(always)]
+    pub fn get_scalar(
+        &self,
+        field: &DynamicScalarField<'_>,
+    ) -> Result<DynamicScalarValue, DynamicError> {
+        self.require_scalar_field(field)?;
+        match &self.backing {
+            StructBacking::Pointer(value) => {
+                let data = value.data_section()?;
+                require_dynamic_union(data, field.union)?;
+                read_dynamic_scalar(data, field.offset, field.kind, field.default)
+            }
+            StructBacking::Element(value) => Ok(value.with_reader(|reader| {
+                let data = reader.data_section()?;
+                require_dynamic_union(data, field.union)?;
+                read_dynamic_scalar(data, field.offset, field.kind, field.default)
+            })??),
+        }
     }
 
     /// Opens one short-lived borrow context for a batch of dynamic reads.
@@ -917,6 +1006,33 @@ impl DynamicStruct {
         })
     }
 
+    fn prepare_scalar_field<'field>(
+        &self,
+        field: DynamicField<'field>,
+    ) -> Result<DynamicScalarField<'field>, DynamicError> {
+        let schema = field.schema;
+        let (field, structure) = self.require_field(field)?;
+        let FieldKind::Slot {
+            offset,
+            ty,
+            default_value,
+            ..
+        } = &field.kind
+        else {
+            return Err(type_mismatch("scalar field"));
+        };
+        let resolved = self.resolve_type(ty);
+        let (kind, default) = prepare_dynamic_scalar(&resolved, default_value)?;
+        Ok(DynamicScalarField {
+            schema,
+            type_id: self.type_id,
+            offset: *offset,
+            kind,
+            default,
+            union: dynamic_union_access(field, structure),
+        })
+    }
+
     fn prepare_list_field<'field>(
         &self,
         field: DynamicField<'field>,
@@ -953,33 +1069,51 @@ impl DynamicStruct {
     ) -> Result<DynamicStructField<'field>, DynamicError> {
         let schema = field.schema;
         let (field, structure) = self.require_field(field)?;
-        let FieldKind::Slot {
-            offset,
-            ty,
-            default_value,
-            ..
-        } = &field.kind
-        else {
-            return Err(type_mismatch("struct field"));
+        let (access, child_type_id, child_brand) = match &field.kind {
+            FieldKind::Group { type_id } => {
+                (DynamicStructAccess::Group, *type_id, self.brand.clone())
+            }
+            FieldKind::Slot {
+                offset,
+                ty,
+                default_value,
+                ..
+            } => {
+                let Type::Struct {
+                    type_id: child_type_id,
+                    brand: child_brand,
+                } = self.resolve_type(ty)
+                else {
+                    return Err(type_mismatch("struct field"));
+                };
+                if !null_pointer_default(default_value) {
+                    return Err(type_mismatch("struct field with null pointer default"));
+                }
+                (
+                    DynamicStructAccess::Pointer(u16_offset(*offset)?),
+                    child_type_id,
+                    child_brand,
+                )
+            }
         };
-        let Type::Struct {
-            type_id: child_type_id,
-            brand: child_brand,
-        } = self.resolve_type(ty)
-        else {
-            return Err(type_mismatch("struct field"));
-        };
-        if !null_pointer_default(default_value) {
-            return Err(type_mismatch("struct field with null pointer default"));
-        }
         Ok(DynamicStructField {
             schema,
             type_id: self.type_id,
-            offset: u16_offset(*offset)?,
+            access,
             child_type_id,
             child_brand,
             union: dynamic_union_access(field, structure),
         })
+    }
+
+    #[inline(always)]
+    fn require_scalar_field(&self, field: &DynamicScalarField<'_>) -> Result<(), DynamicError> {
+        if field.type_id != self.type_id || !Arc::ptr_eq(field.schema, &self.schema) {
+            return Err(type_mismatch(
+                "scalar field from this dynamic struct schema",
+            ));
+        }
+        Ok(())
     }
 
     #[inline(always)]
@@ -1410,19 +1544,58 @@ impl<'view> DynamicStructView<'view> {
             ));
         }
         self.require_union(field.union)?;
-        let reader = self.reader.read_struct(field.offset)?;
+        let reader = match field.access {
+            DynamicStructAccess::Pointer(offset) => {
+                DynamicStructReader::Struct(self.reader.read_struct(offset)?)
+            }
+            DynamicStructAccess::Group => self.reader,
+        };
         use_struct(DynamicStructView {
             source: None,
             schema: self.schema,
             type_id: field.child_type_id,
             brand: &field.child_brand,
-            reader: DynamicStructReader::Struct(reader),
+            reader,
         })
+    }
+
+    /// Returns the active union field, or `None` for a non-union or an
+    /// unrecognized discriminant.
+    #[inline(always)]
+    pub fn active_union_field(&self) -> Result<Option<&Field>, DynamicError> {
+        let structure = require_struct(self.schema, self.type_id)?;
+        if structure.discriminant_count == 0 {
+            return Ok(None);
+        }
+        let actual = self
+            .reader
+            .data()?
+            .read_u16(structure.discriminant_offset, 0)?;
+        Ok(structure
+            .fields
+            .iter()
+            .find(|field| field.discriminant_value == Some(actual)))
+    }
+
+    /// Reads through a prepared scalar plan from this already-opened struct.
+    #[inline(always)]
+    pub fn get_scalar(
+        &self,
+        field: &DynamicScalarField<'_>,
+    ) -> Result<DynamicScalarValue, DynamicError> {
+        if field.type_id != self.type_id || !Arc::ptr_eq(field.schema, self.schema) {
+            return Err(type_mismatch(
+                "scalar field from this dynamic struct schema",
+            ));
+        }
+        let data = self.reader.data()?;
+        require_dynamic_union(data, field.union)?;
+        read_dynamic_scalar(data, field.offset, field.kind, field.default)
     }
 
     /// Reads a cached scalar field directly from this already-opened struct.
     #[inline(always)]
-    pub fn get_scalar(&self, field: DynamicField<'_>) -> Result<DynamicValue, DynamicError> {
+    pub fn get_scalar_field(&self, field: DynamicField<'_>) -> Result<DynamicValue, DynamicError> {
         let (field, structure) = self.require_field(field)?;
         self.require_active_field(field, structure)?;
         let FieldKind::Slot {
@@ -1636,6 +1809,7 @@ impl DynamicListView<'_> {
     }
 }
 
+#[derive(Clone, Copy)]
 enum DynamicStructReader<'reader> {
     Struct(StructReader<'reader, 'reader, SharedTraversalBudget>),
     Element(StructElementReader<'reader, 'reader, SharedTraversalBudget>),
@@ -3062,6 +3236,146 @@ fn enforce_any_kind(kind: &AnyPointerType, pointer: &OwnedPointerRef) -> Result<
     } else {
         Err(type_mismatch("constrained AnyPointer"))
     }
+}
+
+fn prepare_dynamic_scalar(
+    ty: &Type,
+    default: &Value,
+) -> Result<(DynamicScalarKind, DynamicScalarValue), DynamicError> {
+    Ok(match ty {
+        Type::Void => (DynamicScalarKind::Void, DynamicScalarValue::Void),
+        Type::Bool => (
+            DynamicScalarKind::Bool,
+            DynamicScalarValue::Bool(bool_default(default)?),
+        ),
+        Type::Int8 => (
+            DynamicScalarKind::Int8,
+            DynamicScalarValue::Int8(i8_default(default)?),
+        ),
+        Type::Int16 => (
+            DynamicScalarKind::Int16,
+            DynamicScalarValue::Int16(i16_default(default)?),
+        ),
+        Type::Int32 => (
+            DynamicScalarKind::Int32,
+            DynamicScalarValue::Int32(i32_default(default)?),
+        ),
+        Type::Int64 => (
+            DynamicScalarKind::Int64,
+            DynamicScalarValue::Int64(i64_default(default)?),
+        ),
+        Type::UInt8 => (
+            DynamicScalarKind::UInt8,
+            DynamicScalarValue::UInt8(u8_default(default)?),
+        ),
+        Type::UInt16 => (
+            DynamicScalarKind::UInt16,
+            DynamicScalarValue::UInt16(u16_default(default)?),
+        ),
+        Type::UInt32 => (
+            DynamicScalarKind::UInt32,
+            DynamicScalarValue::UInt32(u32_default(default)?),
+        ),
+        Type::UInt64 => (
+            DynamicScalarKind::UInt64,
+            DynamicScalarValue::UInt64(u64_default(default)?),
+        ),
+        Type::Float32 => (
+            DynamicScalarKind::Float32,
+            DynamicScalarValue::Float32(f32_default(default)?),
+        ),
+        Type::Float64 => (
+            DynamicScalarKind::Float64,
+            DynamicScalarValue::Float64(f64_default(default)?),
+        ),
+        Type::Enum { type_id, .. } => (
+            DynamicScalarKind::Enum { type_id: *type_id },
+            DynamicScalarValue::Enum {
+                type_id: *type_id,
+                ordinal: enum_default(default)?,
+            },
+        ),
+        Type::Text
+        | Type::Data
+        | Type::List(_)
+        | Type::Struct { .. }
+        | Type::Interface { .. }
+        | Type::AnyPointer(_) => return Err(type_mismatch("scalar field")),
+    })
+}
+
+#[inline(always)]
+fn read_dynamic_scalar(
+    data: DataSection<'_>,
+    offset: u32,
+    kind: DynamicScalarKind,
+    default: DynamicScalarValue,
+) -> Result<DynamicScalarValue, DynamicError> {
+    Ok(match (kind, default) {
+        (DynamicScalarKind::Void, DynamicScalarValue::Void) => DynamicScalarValue::Void,
+        (DynamicScalarKind::Bool, DynamicScalarValue::Bool(value)) => {
+            DynamicScalarValue::Bool(data.read_bool(offset, value)?)
+        }
+        (DynamicScalarKind::Int8, DynamicScalarValue::Int8(value)) => {
+            DynamicScalarValue::Int8(data.read_i8(offset, value)?)
+        }
+        (DynamicScalarKind::Int16, DynamicScalarValue::Int16(value)) => {
+            DynamicScalarValue::Int16(data.read_i16(offset, value)?)
+        }
+        (DynamicScalarKind::Int32, DynamicScalarValue::Int32(value)) => {
+            DynamicScalarValue::Int32(data.read_i32(offset, value)?)
+        }
+        (DynamicScalarKind::Int64, DynamicScalarValue::Int64(value)) => {
+            DynamicScalarValue::Int64(data.read_i64(offset, value)?)
+        }
+        (DynamicScalarKind::UInt8, DynamicScalarValue::UInt8(value)) => {
+            DynamicScalarValue::UInt8(data.read_u8(offset, value)?)
+        }
+        (DynamicScalarKind::UInt16, DynamicScalarValue::UInt16(value)) => {
+            DynamicScalarValue::UInt16(data.read_u16(offset, value)?)
+        }
+        (DynamicScalarKind::UInt32, DynamicScalarValue::UInt32(value)) => {
+            DynamicScalarValue::UInt32(data.read_u32(offset, value)?)
+        }
+        (DynamicScalarKind::UInt64, DynamicScalarValue::UInt64(value)) => {
+            DynamicScalarValue::UInt64(data.read_u64(offset, value)?)
+        }
+        (DynamicScalarKind::Float32, DynamicScalarValue::Float32(value)) => {
+            DynamicScalarValue::Float32(data.read_f32(offset, value)?)
+        }
+        (DynamicScalarKind::Float64, DynamicScalarValue::Float64(value)) => {
+            DynamicScalarValue::Float64(data.read_f64(offset, value)?)
+        }
+        (
+            DynamicScalarKind::Enum { type_id },
+            DynamicScalarValue::Enum {
+                type_id: default_type,
+                ordinal,
+            },
+        ) if type_id == default_type => DynamicScalarValue::Enum {
+            type_id,
+            ordinal: data.read_u16(offset, ordinal)?,
+        },
+        _ => return Err(type_mismatch("matching prepared scalar default")),
+    })
+}
+
+#[inline(always)]
+fn require_dynamic_union(
+    data: DataSection<'_>,
+    union: Option<DynamicUnionAccess<'_>>,
+) -> Result<(), DynamicError> {
+    if let Some(union) = union {
+        let actual = data.read_u16(union.discriminant_offset, 0)?;
+        if actual != union.expected {
+            return Err(DynamicError::InactiveUnion {
+                field: union.field_name.to_owned(),
+                expected: union.expected,
+                actual,
+            });
+        }
+    }
+    Ok(())
 }
 
 fn null_pointer_default(value: &Value) -> bool {

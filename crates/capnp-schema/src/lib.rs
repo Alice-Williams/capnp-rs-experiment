@@ -441,6 +441,13 @@ mod tests {
             dynamic.with_text(&foreign_text, str::len),
             Err(DynamicError::TypeMismatch { .. })
         ));
+        let foreign_scalar = other_dynamic
+            .scalar_field("defaulted")
+            .expect("foreign scalar plan resolves");
+        assert!(matches!(
+            dynamic.get_scalar(&foreign_scalar),
+            Err(DynamicError::TypeMismatch { .. })
+        ));
         let default_text = dynamic
             .text_field("defaultText")
             .expect("defaulted Text plan resolves");
@@ -453,6 +460,31 @@ mod tests {
         assert!(matches!(
             dynamic.get("defaulted"),
             Ok(DynamicValue::UInt32(123456))
+        ));
+        let defaulted_scalar = dynamic
+            .scalar_field("defaulted")
+            .expect("typed defaulted scalar resolves");
+        let color_scalar = dynamic
+            .scalar_field("color")
+            .expect("typed enum scalar resolves");
+        assert_eq!(
+            dynamic
+                .get_scalar(&defaulted_scalar)
+                .expect("prepared default reads"),
+            DynamicScalarValue::UInt32(123456)
+        );
+        assert_eq!(
+            dynamic
+                .get_scalar(&color_scalar)
+                .expect("prepared enum reads"),
+            DynamicScalarValue::Enum {
+                type_id: 0xd5e4_ed5f_9f36_445f,
+                ordinal: 77,
+            }
+        );
+        assert!(matches!(
+            dynamic.scalar_field("text"),
+            Err(DynamicError::TypeMismatch { .. })
         ));
         assert!(matches!(
             dynamic.get("defaultText"),
@@ -538,7 +570,8 @@ mod tests {
                     list.get_u16(2)
                 })?;
                 let nested = view.with_struct(&node_field, |child| {
-                    let DynamicValue::UInt32(value) = child.get_scalar(node_value_field)? else {
+                    let DynamicValue::UInt32(value) = child.get_scalar_field(node_value_field)?
+                    else {
                         return Err(DynamicError::TypeMismatch {
                             expected: "UInt32 nested value",
                         });
@@ -547,7 +580,8 @@ mod tests {
                 })?;
                 let struct_list = view.with_list(&structs_field, |list| {
                     list.with_struct(1, |child| {
-                        let DynamicValue::UInt32(value) = child.get_scalar(node_value_field)?
+                        let DynamicValue::UInt32(value) =
+                            child.get_scalar_field(node_value_field)?
                         else {
                             return Err(DynamicError::TypeMismatch {
                                 expected: "UInt32 struct-list value",
@@ -594,6 +628,33 @@ mod tests {
             choice.get("words"),
             Err(DynamicError::InactiveUnion { .. })
         ));
+        let choice_field = dynamic
+            .struct_field("choice")
+            .expect("typed group descriptor resolves");
+        let number_field = choice
+            .scalar_field("number")
+            .expect("typed union scalar resolves");
+        let none_field = choice
+            .scalar_field("none")
+            .expect("typed inactive union scalar resolves");
+        let borrowed_choice = dynamic
+            .with_view(|view| {
+                view.with_struct(&choice_field, |choice| {
+                    assert_eq!(
+                        choice
+                            .active_union_field()?
+                            .map(|field| field.name.as_str()),
+                        Some("number")
+                    );
+                    assert!(matches!(
+                        choice.get_scalar(&none_field),
+                        Err(DynamicError::InactiveUnion { .. })
+                    ));
+                    choice.get_scalar(&number_field)
+                })
+            })
+            .expect("callback-scoped group reads");
+        assert_eq!(borrowed_choice, DynamicScalarValue::UInt64(1234));
 
         let typed = dynamic
             .clone()
