@@ -17,6 +17,12 @@ const REQUEST: &[u8] = include_bytes!(concat!(
     "e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/",
     "compiler-request-wire-fixture.bin"
 ));
+const EVOLUTION_REQUEST: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../conformance/fixtures/cpp/",
+    "e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/",
+    "compiler-request-evolution-v1.bin"
+));
 const FRAME: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../conformance/fixtures/cpp/",
@@ -34,7 +40,7 @@ const EMPTY_FRAME: &[u8] = &[0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let mode = args.next().ok_or(
-        "usage: generated_api_benchmark direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups|borrowed-direct-lists|borrowed-lists|borrowed-direct-nested|borrowed-nested|borrowed-direct-struct-lists|borrowed-struct-lists|borrowed-direct-evolution|borrowed-evolution|borrowed-direct-defaults|borrowed-defaults|direct-builder-scalars|generated-builder-scalars|direct-builder-blobs|generated-builder-blobs|direct-builder-struct|generated-builder-struct|direct-builder-list|generated-builder-list|direct-builder-struct-list|generated-builder-struct-list|direct-builder-struct-list-hot|generated-builder-struct-list-hot|direct-builder-pointer-list|generated-builder-pointer-list|direct-builder-union|generated-builder-union|direct-builder-union-hot|generated-builder-union-hot PASSES",
+        "usage: generated_api_benchmark direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups|borrowed-direct-lists|borrowed-lists|borrowed-direct-nested|borrowed-nested|borrowed-direct-struct-lists|borrowed-struct-lists|borrowed-direct-evolution|borrowed-evolution|borrowed-direct-defaults|borrowed-defaults|direct-builder-scalars|generated-builder-scalars|direct-builder-blobs|generated-builder-blobs|direct-builder-struct|generated-builder-struct|direct-builder-list|generated-builder-list|direct-builder-struct-list|generated-builder-struct-list|direct-builder-struct-list-hot|generated-builder-struct-list-hot|direct-builder-pointer-list|generated-builder-pointer-list|direct-builder-union|generated-builder-union|direct-builder-union-hot|generated-builder-union-hot|direct-builder-defaults|generated-builder-defaults|direct-builder-evolution|generated-builder-evolution PASSES",
     )?;
     let passes = args.next().ok_or("missing passes")?.parse::<usize>()?;
     if args.next().is_some()
@@ -79,6 +85,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 | "generated-builder-union"
                 | "direct-builder-union-hot"
                 | "generated-builder-union-hot"
+                | "direct-builder-defaults"
+                | "generated-builder-defaults"
+                | "direct-builder-evolution"
+                | "generated-builder-evolution"
         )
     {
         return Err("expected a known mode and positive PASSES".into());
@@ -88,8 +98,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         REQUEST,
         LoadLimits::default(),
     )?);
+    let evolution_schema = Arc::new(CompiledSchema::from_code_generator_request(
+        EVOLUTION_REQUEST,
+        LoadLimits::default(),
+    )?);
     if mode.contains("builder-") {
-        return run_builder_benchmark(&mode, passes, &schema);
+        return run_builder_benchmark(&mode, passes, &schema, &evolution_schema);
     }
     let FrameRead::Message { frame, remaining } = parse_frame(FRAME, FrameLimits::default())?
     else {
@@ -180,8 +194,11 @@ fn run_builder_benchmark(
     mode: &str,
     passes: usize,
     schema: &CompiledSchema,
+    evolution_schema: &CompiledSchema,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let words_per_pass = if mode.ends_with("builder-pointer-list") {
+    let words_per_pass = if mode.ends_with("builder-evolution") {
+        3
+    } else if mode.ends_with("builder-pointer-list") {
         6
     } else if mode.ends_with("builder-struct-list") {
         5
@@ -380,6 +397,56 @@ fn run_builder_benchmark(
             &mut builder,
             write_generated_union_hot,
             union_builder_fingerprint,
+        )?
+    } else if mode == "direct-builder-defaults" {
+        let node = schema
+            .node(wire_fixture::TYPE_ID)
+            .ok_or("WireFixture schema is missing")?;
+        let NodeKind::Struct(structure) = &node.kind else {
+            return Err("WireFixture is not a struct".into());
+        };
+        let mut builder =
+            arena.init_root_struct(structure.data_word_count, structure.pointer_count)?;
+        started = Instant::now();
+        measure_builder(
+            passes,
+            &mut builder,
+            write_direct_default,
+            default_builder_fingerprint,
+        )?
+    } else if mode == "generated-builder-defaults" {
+        let mut builder = wire_fixture::Builder::init_root(schema, &mut arena)?;
+        started = Instant::now();
+        measure_builder(
+            passes,
+            &mut builder,
+            write_generated_default,
+            default_builder_fingerprint,
+        )?
+    } else if mode == "direct-builder-evolution" {
+        let node = evolution_schema
+            .node(evolution_v1::record::TYPE_ID)
+            .ok_or("evolution-v1 Record schema is missing")?;
+        let NodeKind::Struct(structure) = &node.kind else {
+            return Err("evolution-v1 Record is not a struct".into());
+        };
+        let mut builder =
+            arena.init_root_struct(structure.data_word_count, structure.pointer_count)?;
+        started = Instant::now();
+        measure_builder(
+            passes,
+            &mut builder,
+            write_direct_evolution,
+            evolution_builder_fingerprint,
+        )?
+    } else if mode == "generated-builder-evolution" {
+        let mut builder = evolution_v1::record::Builder::init_root(evolution_schema, &mut arena)?;
+        started = Instant::now();
+        measure_builder(
+            passes,
+            &mut builder,
+            write_generated_evolution,
+            evolution_builder_fingerprint,
         )?
     } else if mode == "direct-builder-struct-list-hot" {
         let node = schema
@@ -651,6 +718,85 @@ fn write_generated_union_hot(
     pass: usize,
 ) -> Result<(), capnp_schema::DynamicError> {
     builder.set_number(union_builder_value(pass))
+}
+
+fn default_builder_value(pass: usize) -> u32 {
+    if pass & 1 == 0 {
+        123_456
+    } else {
+        (SEED as u32).wrapping_add((pass as u32).wrapping_mul(0x9e37_79b9))
+    }
+}
+
+fn default_builder_fingerprint(pass: usize) -> u64 {
+    u64::from(default_builder_value(pass)).rotate_left(31) ^ 0x1234_5678
+}
+
+fn write_direct_default(
+    builder: &mut StructBuilder<'_>,
+    pass: usize,
+) -> Result<(), capnp_message::ArenaError> {
+    builder.set_u32(16, default_builder_value(pass), 123_456)
+}
+
+fn write_generated_default(
+    builder: &mut wire_fixture::Builder<'_, '_>,
+    pass: usize,
+) -> Result<(), capnp_schema::DynamicError> {
+    builder.set_defaulted(default_builder_value(pass))
+}
+
+const EVOLUTION_BUILDER_NAMES: [&str; 2] = ["evolution-a", "evolution-b"];
+
+fn evolution_builder_values(pass: usize) -> (u32, evolution_v1::State, &'static str, [u32; 2]) {
+    let id = (pass as u32).wrapping_mul(0x9e37_79b9);
+    let state = if pass & 1 == 0 {
+        evolution_v1::State::Unknown
+    } else {
+        evolution_v1::State::Active
+    };
+    (
+        id,
+        state,
+        EVOLUTION_BUILDER_NAMES[pass & 1],
+        [id ^ 0x55aa_55aa, id.rotate_left(11) ^ 0xa5a5_5a5a],
+    )
+}
+
+fn evolution_builder_fingerprint(pass: usize) -> u64 {
+    let (id, state, name, values) = evolution_builder_values(pass);
+    let mut value = u64::from(id).rotate_left(7) ^ u64::from(state.ordinal());
+    value = value.rotate_left(13) ^ name.len() as u64;
+    value = value.rotate_left(19) ^ u64::from(name.as_bytes()[name.len() - 1]);
+    value = value.rotate_left(23) ^ u64::from(values[0]);
+    value.rotate_left(29) ^ u64::from(values[1])
+}
+
+fn write_direct_evolution(
+    builder: &mut StructBuilder<'_>,
+    pass: usize,
+) -> Result<(), capnp_message::ArenaError> {
+    let (id, state, name, values) = evolution_builder_values(pass);
+    builder.set_u32(0, id, 0)?;
+    builder.set_u16(2, state.ordinal(), 0)?;
+    builder.set_text(0, name)?;
+    let mut list = builder.init_list::<u32>(1, 2)?;
+    list.set(0, values[0])?;
+    list.set(1, values[1])
+}
+
+fn write_generated_evolution(
+    builder: &mut evolution_v1::record::Builder<'_, '_>,
+    pass: usize,
+) -> Result<(), capnp_schema::DynamicError> {
+    let (id, state, name, values) = evolution_builder_values(pass);
+    builder.set_id(id)?;
+    builder.set_state(state)?;
+    builder.set_name(name)?;
+    let mut list = builder.init_values(2)?;
+    list.set(0, values[0])?;
+    list.set(1, values[1])?;
+    Ok(())
 }
 
 fn write_direct_scalars(

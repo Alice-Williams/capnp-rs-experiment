@@ -112,6 +112,10 @@ workloads=(
     generated-builder-union
     direct-builder-union-hot
     generated-builder-union-hot
+    direct-builder-defaults
+    generated-builder-defaults
+    direct-builder-evolution
+    generated-builder-evolution
 )
 
 run_workload() {

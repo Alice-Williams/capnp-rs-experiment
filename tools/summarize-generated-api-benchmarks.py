@@ -101,6 +101,8 @@ def main() -> None:
                 "pointer-list",
                 "union",
                 "union-hot",
+                "defaults",
+                "evolution",
             ):
                 direct_case = f"direct-builder-{shape}"
                 generated_case = f"generated-builder-{shape}"

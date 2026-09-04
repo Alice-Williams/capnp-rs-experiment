@@ -592,6 +592,114 @@ void benchmarkGeneratedUnionBuilderHot(size_t passes) {
   std::cout << elapsed.count() << '\t' << checksum << '\n';
 }
 
+uint32_t defaultBuilderValue(size_t pass) {
+  return (pass & 1) == 0
+      ? 123456u
+      : static_cast<uint32_t>(SEED + pass * 0x9e3779b9u);
+}
+
+uint64_t defaultBuilderFingerprint(size_t pass) {
+  return std::rotl(uint64_t{defaultBuilderValue(pass)}, 31) ^ 0x12345678u;
+}
+
+void writeDirectDefault(capnp::AnyStruct::Builder& root, size_t pass) {
+  writeData<uint32_t>(root.getDataSection(), 16, defaultBuilderValue(pass), 123456u);
+}
+
+void writeGeneratedDefault(WireFixture::Builder& root, size_t pass) {
+  root.setDefaulted(defaultBuilderValue(pass));
+}
+
+void benchmarkDirectDefaultBuilder(size_t passes) {
+  capnp::MallocMessageBuilder message;
+  auto root = message.initRoot<capnp::AnyPointer>().initAsAnyStruct(9, 28);
+  auto started = std::chrono::steady_clock::now();
+  auto checksum = measureBuilder(
+      root, writeDirectDefault, defaultBuilderFingerprint, passes);
+  auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now() - started);
+  std::cout << elapsed.count() << '\t' << checksum << '\n';
+}
+
+void benchmarkGeneratedDefaultBuilder(size_t passes) {
+  capnp::MallocMessageBuilder message;
+  auto root = message.initRoot<WireFixture>();
+  auto started = std::chrono::steady_clock::now();
+  auto checksum = measureBuilder(
+      root, writeGeneratedDefault, defaultBuilderFingerprint, passes);
+  auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now() - started);
+  std::cout << elapsed.count() << '\t' << checksum << '\n';
+}
+
+constexpr std::string_view EVOLUTION_BUILDER_NAMES[] = {
+  "evolution-a", "evolution-b",
+};
+
+uint64_t evolutionBuilderFingerprint(size_t pass) {
+  auto id = static_cast<uint32_t>(pass * 0x9e3779b9u);
+  auto state = static_cast<uint16_t>(pass & 1);
+  auto name = EVOLUTION_BUILDER_NAMES[pass & 1];
+  auto first = id ^ 0x55aa55aau;
+  auto second = std::rotl(id, 11) ^ 0xa5a55a5au;
+  uint64_t value = std::rotl(uint64_t{id}, 7) ^ state;
+  value = std::rotl(value, 13) ^ name.size();
+  value = std::rotl(value, 19)
+      ^ static_cast<uint8_t>(name[name.size() - 1]);
+  value = std::rotl(value, 23) ^ first;
+  return std::rotl(value, 29) ^ second;
+}
+
+void writeDirectEvolution(capnp::AnyStruct::Builder& root, size_t pass) {
+  auto id = static_cast<uint32_t>(pass * 0x9e3779b9u);
+  auto name = EVOLUTION_BUILDER_NAMES[pass & 1];
+  auto data = root.getDataSection();
+  writeData<uint32_t>(data, 0, id);
+  writeData<uint16_t>(data, 2, static_cast<uint16_t>(pass & 1));
+  auto pointers = root.getPointerSection();
+  pointers[0].setAs<capnp::Text>(kj::StringPtr(name.data(), name.size()));
+  auto values = pointers[1].initAs<capnp::List<uint32_t>>(2);
+  values.set(0, id ^ 0x55aa55aau);
+  values.set(1, std::rotl(id, 11) ^ 0xa5a55a5au);
+}
+
+void writeGeneratedEvolution(Record::Builder& root, size_t pass) {
+  auto id = static_cast<uint32_t>(pass * 0x9e3779b9u);
+  auto name = EVOLUTION_BUILDER_NAMES[pass & 1];
+  root.setId(id);
+  root.setState((pass & 1) == 0 ? State::UNKNOWN : State::ACTIVE);
+  root.setName(kj::StringPtr(name.data(), name.size()));
+  auto values = root.initValues(2);
+  values.set(0, id ^ 0x55aa55aau);
+  values.set(1, std::rotl(id, 11) ^ 0xa5a55a5au);
+}
+
+void benchmarkDirectEvolutionBuilder(size_t passes) {
+  auto scratch = kj::heapArray<capnp::word>(passes * 3 + 64);
+  capnp::MallocMessageBuilder message(
+      scratch.asPtr(), capnp::AllocationStrategy::FIXED_SIZE);
+  auto root = message.initRoot<capnp::AnyPointer>().initAsAnyStruct(1, 2);
+  auto started = std::chrono::steady_clock::now();
+  auto checksum = measureBuilder(
+      root, writeDirectEvolution, evolutionBuilderFingerprint, passes);
+  auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now() - started);
+  std::cout << elapsed.count() << '\t' << checksum << '\n';
+}
+
+void benchmarkGeneratedEvolutionBuilder(size_t passes) {
+  auto scratch = kj::heapArray<capnp::word>(passes * 3 + 64);
+  capnp::MallocMessageBuilder message(
+      scratch.asPtr(), capnp::AllocationStrategy::FIXED_SIZE);
+  auto root = message.initRoot<Record>();
+  auto started = std::chrono::steady_clock::now();
+  auto checksum = measureBuilder(
+      root, writeGeneratedEvolution, evolutionBuilderFingerprint, passes);
+  auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now() - started);
+  std::cout << elapsed.count() << '\t' << checksum << '\n';
+}
+
 uint64_t directScalarFingerprint(capnp::AnyStruct::Reader root) {
   auto data = root.getDataSection();
   uint64_t value = data.size() > 0 && (data[0] & 1) != 0;
@@ -798,7 +906,7 @@ uint64_t measure(Root root, Fingerprint fingerprint, size_t passes) {
 
 int main(int argc, char** argv) {
   if (argc != 4) {
-    std::cerr << "usage: cpp-generated-api direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups|borrowed-direct-lists|borrowed-lists|borrowed-direct-nested|borrowed-nested|borrowed-direct-struct-lists|borrowed-struct-lists|borrowed-direct-evolution|borrowed-evolution|borrowed-direct-defaults|borrowed-defaults|direct-builder-scalars|generated-builder-scalars|direct-builder-blobs|generated-builder-blobs|direct-builder-struct|generated-builder-struct|direct-builder-list|generated-builder-list|direct-builder-struct-list|generated-builder-struct-list|direct-builder-struct-list-hot|generated-builder-struct-list-hot|direct-builder-pointer-list|generated-builder-pointer-list|direct-builder-union|generated-builder-union|direct-builder-union-hot|generated-builder-union-hot PASSES FIXTURE\n";
+    std::cerr << "usage: cpp-generated-api direct-scalars|generated-scalars|borrowed-direct-scalars|borrowed-scalars|direct-blobs|generated-blobs|borrowed-direct-blobs|borrowed-blobs|borrowed-direct-groups|borrowed-groups|borrowed-direct-lists|borrowed-lists|borrowed-direct-nested|borrowed-nested|borrowed-direct-struct-lists|borrowed-struct-lists|borrowed-direct-evolution|borrowed-evolution|borrowed-direct-defaults|borrowed-defaults|direct-builder-scalars|generated-builder-scalars|direct-builder-blobs|generated-builder-blobs|direct-builder-struct|generated-builder-struct|direct-builder-list|generated-builder-list|direct-builder-struct-list|generated-builder-struct-list|direct-builder-struct-list-hot|generated-builder-struct-list-hot|direct-builder-pointer-list|generated-builder-pointer-list|direct-builder-union|generated-builder-union|direct-builder-union-hot|generated-builder-union-hot|direct-builder-defaults|generated-builder-defaults|direct-builder-evolution|generated-builder-evolution PASSES FIXTURE\n";
     return 2;
   }
   auto mode = std::string_view(argv[1]);
@@ -873,6 +981,22 @@ int main(int argc, char** argv) {
   }
   if (mode == "generated-builder-union-hot") {
     benchmarkGeneratedUnionBuilderHot(passes);
+    return 0;
+  }
+  if (mode == "direct-builder-defaults") {
+    benchmarkDirectDefaultBuilder(passes);
+    return 0;
+  }
+  if (mode == "generated-builder-defaults") {
+    benchmarkGeneratedDefaultBuilder(passes);
+    return 0;
+  }
+  if (mode == "direct-builder-evolution") {
+    benchmarkDirectEvolutionBuilder(passes);
+    return 0;
+  }
+  if (mode == "generated-builder-evolution") {
+    benchmarkGeneratedEvolutionBuilder(passes);
     return 0;
   }
   auto words = mode == "borrowed-direct-defaults" || mode == "borrowed-defaults"

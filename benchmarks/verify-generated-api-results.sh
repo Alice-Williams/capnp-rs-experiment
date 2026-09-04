@@ -6,8 +6,8 @@ result_dir=${1:-"$repo_root/benchmarks/results/2026-09-03-m55-generated-reader-b
 expected_passes=${2:-100000}
 expected_cases=${3:-4}
 
-if ((expected_cases < 4 || expected_cases > 38 || expected_cases % 2 != 0)); then
-    printf 'expected case count must be an even value from 4 through 38\n' >&2
+if ((expected_cases < 4 || expected_cases > 42 || expected_cases % 2 != 0)); then
+    printf 'expected case count must be an even value from 4 through 42\n' >&2
     exit 2
 fi
 expected_raw_lines=$((1 + expected_cases * 2 * 11))
@@ -24,6 +24,8 @@ if ((expected_cases >= 32)); then expected_incremental_lines=11; fi
 if ((expected_cases >= 34)); then expected_incremental_lines=12; fi
 if ((expected_cases >= 36)); then expected_incremental_lines=13; fi
 if ((expected_cases >= 38)); then expected_incremental_lines=14; fi
+if ((expected_cases >= 40)); then expected_incremental_lines=15; fi
+if ((expected_cases >= 42)); then expected_incremental_lines=16; fi
 
 grep -Fx 'cpp_oracle_commit=e7c9cd96f1505b5ae486db7821006c2f5dce5b5b' "$result_dir/metadata.txt"
 grep -Fx 'schema=conformance/schemas/wire-fixture.capnp' "$result_dir/metadata.txt"
@@ -64,7 +66,9 @@ awk -F '\t' -v passes="$expected_passes" -v cases="$expected_cases" -v expected_
       !(cases >= 32 && ($2 == "direct-builder-struct-list-hot" || $2 == "generated-builder-struct-list-hot")) &&
       !(cases >= 34 && ($2 == "direct-builder-pointer-list" || $2 == "generated-builder-pointer-list")) &&
       !(cases >= 36 && ($2 == "direct-builder-union" || $2 == "generated-builder-union")) &&
-      !(cases == 38 && ($2 == "direct-builder-union-hot" || $2 == "generated-builder-union-hot")) { exit 1 }
+      !(cases >= 38 && ($2 == "direct-builder-union-hot" || $2 == "generated-builder-union-hot")) &&
+      !(cases >= 40 && ($2 == "direct-builder-defaults" || $2 == "generated-builder-defaults")) &&
+      !(cases == 42 && ($2 == "direct-builder-evolution" || $2 == "generated-builder-evolution")) { exit 1 }
   {
     shape = $2
     sub(/^(borrowed-direct|direct|generated|borrowed)-/, "", shape)
