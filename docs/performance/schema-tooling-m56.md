@@ -255,3 +255,44 @@ medians fall by 64.4%, 82.2%, and 69.1%. Each cumulative ratio is better than
 the 0.424 borrowed-value control in the same run, so the scalar-default, enum,
 group, and known active-union reader gates are closed. Unknown discriminants,
 schema evolution, and builder reflection remain open.
+
+## Unknown-union discriminant gate
+
+Baseline evidence:
+[`benchmarks/results/2026-09-04-m56-reflection-unknown-union-baseline-5m`](../../benchmarks/results/2026-09-04-m56-reflection-unknown-union-baseline-5m)
+at native commit `710fecb01e8c55cb7c83fb7cfe882fe8c3fd0def`.
+The fixture contains the raw discriminant `55`, which neither schema knows.
+Both implementations first prove that dynamic union dispatch does not expose a
+stale known payload and then preserve the raw ordinal in the checksum. Fixture
+construction remains outside the timed region.
+
+| Operation | C++ ns/op | Native ns/op | Native / C++ |
+| --- | ---: | ---: | ---: |
+| unknown-union recognition + raw ordinal | 68.7100 | 36.3235 | 0.529 |
+| borrowed Text + Data control | 99.4407 | 42.6773 | 0.429 |
+
+The initial native path is 47.1% faster than C++, but it misses the inherited
+control ratio. Each call on the callback-scoped group view repeats a compiled
+schema node lookup even though the containing struct and prepared group
+descriptor already establish the exact child type.
+
+Final evidence:
+[`benchmarks/results/2026-09-04-m56-reflection-unknown-union-final-5m`](../../benchmarks/results/2026-09-04-m56-reflection-unknown-union-final-5m)
+at native commit `f1295bb673c29c65907b1ed92c1b78436a932f1b`.
+
+| Operation | C++ ns/op | Native ns/op | Native / C++ |
+| --- | ---: | ---: | ---: |
+| unknown-union recognition + raw ordinal | 74.8997 | 20.8419 | 0.278 |
+| borrowed Text + Data control | 106.0105 | 47.4992 | 0.448 |
+
+Root callback views now borrow their already-resolved `StructSchema` and
+prepared struct/group descriptors carry the resolved child structure into the
+scoped view. Inline-composite list elements resolve their structure once when
+the child view opens. Union recognition and raw-discriminant access therefore
+avoid repeated schema-index lookups while retaining the same checked data read,
+schema identity, and callback lifetime; no `unsafe` code is used.
+
+The native median falls by 42.6% from baseline. Its 0.278 cumulative ratio is
+also materially better than the 0.448 borrowed-value control in the same run,
+so the unknown-union reader gate is closed. Schema evolution and builder
+reflection remain open.

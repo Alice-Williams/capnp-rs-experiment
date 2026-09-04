@@ -210,10 +210,11 @@ same runner before the milestone advances.
 
 `run-reflection-baselines.sh` starts M56 at the lowest tooling layer. It
 compares field-name lookup, field-index access, dynamic reads by name or index,
-and dynamic reads through a schema-checked cached field descriptor over the
-same four scalar fields and pinned wire message. Schema loading, framing, root
-construction, and descriptor resolution are outside the timed region in both
-implementations.
+schema-checked prepared descriptors, borrowed blobs, primitive and nested
+lists, nested structs, enum/default reads, and known and unknown union
+discriminants over the same pinned schema and wire message. Schema loading,
+framing, root construction, descriptor resolution, and synthetic unknown-union
+fixture construction are outside the timed region in both implementations.
 
 Run it inside the Linux development container from a committed worktree:
 
