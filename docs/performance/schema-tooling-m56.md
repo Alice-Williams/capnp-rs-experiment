@@ -133,3 +133,29 @@ therefore closes the allocation/copy gate as well. Relative to the recorded
 baseline, native borrowed access falls from 167.8527 to 40.6437 ns and owned
 access from 162.9723 to 82.6401 ns. List and nested-struct reflection are the
 next open shapes.
+
+## Nested reflection baseline
+
+Evidence:
+[`benchmarks/results/2026-09-04-m56-reflection-nested-baseline-5m`](../../benchmarks/results/2026-09-04-m56-reflection-nested-baseline-5m)
+at native commit `072b4d8dda402ba49c4d21e6e472bdaac9f7a5ce`.
+Each case starts from the same cached root field descriptor and reads the same
+fixture value. Nested-struct cases also cache the `Node.value` descriptor before
+timing. Checksums agree for every implementation and shape.
+
+| Operation | C++ ns/op | Native ns/op | Native / C++ |
+| --- | ---: | ---: | ---: |
+| dynamic primitive-list element | 89.5004 | 130.0117 | 1.453 |
+| dynamic nested-struct scalar | 106.5742 | 131.7143 | 1.236 |
+| dynamic struct-list scalar | 150.4634 | 233.5283 | 1.552 |
+| dynamic nested-list scalar | 144.3452 | 258.6036 | 1.792 |
+
+All four gates are open. The current root pointer read materializes an owned
+`DynamicList` or `DynamicStruct`, cloning retained message/schema handles and
+resolved type state. `DynamicList::get` then opens the retained list once to
+check its length and again to read the element. Struct-list and nested-list
+cases repeat that process at the second hop. C++ keeps short-lived dynamic
+readers and list schemas by value, so no equivalent ownership reconstruction is
+required between these immediately consumed operations. The next isolation
+extends the callback-scoped dynamic view to typed list and struct access plans,
+while retaining the owned dynamic values for callers that need them to escape.
