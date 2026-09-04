@@ -96,3 +96,40 @@ in this same run, including the cached-field path at 0.577x C++, so the open
 work is specifically blob representation and conversion rather than descriptor
 dispatch. The next gate adds a lifetime-bound, zero-copy dynamic blob view while
 retaining the owned API for callers that need values to escape the reader.
+
+## Zero-copy dynamic blob gate
+
+Final evidence:
+[`benchmarks/results/2026-09-04-m56-reflection-blobs-final-5m`](../../benchmarks/results/2026-09-04-m56-reflection-blobs-final-5m)
+at native commit `a73e87cb736a9cb2b2ec86d4cbcce3e15f9a57f3`.
+
+| Operation | C++ ns/op | Native ns/op | Native / C++ |
+| --- | ---: | ---: | ---: |
+| dynamic Text + Data, borrowed views | 98.6367 | 40.6437 | 0.412 |
+| dynamic Text + Data, owned copies | 140.6952 | 82.6401 | 0.587 |
+| dynamic scalar by cached field | 47.2791 | 25.9077 | 0.548 |
+
+`DynamicTextField` and `DynamicDataField` resolve names, runtime types, pointer
+offsets, schema defaults, and union metadata once. Every use still checks the
+originating schema allocation and type ID, and active union fields still check
+their discriminant. A foreign typed descriptor is rejected. Empty schema blob
+defaults share the direct null-as-empty wire path; non-empty defaults retain
+their exact fallback behavior.
+
+`DynamicStruct::with_view` lends a callback-scoped `DynamicStructView`. It
+borrows the retained message context once for a batch, and its higher-ranked
+callback API prevents Text or Data slices from escaping. This makes the natural
+API zero-copy without adding self-references, leaked backing, or `unsafe` code.
+The existing owned `DynamicValue` API remains available and now uses the same
+direct wire read before allocating its result. Shared traversal accounting is
+unchanged; only its tiny trait methods and the reflection dispatch chain are
+made visible to the optimizer across crate boundaries.
+
+The natural borrowed path is 58.8% below C++ and also improves on the scalar
+reflection ratio in the same run (0.412x versus 0.548x), so the cumulative blob
+gate preserves the lower layer's advantage. Ownership adds 41.9964 ns in Rust
+and 42.0585 ns in C++, an incremental ratio of 0.999. That like-for-like control
+therefore closes the allocation/copy gate as well. Relative to the recorded
+baseline, native borrowed access falls from 167.8527 to 40.6437 ns and owned
+access from 162.9723 to 82.6401 ns. List and nested-struct reflection are the
+next open shapes.

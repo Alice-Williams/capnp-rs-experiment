@@ -1,0 +1,15 @@
+implementation	case	passes	runs	mean_ns_per_operation	median_ns_per_operation	min_ns_per_operation	max_ns_per_operation
+cpp	dynamic-blobs-borrowed	5000000	9	102.0666	98.6367	95.0432	138.6444
+cpp	dynamic-blobs-owned	5000000	9	141.8430	140.6952	132.9501	158.8399
+cpp	dynamic-field	5000000	9	47.4590	47.2791	44.0255	53.4004
+cpp	dynamic-index	5000000	9	53.8918	52.7771	50.9841	58.7955
+cpp	dynamic-name	5000000	9	155.8645	152.5407	147.9763	170.2482
+cpp	schema-index	5000000	9	7.6221	6.8344	6.5638	10.6947
+cpp	schema-name	5000000	9	110.2354	109.6501	101.0099	123.2356
+native	dynamic-blobs-borrowed	5000000	9	41.9936	40.6437	39.9823	52.2056
+native	dynamic-blobs-owned	5000000	9	83.9200	82.6401	74.9256	99.4336
+native	dynamic-field	5000000	9	26.7968	25.9077	24.3500	36.0638
+native	dynamic-index	5000000	9	28.2684	27.4164	26.4726	34.5165
+native	dynamic-name	5000000	9	43.3798	43.5194	37.0931	48.8692
+native	schema-index	5000000	9	2.6040	2.4659	2.3720	3.7746
+native	schema-name	5000000	9	12.8453	12.2435	11.7233	16.0905
