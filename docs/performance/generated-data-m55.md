@@ -796,3 +796,58 @@ sub-two-nanosecond scale the ratio magnifies a handful of instructions; the
 implementation keeps the safe coordinate representation needed for arena
 growth rather than introducing a cached raw pointer. Defaults and evolution
 builders remain open.
+
+## Default-value builder gate
+
+The default-value builder workload alternates the `defaulted` field between
+its schema default (`123456`) and a pass-dependent value. Both controls perform
+the required XOR before storing offset 16, and the generated source embeds the
+offset and default rather than consulting reflection.
+
+The operation is only about two native nanoseconds. Optimized disassembly is
+therefore used as the isolated-accessor cross-check: the direct and generated
+Rust loops have instruction-identical success paths, including the same layout
+check, arena segment lookup, range check, XOR, store, and checksum. Their
+different `ArenaError` and `DynamicError` encodings occur only on cold error
+branches.
+
+Final five-million-operation evidence at native commit `a0fceda` is in
+[`benchmarks/results/2026-09-04-m55-builder-defaults-evolution-final-5m`](../../benchmarks/results/2026-09-04-m55-builder-defaults-evolution-final-5m).
+
+| Operation | C++ ns/op | Native ns/op | Native / C++ |
+| --- | ---: | ---: | ---: |
+| direct default-XOR scalar write | 1.2145 | 2.1332 | 1.756 |
+| generated default-XOR scalar write | 1.0760 | 2.1281 | 1.978 |
+
+Native generated-minus-direct is -0.0207 ns and the two native medians differ
+by 0.2%. C++ generated-minus-direct is also negative, so incremental
+subtraction is below resolution; the instruction-identical isolated paths
+confirm that generated Rust adds no work. The apparently worse generated
+cumulative ratio is the unstable quotient produced when C++ saves 0.14 ns on
+a roughly one-nanosecond operation, not hidden native wrapper work. The
+default-value builder gate is closed without weakening the checked setter.
+
+## Schema-evolution builder gate
+
+The evolution workload builds the v1 `Record` layout using the pinned v1
+schema: a varying `id`, alternating known enum state, alternating Text value,
+and a two-element `List(UInt32)`. The direct controls use the same one-data-word,
+two-pointer layout. Both languages use fixed-capacity scratch arenas sized
+identically, and every iteration covers scalar writes, Text allocation and
+copy, primitive-list allocation, and element writes.
+
+| Operation | C++ ns/op | Native ns/op | Native / C++ |
+| --- | ---: | ---: | ---: |
+| direct v1 record construction | 36.0133 | 48.1404 | 1.337 |
+| generated v1 record construction | 34.9036 | 48.5218 | 1.390 |
+
+The retained generated wrapper is within 0.8% of the direct native runtime.
+The paired native delta is 0.8710 ns while the C++ delta is negative, making
+incremental division invalid; the isolated generated/direct ratio remains
+inside the 3% tolerance. Constant generated scalar, Text, and primitive-list
+paths are already the same paths qualified by the preceding builder gates.
+The schema-evolution builder gate is closed.
+
+With scalar, blob, struct, primitive-list, struct-list, pointer-list, union,
+default, and schema-evolution readers and builders all covered by checked-in
+paired evidence, M55 is complete.

@@ -1,6 +1,6 @@
 # M55 — Generated data API performance
 
-- Status: in-progress
+- Status: complete
 - Phase: 8
 - Depends on: M50, M52, M53
 
@@ -55,20 +55,20 @@ separately when their lifetime or traversal-accounting costs differ.
 
 ## Implementation checklist
 
-- [ ] Trace generated Rust and pinned C++ accessor code for every required field
+- [x] Trace generated Rust and pinned C++ accessor code for every required field
   shape and identify reflection, metadata, allocation, and ownership costs.
-- [ ] Add matched generated/direct-runtime Rust and C++ fixtures plus a paired
+- [x] Add matched generated/direct-runtime Rust and C++ fixtures plus a paired
   benchmark runner with exact semantic checksums.
-- [ ] Record and verify the unmodified M55 baseline.
-- [ ] Attribute every material gap with isolated phase, allocation-count, or
+- [x] Record and verify the unmodified M55 baseline.
+- [x] Attribute every material gap with isolated phase, allocation-count, or
   profile evidence before changing runtime or generated code.
-- [ ] Generate constant-layout typed fast paths and borrowed blob views while
+- [x] Generate constant-layout typed fast paths and borrowed blob views while
   keeping reflection available through the explicit dynamic API.
-- [ ] Optimize typed lists, groups/unions, defaults, and evolution paths without
+- [x] Optimize typed lists, groups/unions, defaults, and evolution paths without
   weakening validation or ownership guarantees.
-- [ ] Record final cumulative and incremental comparisons for every required
+- [x] Record final cumulative and incremental comparisons for every required
   reader, builder, field-shape, ownership, and evolution gate.
-- [ ] Add Bazel evidence gates and pass full Cargo/MSRV/Bazel/Miri validation.
+- [x] Add Bazel evidence gates and pass full Cargo/MSRV/Bazel/Miri validation.
 
 ## Required exit evidence
 

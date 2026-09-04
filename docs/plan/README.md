@@ -117,4 +117,4 @@ wire safety or protocol ordering.
 - [M52 — Message-read performance](milestones/M52-message-reads-performance.md) — complete ([report](../performance/message-reads-m52.md))
 - [M53 — Message-construction performance](milestones/M53-message-construction-performance.md) — complete ([report](../performance/message-construction-m53.md))
 - [M54 — Packing performance](milestones/M54-packing-performance.md) — complete ([report](../performance/packing-m54.md))
-- [M55 — Generated data API performance](milestones/M55-generated-data-api-performance.md) — in-progress
+- [M55 — Generated data API performance](milestones/M55-generated-data-api-performance.md) — complete ([report](../performance/generated-data-m55.md))
