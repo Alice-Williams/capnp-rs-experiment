@@ -24,11 +24,24 @@ const FRAME: &[u8] = include_bytes!(concat!(
     "e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/",
     "wire-unpacked.bin"
 ));
+const EVOLUTION_REQUEST: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../conformance/fixtures/cpp/",
+    "e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/",
+    "compiler-request-evolution-v1.bin"
+));
+const EVOLUTION_FRAME: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../conformance/fixtures/cpp/",
+    "e7c9cd96f1505b5ae486db7821006c2f5dce5b5b/",
+    "evolution-v2-unpacked.bin"
+));
+const EVOLUTION_RECORD: u64 = 0x8178_7eed_de27_c411;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let mode = args.next().ok_or(
-        "usage: reflection_benchmark schema-name|schema-index|dynamic-name|dynamic-index|dynamic-field|dynamic-blobs-borrowed|dynamic-blobs-owned|dynamic-primitive-list|dynamic-nested-struct|dynamic-struct-list|dynamic-nested-list|dynamic-enum|dynamic-default|dynamic-union-active|dynamic-union-unknown PASSES",
+        "usage: reflection_benchmark schema-name|schema-index|dynamic-name|dynamic-index|dynamic-field|dynamic-blobs-borrowed|dynamic-blobs-owned|dynamic-primitive-list|dynamic-nested-struct|dynamic-struct-list|dynamic-nested-list|dynamic-enum|dynamic-default|dynamic-union-active|dynamic-union-unknown|dynamic-evolution PASSES",
     )?;
     let passes = args.next().ok_or("missing passes")?.parse::<usize>()?;
     if args.next().is_some()
@@ -50,6 +63,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 | "dynamic-default"
                 | "dynamic-union-active"
                 | "dynamic-union-unknown"
+                | "dynamic-evolution"
         )
     {
         return Err("expected a known mode and positive PASSES".into());
@@ -72,7 +86,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .position(|field| field.name == name)
             .expect("benchmark field is present")
     });
-    let message = owned_frame()?;
+    let message = owned_frame(FRAME)?;
     let dynamic = DynamicStruct::root(
         Arc::clone(&schema),
         Arc::clone(&message),
@@ -106,6 +120,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let unknown_message = unknown_union_message(structure, choice_schema.discriminant_offset)?;
     let unknown_dynamic =
         DynamicStruct::root(Arc::clone(&schema), unknown_message, wire_fixture::TYPE_ID)?;
+    let evolution_schema = Arc::new(CompiledSchema::from_code_generator_request(
+        EVOLUTION_REQUEST,
+        LoadLimits::default(),
+    )?);
+    let evolution_message = owned_frame(EVOLUTION_FRAME)?;
+    let evolution_dynamic = DynamicStruct::root(
+        Arc::clone(&evolution_schema),
+        evolution_message,
+        EVOLUTION_RECORD,
+    )?;
+    let evolution_id_field = evolution_dynamic.scalar_field("id")?;
+    let evolution_name_field = evolution_dynamic.text_field("name")?;
+    let evolution_state_field = evolution_dynamic.scalar_field("state")?;
+    let evolution_values_field = evolution_dynamic.list_field("values")?;
 
     let started = Instant::now();
     let mut checksum = SEED;
@@ -219,6 +247,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     )
                 })
             })?,
+            "dynamic-evolution" => black_box(&evolution_dynamic).with_view(|view| {
+                let DynamicScalarValue::UInt32(id) = view.get_scalar(&evolution_id_field)? else {
+                    return Err(capnp_schema::DynamicError::TypeMismatch {
+                        expected: "UInt32 evolution id",
+                    });
+                };
+                let DynamicScalarValue::Enum { ordinal: state, .. } =
+                    view.get_scalar(&evolution_state_field)?
+                else {
+                    return Err(capnp_schema::DynamicError::TypeMismatch {
+                        expected: "evolution state enum",
+                    });
+                };
+                view.with_text(&evolution_name_field, |name| {
+                    view.with_list(&evolution_values_field, |values| {
+                        Ok(evolution_fingerprint(
+                            id,
+                            state,
+                            name.as_bytes(),
+                            values.get_u32(1)?,
+                        ))
+                    })
+                })?
+            })?,
             _ => unreachable!(),
         };
         checksum = checksum.rotate_left(9) ^ observed;
@@ -305,6 +357,14 @@ fn blob_fingerprint(text: &[u8], data: &[u8]) -> u64 {
     value
 }
 
+fn evolution_fingerprint(id: u32, state: u16, name: &[u8], second_value: u32) -> u64 {
+    let mut value = u64::from(id);
+    value = value.rotate_left(13) ^ u64::from(state);
+    value = value.rotate_left(19) ^ name.len() as u64;
+    value = value.rotate_left(23) ^ u64::from(name.last().copied().unwrap_or_default());
+    value.rotate_left(29) ^ u64::from(second_value)
+}
+
 fn dynamic_scalar(value: DynamicValue, selector: usize) -> Result<u64, &'static str> {
     match (selector, value) {
         (0, DynamicValue::UInt8(value)) => Ok(u64::from(value)),
@@ -315,8 +375,8 @@ fn dynamic_scalar(value: DynamicValue, selector: usize) -> Result<u64, &'static 
     }
 }
 
-fn owned_frame() -> Result<Arc<OwnedMessage>, Box<dyn std::error::Error>> {
-    let FrameRead::Message { frame, remaining } = parse_frame(FRAME, FrameLimits::default())?
+fn owned_frame(bytes: &[u8]) -> Result<Arc<OwnedMessage>, Box<dyn std::error::Error>> {
+    let FrameRead::Message { frame, remaining } = parse_frame(bytes, FrameLimits::default())?
     else {
         return Err("fixture is empty".into());
     };

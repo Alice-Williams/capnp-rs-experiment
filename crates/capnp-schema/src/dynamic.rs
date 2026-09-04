@@ -1781,6 +1781,17 @@ impl DynamicListView<'_> {
         Ok(self.reader.as_primitive::<u16>()?.get(index)?)
     }
 
+    /// Reads a UInt32 element from this already-opened list, including a
+    /// wire-compatible struct-list upgrade viewed through an older schema.
+    #[inline(always)]
+    pub fn get_u32(&self, index: u32) -> Result<u32, DynamicError> {
+        self.require_index(index)?;
+        if !matches!(self.element_type, Type::UInt32) {
+            return Err(type_mismatch("List(UInt32)"));
+        }
+        Ok(self.reader.as_primitive::<u32>()?.get(index)?)
+    }
+
     /// Opens one inline-composite struct element without retaining it.
     #[inline(always)]
     pub fn with_struct<R>(

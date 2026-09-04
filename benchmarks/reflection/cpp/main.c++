@@ -1,4 +1,5 @@
 #include "conformance/schemas/wire-fixture.capnp.h"
+#include "conformance/schemas/evolution-v1.capnp.h"
 
 #include <capnp/dynamic.h>
 #include <capnp/serialize.h>
@@ -73,6 +74,19 @@ uint64_t blobFingerprint(
   return value;
 }
 
+uint64_t evolutionFingerprint(
+    uint32_t id,
+    uint16_t state,
+    kj::ArrayPtr<const capnp::byte> name,
+    uint32_t secondValue) {
+  auto value = uint64_t{id};
+  value = std::rotl(value, 13) ^ uint64_t{state};
+  value = std::rotl(value, 19) ^ uint64_t{name.size()};
+  value = std::rotl(value, 23)
+      ^ static_cast<uint64_t>(name.size() == 0 ? 0 : name.back());
+  return std::rotl(value, 29) ^ uint64_t{secondValue};
+}
+
 uint32_t readU32(const capnp::byte* bytes) {
   return uint32_t{bytes[0]} | (uint32_t{bytes[1]} << 8)
       | (uint32_t{bytes[2]} << 16) | (uint32_t{bytes[3]} << 24);
@@ -115,8 +129,8 @@ kj::Array<capnp::word> makeUnknownUnionWords(uint32_t discriminantOffset) {
 }  // namespace
 
 int main(int argc, char** argv) {
-  if (argc != 4) {
-    std::cerr << "usage: cpp-reflection schema-name|schema-index|dynamic-name|dynamic-index|dynamic-field|dynamic-blobs-borrowed|dynamic-blobs-owned|dynamic-primitive-list|dynamic-nested-struct|dynamic-struct-list|dynamic-nested-list|dynamic-enum|dynamic-default|dynamic-union-active|dynamic-union-unknown PASSES FIXTURE\n";
+  if (argc != 5) {
+    std::cerr << "usage: cpp-reflection schema-name|schema-index|dynamic-name|dynamic-index|dynamic-field|dynamic-blobs-borrowed|dynamic-blobs-owned|dynamic-primitive-list|dynamic-nested-struct|dynamic-struct-list|dynamic-nested-list|dynamic-enum|dynamic-default|dynamic-union-active|dynamic-union-unknown|dynamic-evolution PASSES WIRE_FIXTURE EVOLUTION_FIXTURE\n";
     return 2;
   }
   auto mode = std::string_view(argv[1]);
@@ -150,6 +164,15 @@ int main(int argc, char** argv) {
   capnp::FlatArrayMessageReader unknownMessage(unknownWords.asPtr(), options);
   auto unknownRoot = unknownMessage.getRoot<WireFixture>();
   auto unknownDynamic = capnp::toDynamic(unknownRoot);
+  auto evolutionWords = readWords(argv[4]);
+  capnp::FlatArrayMessageReader evolutionMessage(evolutionWords.asPtr(), options);
+  auto evolutionRoot = evolutionMessage.getRoot<Record>();
+  auto evolutionDynamic = capnp::toDynamic(evolutionRoot);
+  auto evolutionSchema = capnp::Schema::from<Record>();
+  auto evolutionIdField = evolutionSchema.getFieldByName("id");
+  auto evolutionNameField = evolutionSchema.getFieldByName("name");
+  auto evolutionStateField = evolutionSchema.getFieldByName("state");
+  auto evolutionValuesField = evolutionSchema.getFieldByName("values");
 
   auto started = std::chrono::steady_clock::now();
   uint64_t checksum = SEED;
@@ -159,7 +182,9 @@ int main(int argc, char** argv) {
         SCALAR_NAMES[selector].data(), SCALAR_NAMES[selector].size());
     auto dynamicPointer = &dynamic;
     auto schemaPointer = &schema;
-    asm volatile("" : "+r"(dynamicPointer), "+r"(schemaPointer) : : "memory");
+    auto evolutionPointer = &evolutionDynamic;
+    asm volatile("" : "+r"(dynamicPointer), "+r"(schemaPointer),
+        "+r"(evolutionPointer) : : "memory");
     uint64_t observed;
     if (mode == "schema-name") {
       observed = schemaPointer->getFieldByName(name).getProto().getCodeOrder();
@@ -214,6 +239,17 @@ int main(int argc, char** argv) {
         throw std::runtime_error("unknown union resolved to a known field");
       }
       observed = static_cast<uint16_t>(unknownRoot.getChoice().which());
+    } else if (mode == "dynamic-evolution") {
+      auto name = evolutionPointer->get(evolutionNameField)
+          .as<capnp::Text>().asBytes();
+      auto values = evolutionPointer->get(evolutionValuesField)
+          .as<capnp::DynamicList>();
+      observed = evolutionFingerprint(
+          evolutionPointer->get(evolutionIdField).as<uint32_t>(),
+          evolutionPointer->get(evolutionStateField)
+              .as<capnp::DynamicEnum>().getRaw(),
+          name,
+          values[1].as<uint32_t>());
     } else {
       std::cerr << "unknown benchmark mode\n";
       return 2;

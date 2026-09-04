@@ -39,6 +39,7 @@ mod tests {
         "compiler-request-evolution-v1.bin"
     ));
     const EVOLUTION_V2: &[u8] = fixture!("compiler-request-evolution-v2.bin");
+    const EVOLUTION_V2_MESSAGE: &[u8] = fixture!("evolution-v2-unpacked.bin");
     const EVOLUTION_V3: &[u8] = fixture!("compiler-request-evolution-v3.bin");
     const IMPORT: &[u8] = fixture!("compiler-request-import-fixture.bin");
     const LANGUAGE: &[u8] = fixture!("compiler-request-language-fixture.bin");
@@ -70,6 +71,58 @@ mod tests {
             assert!(schema.requested_file(file.id).is_some(), "{name}");
             assert!(schema.node(file.id).is_some(), "{name}");
         }
+    }
+
+    #[test]
+    fn older_dynamic_schema_reads_newer_message_and_preserves_unknown_enum() {
+        use std::sync::Arc;
+
+        use capnp_io::{FrameLimits, FrameRead, parse_frame};
+        use capnp_message::{OwnedMessage, ReaderLimits};
+
+        const RECORD: NodeId = 0x8178_7eed_de27_c411;
+        let schema = Arc::new(load_fixture(EVOLUTION_V1));
+        let parsed = parse_frame(EVOLUTION_V2_MESSAGE, FrameLimits::default())
+            .expect("newer fixture frame parses");
+        assert!(matches!(parsed, FrameRead::Message { .. }));
+        let FrameRead::Message { frame, remaining } = parsed else {
+            return;
+        };
+        assert!(remaining.is_empty());
+        let message = OwnedMessage::new(
+            frame.segments().iter().map(|segment| segment.bytes()),
+            ReaderLimits::default(),
+        )
+        .expect("newer fixture message opens");
+        let dynamic = DynamicStruct::root(Arc::clone(&schema), message, RECORD)
+            .expect("older schema opens newer message");
+        let id_field = dynamic.scalar_field("id").expect("id plan");
+        let name_field = dynamic.text_field("name").expect("name plan");
+        let state_field = dynamic.scalar_field("state").expect("state plan");
+        let values_field = dynamic.list_field("values").expect("values plan");
+
+        let observed = dynamic
+            .with_view(|view| {
+                let DynamicScalarValue::UInt32(id) = view.get_scalar(&id_field)? else {
+                    return Err(DynamicError::TypeMismatch {
+                        expected: "UInt32 id",
+                    });
+                };
+                let DynamicScalarValue::Enum { ordinal, .. } = view.get_scalar(&state_field)?
+                else {
+                    return Err(DynamicError::TypeMismatch {
+                        expected: "state enum",
+                    });
+                };
+                let name = view.with_text(&name_field, str::to_owned)?;
+                let second = view.with_list(&values_field, |values| values.get_u32(1))?;
+                Ok((id, name, ordinal, second))
+            })
+            .expect("old dynamic schema reads compatible newer storage");
+        assert_eq!(
+            observed,
+            (17, "written with evolution-v2".to_owned(), 2, 42)
+        );
     }
 
     #[test]

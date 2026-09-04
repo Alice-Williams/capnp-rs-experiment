@@ -27,11 +27,13 @@ mkdir -p -- "$cpp_build"
 "$cpp_root/install/bin/capnp" compile \
     -I"$cpp_root/install/include" \
     -o"$cpp_root/install/bin/capnpc-c++:$cpp_build" \
-    conformance/schemas/wire-fixture.capnp
+    conformance/schemas/wire-fixture.capnp \
+    conformance/schemas/evolution-v1.capnp
 clang++ -std=c++23 -O3 -DNDEBUG \
     -I"$cpp_root/install/include" -I"$cpp_build" \
     "$repo_root/benchmarks/reflection/cpp/main.c++" \
     "$cpp_build/conformance/schemas/wire-fixture.capnp.c++" \
+    "$cpp_build/conformance/schemas/evolution-v1.capnp.c++" \
     -L"$cpp_root/install/lib" -lcapnp-rpc -lcapnp -lkj-async -lkj \
     -o "$cpp_build/cpp-reflection"
 cargo build --locked --manifest-path "$repo_root/Cargo.toml" \
@@ -40,6 +42,7 @@ cargo build --locked --manifest-path "$repo_root/Cargo.toml" \
 cpp_benchmark="$cpp_build/cpp-reflection"
 native_benchmark="$repo_root/target/release/examples/reflection_benchmark"
 fixture="$repo_root/conformance/fixtures/cpp/$cpp_commit/wire-unpacked.bin"
+evolution_fixture="$repo_root/conformance/fixtures/cpp/$cpp_commit/evolution-v2-unpacked.bin"
 native_commit=$(git -C "$repo_root" rev-parse HEAD)
 mkdir -p -- "$output"
 {
@@ -54,6 +57,8 @@ mkdir -p -- "$output"
     printf 'cpp_oracle_commit=%s\n' "$cpp_commit"
     printf 'schema=conformance/schemas/wire-fixture.capnp\n'
     printf 'fixture=wire-unpacked.bin\n'
+    printf 'evolution_schema=conformance/schemas/evolution-v1.capnp\n'
+    printf 'evolution_fixture=evolution-v2-unpacked.bin\n'
     printf 'fields=uint8Value,uint16Value,uint32Value,uint64Value,text,data,uint16s,node,structs,nestedLists\n'
     printf 'native_commit=%s\n' "$native_commit"
     printf 'cpp_binary_sha256=%s\n' "$(sha256sum "$cpp_benchmark" | cut -d ' ' -f1)"
@@ -69,13 +74,14 @@ workloads=(
     dynamic-primitive-list dynamic-nested-struct dynamic-struct-list dynamic-nested-list
     dynamic-enum dynamic-default dynamic-union-active
     dynamic-union-unknown
+    dynamic-evolution
 )
 
 run_workload() {
     local implementation=$1 case_name=$2 run=$3 executable measurement elapsed_ns checksum
     if [[ "$implementation" == cpp ]]; then executable=$cpp_benchmark; else executable=$native_benchmark; fi
     if [[ "$implementation" == cpp ]]; then
-        measurement=$("$executable" "$case_name" "$passes" "$fixture")
+        measurement=$("$executable" "$case_name" "$passes" "$fixture" "$evolution_fixture")
     else
         measurement=$("$executable" "$case_name" "$passes")
     fi
