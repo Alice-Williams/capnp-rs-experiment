@@ -354,6 +354,12 @@ mod tests {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<DynamicStruct>();
         assert_send_sync::<DynamicList>();
+        assert_send_sync::<OwnedDynamicField>();
+        assert_send_sync::<OwnedDynamicTextField>();
+        assert_send_sync::<OwnedDynamicDataField>();
+        assert_send_sync::<OwnedDynamicScalarField>();
+        assert_send_sync::<OwnedDynamicListField>();
+        assert_send_sync::<OwnedDynamicStructField>();
 
         let schema = Arc::new(load_fixture(WIRE));
         let mut arena = ExclusiveArena::new(64, 4096).expect("bounded arena");
@@ -650,6 +656,139 @@ mod tests {
             })
             .expect("nested borrowed views read");
         assert_eq!(borrowed_nested, (5, 0, 22, 13));
+
+        let owned_general = dynamic
+            .owned_field("uint32Value")
+            .expect("owned general descriptor resolves");
+        assert_eq!(
+            owned_general
+                .schema_field()
+                .expect("owned descriptor retains schema")
+                .name,
+            "uint32Value"
+        );
+        let owned_defaulted = dynamic
+            .owned_scalar_field("defaulted")
+            .expect("owned scalar descriptor resolves");
+        let owned_text = dynamic
+            .owned_text_field("text")
+            .expect("owned Text descriptor resolves");
+        let owned_default_text = dynamic
+            .owned_text_field("defaultText")
+            .expect("owned default Text descriptor resolves");
+        let owned_data = dynamic
+            .owned_data_field("data")
+            .expect("owned Data descriptor resolves");
+        let owned_list = dynamic
+            .owned_list_field("uint16s")
+            .expect("owned List descriptor resolves");
+        let owned_node = dynamic
+            .owned_struct_field("node")
+            .expect("owned struct descriptor resolves");
+        let owned_node_value = second
+            .owned_scalar_field("value")
+            .expect("owned child scalar descriptor resolves");
+        assert_eq!(
+            dynamic
+                .get_owned_scalar(&owned_defaulted)
+                .expect("owned scalar reads directly"),
+            DynamicScalarValue::UInt32(123456)
+        );
+        assert_eq!(
+            dynamic
+                .with_owned_text(&owned_text, str::len)
+                .expect("owned Text reads directly"),
+            "dynamic text".len()
+        );
+        assert_eq!(
+            dynamic
+                .with_owned_data(&owned_data, <[u8]>::len)
+                .expect("owned Data reads directly"),
+            4
+        );
+        assert_eq!(
+            dynamic
+                .with_owned_list(&owned_list, |list| list.get_u16(2))
+                .expect("owned List reads directly"),
+            5
+        );
+        assert_eq!(
+            dynamic
+                .with_owned_struct(&owned_node, |node| {
+                    node.get_owned_scalar(&owned_node_value)
+                })
+                .expect("owned struct reads directly"),
+            DynamicScalarValue::UInt32(0)
+        );
+        let first_owned = dynamic
+            .owned_field_by_index(0)
+            .expect("indexed owned descriptor resolves");
+        assert_eq!(first_owned.type_id(), WIRE_FIXTURE);
+        assert!(Arc::ptr_eq(first_owned.schema(), &schema));
+        assert_eq!(
+            first_owned
+                .schema_field()
+                .expect("indexed descriptor retains its field"),
+            dynamic
+                .field_by_index(0)
+                .expect("borrowed indexed descriptor resolves")
+                .schema_field()
+        );
+        let worker_value = dynamic.clone();
+        let detached = std::thread::spawn(move || -> Result<_, DynamicError> {
+            let DynamicValue::UInt32(general) = worker_value.get_owned_field(&owned_general)?
+            else {
+                return Err(DynamicError::TypeMismatch {
+                    expected: "owned UInt32 field",
+                });
+            };
+            worker_value.with_view(|view| {
+                let defaulted = view.get_owned_scalar(&owned_defaulted)?;
+                let text = view.with_owned_text(&owned_text, str::to_owned)?;
+                let default_text = view.with_owned_text(&owned_default_text, str::to_owned)?;
+                let data = view.with_owned_data(&owned_data, <[u8]>::to_vec)?;
+                let last = view.with_owned_list(&owned_list, |list| list.get_u16(2))?;
+                let nested = view.with_owned_struct(&owned_node, |child| {
+                    child.get_owned_scalar(&owned_node_value)
+                })?;
+                Ok((general, defaulted, text, default_text, data, last, nested))
+            })
+        })
+        .join()
+        .expect("detached owned-descriptor worker does not panic")
+        .expect("detached owned-descriptor worker reads");
+        assert_eq!(
+            detached,
+            (
+                0xdead_beef,
+                DynamicScalarValue::UInt32(123456),
+                "dynamic text".to_owned(),
+                "default text".to_owned(),
+                vec![0, 1, 2, 0xff],
+                5,
+                DynamicScalarValue::UInt32(0),
+            )
+        );
+
+        let foreign_owned_scalar = other_dynamic
+            .owned_scalar_field("defaulted")
+            .expect("foreign owned scalar descriptor resolves");
+        assert!(matches!(
+            dynamic.get_owned_scalar(&foreign_owned_scalar),
+            Err(DynamicError::TypeMismatch { .. })
+        ));
+        let foreign_owned_field = other_dynamic
+            .owned_field("uint32Value")
+            .expect("foreign owned builder descriptor resolves");
+        let mut descriptor_arena =
+            ExclusiveArena::new(8, 64).expect("descriptor identity arena opens");
+        let mut descriptor_builder =
+            DynamicStructBuilder::root(&schema, &mut descriptor_arena, WIRE_FIXTURE)
+                .expect("descriptor identity root opens");
+        assert!(matches!(
+            descriptor_builder.set_owned_field(&foreign_owned_field, DynamicInput::UInt32(1)),
+            Err(DynamicError::TypeMismatch { .. })
+        ));
         assert!(matches!(
             dynamic.list_field("uint32Value"),
             Err(DynamicError::TypeMismatch { .. })
@@ -708,6 +847,103 @@ mod tests {
             })
             .expect("callback-scoped group reads");
         assert_eq!(borrowed_choice, DynamicScalarValue::UInt64(1234));
+
+        let write_uint32 = dynamic
+            .owned_field("uint32Value")
+            .expect("owned builder scalar descriptor resolves");
+        let write_text = dynamic
+            .owned_field("text")
+            .expect("owned builder Text descriptor resolves");
+        let write_list = dynamic
+            .owned_field("uint16s")
+            .expect("owned builder List descriptor resolves");
+        let write_node = dynamic
+            .owned_field("node")
+            .expect("owned builder struct descriptor resolves");
+        let write_node_value = second
+            .owned_field("value")
+            .expect("owned builder child descriptor resolves");
+        let write_choice = dynamic
+            .owned_field("choice")
+            .expect("owned builder group descriptor resolves");
+        let write_number = choice
+            .owned_field("number")
+            .expect("owned builder union descriptor resolves");
+        let write_schema = Arc::clone(&schema);
+        let built_in_worker = std::thread::spawn(move || -> Result<_, DynamicError> {
+            let mut worker_arena =
+                ExclusiveArena::new(64, 256).expect("detached builder arena opens");
+            {
+                let mut root =
+                    DynamicStructBuilder::root(&write_schema, &mut worker_arena, WIRE_FIXTURE)?;
+                assert_eq!(root.owned_field_type(&write_uint32)?, Type::UInt32);
+                root.set_owned_field(&write_uint32, DynamicInput::UInt32(77))?;
+                root.set_owned_field(&write_text, DynamicInput::Text("worker"))?;
+                root.init_list_owned_field(&write_list, 2)?
+                    .set(1, DynamicInput::UInt16(9))?;
+                root.init_struct_owned_field(&write_node)?
+                    .set_owned_field(&write_node_value, DynamicInput::UInt32(88))?;
+                let mut choice = root.group_owned_field(&write_choice)?;
+                choice.activate_owned_field(&write_number)?;
+                choice.set_owned_field(&write_number, DynamicInput::UInt64(99))?;
+            }
+            let worker_message =
+                OwnedMessage::new(worker_arena.into_segments(), ReaderLimits::default())
+                    .expect("detached builder output validates");
+            let worker_value =
+                DynamicStruct::root(Arc::clone(&write_schema), worker_message, WIRE_FIXTURE)?;
+            Ok((
+                worker_value.get("uint32Value")?,
+                worker_value.get("text")?,
+                worker_value.get("uint16s")?,
+                worker_value.get("node")?,
+                worker_value.get("choice")?,
+            ))
+        })
+        .join()
+        .expect("detached descriptor-driven builder does not panic")
+        .expect("detached descriptor-driven builder succeeds");
+        assert!(matches!(built_in_worker.0, DynamicValue::UInt32(77)));
+        assert!(matches!(built_in_worker.1, DynamicValue::Text(ref value) if value == "worker"));
+        let worker_list = match built_in_worker.2 {
+            DynamicValue::List(Some(value)) => value,
+            other => {
+                assert!(
+                    matches!(other, DynamicValue::List(Some(_))),
+                    "worker list was not retained"
+                );
+                return;
+            }
+        };
+        assert!(matches!(worker_list.get(1), Ok(DynamicValue::UInt16(9))));
+        let worker_node = match built_in_worker.3 {
+            DynamicValue::Struct(Some(value)) => value,
+            other => {
+                assert!(
+                    matches!(other, DynamicValue::Struct(Some(_))),
+                    "worker node was not retained"
+                );
+                return;
+            }
+        };
+        assert!(matches!(
+            worker_node.get("value"),
+            Ok(DynamicValue::UInt32(88))
+        ));
+        let worker_choice = match built_in_worker.4 {
+            DynamicValue::Struct(Some(value)) => value,
+            other => {
+                assert!(
+                    matches!(other, DynamicValue::Struct(Some(_))),
+                    "worker choice was not retained"
+                );
+                return;
+            }
+        };
+        assert!(matches!(
+            worker_choice.get("number"),
+            Ok(DynamicValue::UInt64(99))
+        ));
 
         let root_schema = match &schema.node(WIRE_FIXTURE).expect("wire schema exists").kind {
             NodeKind::Struct(value) => value,

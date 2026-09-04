@@ -148,6 +148,7 @@ pub struct DynamicListView<'view> {
 pub struct DynamicField<'schema> {
     schema: &'schema Arc<CompiledSchema>,
     type_id: NodeId,
+    index: usize,
     structure: &'schema StructSchema,
     field: &'schema Field,
 }
@@ -157,6 +158,26 @@ struct DynamicUnionAccess<'schema> {
     discriminant_offset: u32,
     expected: u16,
     field_name: &'schema str,
+}
+
+#[derive(Clone, Debug)]
+struct OwnedDynamicUnionAccess {
+    discriminant_offset: u32,
+    expected: u16,
+    field_name: Arc<str>,
+}
+
+/// An owned field descriptor that can be stored or sent independently of the
+/// dynamic value used to resolve it.
+///
+/// The descriptor retains the compiled schema but never retains a reference
+/// into that schema. Applying it to a value still verifies exact schema
+/// identity and the containing type.
+#[derive(Clone, Debug)]
+pub struct OwnedDynamicField {
+    schema: Arc<CompiledSchema>,
+    type_id: NodeId,
+    index: usize,
 }
 
 /// A reusable, type-checked access plan for one dynamic Text field.
@@ -169,6 +190,16 @@ pub struct DynamicTextField<'schema> {
     union: Option<DynamicUnionAccess<'schema>>,
 }
 
+/// An owned, reusable Text access plan suitable for detached workers.
+#[derive(Clone, Debug)]
+pub struct OwnedDynamicTextField {
+    schema: Arc<CompiledSchema>,
+    type_id: NodeId,
+    offset: u16,
+    default: Option<Arc<str>>,
+    union: Option<OwnedDynamicUnionAccess>,
+}
+
 /// A reusable, type-checked access plan for one dynamic Data field.
 #[derive(Clone, Copy, Debug)]
 pub struct DynamicDataField<'schema> {
@@ -177,6 +208,16 @@ pub struct DynamicDataField<'schema> {
     offset: u16,
     default: Option<&'schema [u8]>,
     union: Option<DynamicUnionAccess<'schema>>,
+}
+
+/// An owned, reusable Data access plan suitable for detached workers.
+#[derive(Clone, Debug)]
+pub struct OwnedDynamicDataField {
+    schema: Arc<CompiledSchema>,
+    type_id: NodeId,
+    offset: u16,
+    default: Option<Arc<[u8]>>,
+    union: Option<OwnedDynamicUnionAccess>,
 }
 
 /// A copy-only result from a prepared dynamic scalar access.
@@ -225,6 +266,17 @@ pub struct DynamicScalarField<'schema> {
     union: Option<DynamicUnionAccess<'schema>>,
 }
 
+/// An owned, reusable scalar access plan suitable for detached workers.
+#[derive(Clone, Debug)]
+pub struct OwnedDynamicScalarField {
+    schema: Arc<CompiledSchema>,
+    type_id: NodeId,
+    offset: u32,
+    kind: DynamicScalarKind,
+    default: DynamicScalarValue,
+    union: Option<OwnedDynamicUnionAccess>,
+}
+
 /// A reusable, type-checked access plan for one dynamic List field.
 #[derive(Clone, Debug)]
 pub struct DynamicListField<'schema> {
@@ -233,6 +285,16 @@ pub struct DynamicListField<'schema> {
     offset: u16,
     element_type: Type,
     union: Option<DynamicUnionAccess<'schema>>,
+}
+
+/// An owned, reusable List access plan suitable for detached workers.
+#[derive(Clone, Debug)]
+pub struct OwnedDynamicListField {
+    schema: Arc<CompiledSchema>,
+    type_id: NodeId,
+    offset: u16,
+    element_type: Arc<Type>,
+    union: Option<OwnedDynamicUnionAccess>,
 }
 
 /// A reusable, type-checked access plan for one dynamic struct field.
@@ -247,6 +309,18 @@ pub struct DynamicStructField<'schema> {
     union: Option<DynamicUnionAccess<'schema>>,
 }
 
+/// An owned, reusable struct or group access plan suitable for detached
+/// workers.
+#[derive(Clone, Debug)]
+pub struct OwnedDynamicStructField {
+    schema: Arc<CompiledSchema>,
+    type_id: NodeId,
+    access: DynamicStructAccess,
+    child_type_id: NodeId,
+    child_brand: Arc<Brand>,
+    union: Option<OwnedDynamicUnionAccess>,
+}
+
 #[derive(Clone, Copy, Debug)]
 enum DynamicStructAccess {
     Pointer(u16),
@@ -256,6 +330,154 @@ enum DynamicStructAccess {
 impl DynamicField<'_> {
     pub const fn schema_field(&self) -> &Field {
         self.field
+    }
+
+    /// Retains this descriptor independently of the dynamic value that
+    /// resolved it.
+    pub fn into_owned(self) -> OwnedDynamicField {
+        OwnedDynamicField {
+            schema: Arc::clone(self.schema),
+            type_id: self.type_id,
+            index: self.index,
+        }
+    }
+}
+
+impl OwnedDynamicField {
+    pub const fn type_id(&self) -> NodeId {
+        self.type_id
+    }
+
+    pub fn schema(&self) -> &Arc<CompiledSchema> {
+        &self.schema
+    }
+
+    pub fn schema_field(&self) -> Result<&Field, DynamicError> {
+        require_struct(&self.schema, self.type_id)?
+            .field_by_index(self.index)
+            .ok_or(DynamicError::FieldIndexOutOfBounds {
+                type_id: self.type_id,
+                index: self.index,
+            })
+    }
+}
+
+impl DynamicTextField<'_> {
+    pub fn into_owned(self) -> OwnedDynamicTextField {
+        OwnedDynamicTextField {
+            schema: Arc::clone(self.schema),
+            type_id: self.type_id,
+            offset: self.offset,
+            default: self.default.map(Arc::from),
+            union: self.union.map(DynamicUnionAccess::into_owned),
+        }
+    }
+}
+
+impl DynamicDataField<'_> {
+    pub fn into_owned(self) -> OwnedDynamicDataField {
+        OwnedDynamicDataField {
+            schema: Arc::clone(self.schema),
+            type_id: self.type_id,
+            offset: self.offset,
+            default: self.default.map(Arc::from),
+            union: self.union.map(DynamicUnionAccess::into_owned),
+        }
+    }
+}
+
+impl DynamicScalarField<'_> {
+    pub fn into_owned(self) -> OwnedDynamicScalarField {
+        OwnedDynamicScalarField {
+            schema: Arc::clone(self.schema),
+            type_id: self.type_id,
+            offset: self.offset,
+            kind: self.kind,
+            default: self.default,
+            union: self.union.map(DynamicUnionAccess::into_owned),
+        }
+    }
+}
+
+impl DynamicListField<'_> {
+    pub fn into_owned(self) -> OwnedDynamicListField {
+        OwnedDynamicListField {
+            schema: Arc::clone(self.schema),
+            type_id: self.type_id,
+            offset: self.offset,
+            element_type: Arc::new(self.element_type),
+            union: self.union.map(DynamicUnionAccess::into_owned),
+        }
+    }
+}
+
+impl DynamicStructField<'_> {
+    pub fn into_owned(self) -> OwnedDynamicStructField {
+        OwnedDynamicStructField {
+            schema: Arc::clone(self.schema),
+            type_id: self.type_id,
+            access: self.access,
+            child_type_id: self.child_type_id,
+            child_brand: Arc::new(self.child_brand),
+            union: self.union.map(DynamicUnionAccess::into_owned),
+        }
+    }
+}
+
+impl DynamicUnionAccess<'_> {
+    fn into_owned(self) -> OwnedDynamicUnionAccess {
+        OwnedDynamicUnionAccess {
+            discriminant_offset: self.discriminant_offset,
+            expected: self.expected,
+            field_name: Arc::from(self.field_name),
+        }
+    }
+}
+
+impl OwnedDynamicUnionAccess {
+    fn borrowed(&self) -> DynamicUnionAccess<'_> {
+        DynamicUnionAccess {
+            discriminant_offset: self.discriminant_offset,
+            expected: self.expected,
+            field_name: &self.field_name,
+        }
+    }
+}
+
+impl OwnedDynamicTextField {
+    fn borrowed(&self) -> DynamicTextField<'_> {
+        DynamicTextField {
+            schema: &self.schema,
+            type_id: self.type_id,
+            offset: self.offset,
+            default: self.default.as_deref(),
+            union: self.union.as_ref().map(OwnedDynamicUnionAccess::borrowed),
+        }
+    }
+}
+
+impl OwnedDynamicDataField {
+    fn borrowed(&self) -> DynamicDataField<'_> {
+        DynamicDataField {
+            schema: &self.schema,
+            type_id: self.type_id,
+            offset: self.offset,
+            default: self.default.as_deref(),
+            union: self.union.as_ref().map(OwnedDynamicUnionAccess::borrowed),
+        }
+    }
+}
+
+impl OwnedDynamicScalarField {
+    fn borrowed(&self) -> DynamicScalarField<'_> {
+        DynamicScalarField {
+            schema: &self.schema,
+            type_id: self.type_id,
+            offset: self.offset,
+            kind: self.kind,
+            default: self.default,
+            union: self.union.as_ref().map(OwnedDynamicUnionAccess::borrowed),
+        }
     }
 }
 
@@ -518,8 +740,11 @@ impl DynamicStruct {
 
     pub fn field(&self, name: &str) -> Result<DynamicField<'_>, DynamicError> {
         let structure = self.struct_schema()?;
-        let field = structure
-            .field(name)
+        let (index, field) = structure
+            .fields
+            .iter()
+            .enumerate()
+            .find(|(_, field)| field.name == name)
             .ok_or_else(|| DynamicError::UnknownField {
                 type_id: self.type_id,
                 name: name.to_owned(),
@@ -527,9 +752,16 @@ impl DynamicStruct {
         Ok(DynamicField {
             schema: &self.schema,
             type_id: self.type_id,
+            index,
             structure,
             field,
         })
+    }
+
+    /// Resolves a field descriptor that owns its schema lifetime and may be
+    /// stored or sent independently of this value.
+    pub fn owned_field(&self, name: &str) -> Result<OwnedDynamicField, DynamicError> {
+        Ok(self.field(name)?.into_owned())
     }
 
     /// Resolves and type-checks a reusable Text access plan.
@@ -538,10 +770,20 @@ impl DynamicStruct {
         self.prepare_text_field(field)
     }
 
+    /// Resolves an owned Text access plan for long-lived or detached work.
+    pub fn owned_text_field(&self, name: &str) -> Result<OwnedDynamicTextField, DynamicError> {
+        Ok(self.text_field(name)?.into_owned())
+    }
+
     /// Resolves and type-checks a reusable Data access plan.
     pub fn data_field(&self, name: &str) -> Result<DynamicDataField<'_>, DynamicError> {
         let field = self.field(name)?;
         self.prepare_data_field(field)
+    }
+
+    /// Resolves an owned Data access plan for long-lived or detached work.
+    pub fn owned_data_field(&self, name: &str) -> Result<OwnedDynamicDataField, DynamicError> {
+        Ok(self.data_field(name)?.into_owned())
     }
 
     /// Resolves and type-checks a reusable scalar access plan.
@@ -550,16 +792,32 @@ impl DynamicStruct {
         self.prepare_scalar_field(field)
     }
 
+    /// Resolves an owned scalar access plan for long-lived or detached work.
+    pub fn owned_scalar_field(&self, name: &str) -> Result<OwnedDynamicScalarField, DynamicError> {
+        Ok(self.scalar_field(name)?.into_owned())
+    }
+
     /// Resolves and type-checks a reusable List access plan.
     pub fn list_field(&self, name: &str) -> Result<DynamicListField<'_>, DynamicError> {
         let field = self.field(name)?;
         self.prepare_list_field(field)
     }
 
+    /// Resolves an owned List access plan for long-lived or detached work.
+    pub fn owned_list_field(&self, name: &str) -> Result<OwnedDynamicListField, DynamicError> {
+        Ok(self.list_field(name)?.into_owned())
+    }
+
     /// Resolves and type-checks a reusable struct access plan.
     pub fn struct_field(&self, name: &str) -> Result<DynamicStructField<'_>, DynamicError> {
         let field = self.field(name)?;
         self.prepare_struct_field(field)
+    }
+
+    /// Resolves an owned struct or group access plan for long-lived or
+    /// detached work.
+    pub fn owned_struct_field(&self, name: &str) -> Result<OwnedDynamicStructField, DynamicError> {
+        Ok(self.struct_field(name)?.into_owned())
     }
 
     pub fn get_by_index(&self, index: usize) -> Result<DynamicValue, DynamicError> {
@@ -578,9 +836,15 @@ impl DynamicStruct {
         Ok(DynamicField {
             schema: &self.schema,
             type_id: self.type_id,
+            index,
             structure,
             field,
         })
+    }
+
+    /// Resolves an indexed field descriptor that owns its schema lifetime.
+    pub fn owned_field_by_index(&self, index: usize) -> Result<OwnedDynamicField, DynamicError> {
+        Ok(self.field_by_index(index)?.into_owned())
     }
 
     /// Type-checks an indexed field as a reusable Text access plan.
@@ -610,6 +874,23 @@ impl DynamicStruct {
         self.read_field(field, structure)
     }
 
+    /// Reads through a field descriptor that owns its schema lifetime.
+    #[inline(always)]
+    pub fn get_owned_field(&self, field: &OwnedDynamicField) -> Result<DynamicValue, DynamicError> {
+        if field.type_id != self.type_id || !Arc::ptr_eq(&field.schema, &self.schema) {
+            return Err(type_mismatch("field from this dynamic struct schema"));
+        }
+        let structure = self.struct_schema()?;
+        let schema_field =
+            structure
+                .field_by_index(field.index)
+                .ok_or(DynamicError::FieldIndexOutOfBounds {
+                    type_id: self.type_id,
+                    index: field.index,
+                })?;
+        self.read_field(schema_field, structure)
+    }
+
     /// Reads through a prepared scalar plan without constructing an owned
     /// dynamic value or reopening an already validated root pointer.
     #[inline(always)]
@@ -630,6 +911,15 @@ impl DynamicStruct {
                 read_dynamic_scalar(data, field.offset, field.kind, field.default)
             })??),
         }
+    }
+
+    /// Reads through an owned scalar access plan.
+    #[inline(always)]
+    pub fn get_owned_scalar(
+        &self,
+        field: &OwnedDynamicScalarField,
+    ) -> Result<DynamicScalarValue, DynamicError> {
+        self.get_scalar(&field.borrowed())
     }
 
     /// Opens one short-lived borrow context for a batch of dynamic reads.
@@ -701,6 +991,16 @@ impl DynamicStruct {
         self.with_view(|view| view.with_text(field, use_text))
     }
 
+    /// Borrows through an owned Text access plan.
+    #[inline(always)]
+    pub fn with_owned_text<R>(
+        &self,
+        field: &OwnedDynamicTextField,
+        use_text: impl for<'value> FnOnce(&'value str) -> R,
+    ) -> Result<R, DynamicError> {
+        self.with_text(&field.borrowed(), use_text)
+    }
+
     /// Borrows through a pre-validated Data access plan.
     #[inline(always)]
     pub fn with_data<R>(
@@ -709,6 +1009,36 @@ impl DynamicStruct {
         use_data: impl for<'value> FnOnce(&'value [u8]) -> R,
     ) -> Result<R, DynamicError> {
         self.with_view(|view| view.with_data(field, use_data))
+    }
+
+    /// Borrows through an owned Data access plan.
+    #[inline(always)]
+    pub fn with_owned_data<R>(
+        &self,
+        field: &OwnedDynamicDataField,
+        use_data: impl for<'value> FnOnce(&'value [u8]) -> R,
+    ) -> Result<R, DynamicError> {
+        self.with_data(&field.borrowed(), use_data)
+    }
+
+    /// Opens a List through an owned access plan.
+    #[inline(always)]
+    pub fn with_owned_list<R>(
+        &self,
+        field: &OwnedDynamicListField,
+        use_list: impl for<'child> FnOnce(DynamicListView<'child>) -> Result<R, DynamicError>,
+    ) -> Result<R, DynamicError> {
+        self.with_view(|view| view.with_owned_list(field, use_list))
+    }
+
+    /// Opens a struct or group through an owned access plan.
+    #[inline(always)]
+    pub fn with_owned_struct<R>(
+        &self,
+        field: &OwnedDynamicStructField,
+        use_struct: impl for<'child> FnOnce(DynamicStructView<'child>) -> Result<R, DynamicError>,
+    ) -> Result<R, DynamicError> {
+        self.with_view(|view| view.with_owned_struct(field, use_struct))
     }
 
     /// Reads a generated scalar slot without performing reflection lookup.
@@ -1479,6 +1809,17 @@ impl<'view> DynamicStructView<'view> {
         }
     }
 
+    /// Borrows through an owned Text plan without transferring its schema
+    /// ownership into this callback.
+    #[inline(always)]
+    pub fn with_owned_text<R>(
+        &self,
+        field: &OwnedDynamicTextField,
+        use_text: impl for<'value> FnOnce(&'value str) -> R,
+    ) -> Result<R, DynamicError> {
+        self.with_text(&field.borrowed(), use_text)
+    }
+
     /// Borrows through a reusable, type-checked Data access plan.
     #[inline(always)]
     pub fn with_data<R>(
@@ -1500,6 +1841,17 @@ impl<'view> DynamicStructView<'view> {
             }
             _ => Err(type_mismatch("Data pointer")),
         }
+    }
+
+    /// Borrows through an owned Data plan without transferring its schema
+    /// ownership into this callback.
+    #[inline(always)]
+    pub fn with_owned_data<R>(
+        &self,
+        field: &OwnedDynamicDataField,
+        use_data: impl for<'value> FnOnce(&'value [u8]) -> R,
+    ) -> Result<R, DynamicError> {
+        self.with_data(&field.borrowed(), use_data)
     }
 
     #[inline(always)]
@@ -1537,6 +1889,26 @@ impl<'view> DynamicStructView<'view> {
         })
     }
 
+    /// Opens a List through an owned plan. The plan may outlive both this view
+    /// and the dynamic value that originally resolved it.
+    #[inline(always)]
+    pub fn with_owned_list<R>(
+        &self,
+        field: &OwnedDynamicListField,
+        use_list: impl for<'child> FnOnce(DynamicListView<'child>) -> Result<R, DynamicError>,
+    ) -> Result<R, DynamicError> {
+        if field.type_id != self.type_id || !Arc::ptr_eq(&field.schema, self.schema) {
+            return Err(type_mismatch("List field from this dynamic struct schema"));
+        }
+        self.require_union(field.union.as_ref().map(OwnedDynamicUnionAccess::borrowed))?;
+        let reader = self.reader.read_list(field.offset)?;
+        use_list(DynamicListView {
+            schema: self.schema,
+            element_type: &field.element_type,
+            reader,
+        })
+    }
+
     /// Opens a struct field inside this borrow context without retaining a new
     /// owned dynamic object.
     #[inline(always)]
@@ -1562,6 +1934,37 @@ impl<'view> DynamicStructView<'view> {
             schema: self.schema,
             type_id: field.child_type_id,
             structure: field.child_structure,
+            brand: &field.child_brand,
+            reader,
+        })
+    }
+
+    /// Opens a struct or group through an owned plan. Child schema metadata is
+    /// resolved from the plan's retained schema without copying message data.
+    #[inline(always)]
+    pub fn with_owned_struct<R>(
+        &self,
+        field: &OwnedDynamicStructField,
+        use_struct: impl for<'child> FnOnce(DynamicStructView<'child>) -> Result<R, DynamicError>,
+    ) -> Result<R, DynamicError> {
+        if field.type_id != self.type_id || !Arc::ptr_eq(&field.schema, self.schema) {
+            return Err(type_mismatch(
+                "struct field from this dynamic struct schema",
+            ));
+        }
+        self.require_union(field.union.as_ref().map(OwnedDynamicUnionAccess::borrowed))?;
+        let reader = match field.access {
+            DynamicStructAccess::Pointer(offset) => {
+                DynamicStructReader::Struct(self.reader.read_struct(offset)?)
+            }
+            DynamicStructAccess::Group => self.reader,
+        };
+        let structure = require_struct(self.schema, field.child_type_id)?;
+        use_struct(DynamicStructView {
+            source: None,
+            schema: self.schema,
+            type_id: field.child_type_id,
+            structure,
             brand: &field.child_brand,
             reader,
         })
@@ -1613,6 +2016,15 @@ impl<'view> DynamicStructView<'view> {
         let data = self.reader.data()?;
         require_dynamic_union(data, field.union)?;
         read_dynamic_scalar(data, field.offset, field.kind, field.default)
+    }
+
+    /// Reads through an owned scalar plan.
+    #[inline(always)]
+    pub fn get_owned_scalar(
+        &self,
+        field: &OwnedDynamicScalarField,
+    ) -> Result<DynamicScalarValue, DynamicError> {
+        self.get_scalar(&field.borrowed())
     }
 
     /// Reads a cached scalar field directly from this already-opened struct.
@@ -2680,6 +3092,16 @@ impl<'schema, 'arena> DynamicStructBuilder<'schema, 'arena> {
     /// Resolves a field's runtime type through this builder's current brand.
     pub fn field_type(&self, name: &str) -> Result<Type, DynamicError> {
         let (field, _) = self.field_owned(name)?;
+        self.resolved_field_type(field)
+    }
+
+    /// Resolves the runtime type through a storable field descriptor.
+    pub fn owned_field_type(&self, field: &OwnedDynamicField) -> Result<Type, DynamicError> {
+        let (field, _) = self.descriptor_field_owned(field)?;
+        self.resolved_field_type(field)
+    }
+
+    fn resolved_field_type(&self, field: Field) -> Result<Type, DynamicError> {
         let FieldKind::Slot { ty, .. } = field.kind else {
             return Err(type_mismatch("slot field"));
         };
@@ -2688,6 +3110,26 @@ impl<'schema, 'arena> DynamicStructBuilder<'schema, 'arena> {
 
     pub fn set(&mut self, name: &str, value: DynamicInput<'_>) -> Result<(), DynamicError> {
         let (field, discriminant_offset) = self.field_owned(name)?;
+        self.set_resolved_field(field, discriminant_offset, value)
+    }
+
+    /// Writes through a storable descriptor, avoiding another field-name
+    /// lookup while retaining normal schema and type validation.
+    pub fn set_owned_field(
+        &mut self,
+        field: &OwnedDynamicField,
+        value: DynamicInput<'_>,
+    ) -> Result<(), DynamicError> {
+        let (field, discriminant_offset) = self.descriptor_field_owned(field)?;
+        self.set_resolved_field(field, discriminant_offset, value)
+    }
+
+    fn set_resolved_field(
+        &mut self,
+        field: Field,
+        discriminant_offset: u32,
+        value: DynamicInput<'_>,
+    ) -> Result<(), DynamicError> {
         self.activate_field(&field, discriminant_offset)?;
         let FieldKind::Slot {
             offset,
@@ -2785,8 +3227,31 @@ impl<'schema, 'arena> DynamicStructBuilder<'schema, 'arena> {
         self.activate_field(&field, discriminant_offset)
     }
 
+    /// Selects a union member through a storable field descriptor.
+    pub fn activate_owned_field(&mut self, field: &OwnedDynamicField) -> Result<(), DynamicError> {
+        let (field, discriminant_offset) = self.descriptor_field_owned(field)?;
+        self.activate_field(&field, discriminant_offset)
+    }
+
     pub fn group(&mut self, name: &str) -> Result<DynamicStructBuilder<'schema, '_>, DynamicError> {
         let (field, discriminant_offset) = self.field_owned(name)?;
+        self.group_resolved_field(field, discriminant_offset)
+    }
+
+    /// Opens a group through a storable field descriptor.
+    pub fn group_owned_field(
+        &mut self,
+        field: &OwnedDynamicField,
+    ) -> Result<DynamicStructBuilder<'schema, '_>, DynamicError> {
+        let (field, discriminant_offset) = self.descriptor_field_owned(field)?;
+        self.group_resolved_field(field, discriminant_offset)
+    }
+
+    fn group_resolved_field(
+        &mut self,
+        field: Field,
+        discriminant_offset: u32,
+    ) -> Result<DynamicStructBuilder<'schema, '_>, DynamicError> {
         self.activate_field(&field, discriminant_offset)?;
         let FieldKind::Group { type_id } = field.kind else {
             return Err(type_mismatch("group field"));
@@ -2804,6 +3269,23 @@ impl<'schema, 'arena> DynamicStructBuilder<'schema, 'arena> {
         name: &str,
     ) -> Result<DynamicStructBuilder<'schema, '_>, DynamicError> {
         let (field, discriminant_offset) = self.field_owned(name)?;
+        self.init_struct_resolved_field(field, discriminant_offset)
+    }
+
+    /// Initializes a struct through a storable field descriptor.
+    pub fn init_struct_owned_field(
+        &mut self,
+        field: &OwnedDynamicField,
+    ) -> Result<DynamicStructBuilder<'schema, '_>, DynamicError> {
+        let (field, discriminant_offset) = self.descriptor_field_owned(field)?;
+        self.init_struct_resolved_field(field, discriminant_offset)
+    }
+
+    fn init_struct_resolved_field(
+        &mut self,
+        field: Field,
+        discriminant_offset: u32,
+    ) -> Result<DynamicStructBuilder<'schema, '_>, DynamicError> {
         self.activate_field(&field, discriminant_offset)?;
         let FieldKind::Slot { offset, ty, .. } = field.kind else {
             return Err(type_mismatch("struct field"));
@@ -2832,6 +3314,25 @@ impl<'schema, 'arena> DynamicStructBuilder<'schema, 'arena> {
         element_count: u32,
     ) -> Result<DynamicListBuilder<'schema, '_>, DynamicError> {
         let (field, discriminant_offset) = self.field_owned(name)?;
+        self.init_list_resolved_field(field, discriminant_offset, element_count)
+    }
+
+    /// Initializes a List through a storable field descriptor.
+    pub fn init_list_owned_field(
+        &mut self,
+        field: &OwnedDynamicField,
+        element_count: u32,
+    ) -> Result<DynamicListBuilder<'schema, '_>, DynamicError> {
+        let (field, discriminant_offset) = self.descriptor_field_owned(field)?;
+        self.init_list_resolved_field(field, discriminant_offset, element_count)
+    }
+
+    fn init_list_resolved_field(
+        &mut self,
+        field: Field,
+        discriminant_offset: u32,
+        element_count: u32,
+    ) -> Result<DynamicListBuilder<'schema, '_>, DynamicError> {
         self.activate_field(&field, discriminant_offset)?;
         let FieldKind::Slot { offset, ty, .. } = field.kind else {
             return Err(type_mismatch("list field"));
@@ -2859,6 +3360,25 @@ impl<'schema, 'arena> DynamicStructBuilder<'schema, 'arena> {
             })?
             .clone();
         Ok((field, structure.discriminant_offset))
+    }
+
+    fn descriptor_field_owned(
+        &self,
+        field: &OwnedDynamicField,
+    ) -> Result<(Field, u32), DynamicError> {
+        if field.type_id != self.type_id || !core::ptr::eq(Arc::as_ptr(&field.schema), self.schema)
+        {
+            return Err(type_mismatch("field from this dynamic struct schema"));
+        }
+        let structure = require_struct(self.schema, self.type_id)?;
+        let schema_field =
+            structure
+                .field_by_index(field.index)
+                .ok_or(DynamicError::FieldIndexOutOfBounds {
+                    type_id: self.type_id,
+                    index: field.index,
+                })?;
+        Ok((schema_field.clone(), structure.discriminant_offset))
     }
 
     fn activate_field(

@@ -319,3 +319,20 @@ C++/Rust checksums agree.
 The native evolution path is 66.5% faster than C++. Its 0.335 cumulative ratio
 is also better than the 0.452 borrowed-value control in the same run, so the
 schema-evolution reader gate is closed. Builder reflection remains open.
+
+## Owned reflection access plans
+
+The callback-scoped plans above are a performance specialization, not the only
+ownership model. `OwnedDynamicField` and the typed `OwnedDynamic*Field` plans
+retain the compiled schema without storing references into their own
+allocation. They are `Send + Sync`, can be cached or moved into detached
+workers, and apply to any dynamic value backed by the same schema allocation.
+Worker-local reads still open the same short-lived zero-copy views, so retaining
+a plan never copies message segments.
+
+The general owned descriptor also drives dynamic scalar/blob writes, union
+activation, groups, nested structs, and lists in worker-local arenas. Equivalent
+but separately loaded schemas are rejected on both read and build paths. The
+borrowed plans remain available for scoped callers; choosing the owned form
+moves reference-counted lifetime bookkeeping to descriptor creation and task
+boundaries rather than individual field reads.

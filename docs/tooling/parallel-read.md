@@ -52,6 +52,36 @@ plan.partitions().par_iter()
 No Rayon feature is needed in `capnp-message`; the application owns its
 executor and scheduling policy.
 
+## Dynamic reflection in detached workers
+
+`capnp-schema` keeps the ownership boundary separate from the hot read scope.
+`DynamicStruct` and `DynamicList` own their message and schema handles and are
+`Send + Sync`. The `OwnedDynamic*Field` access plans likewise retain their
+compiled schema without storing self-referential schema borrows, so they can be
+cached in application state or moved into a detached worker. The worker opens a
+short-lived view only while it reads:
+
+```rust,ignore
+let id = value.owned_scalar_field("id")?;
+let task_value = value.clone();
+let task = std::thread::spawn(move || task_value.get_owned_scalar(&id));
+let result = task.join().expect("worker did not panic")?;
+```
+
+Cloning `DynamicStruct` or an owned access plan clones reference-counted
+ownership handles and small fixed metadata; it does not copy message segments,
+field defaults, brands, or resolved element types. Scoped callers may keep
+using the smaller borrowed `Dynamic*Field<'_>` plans. Both forms reject a plan
+created from a different compiled-schema allocation, even if its declarations
+are structurally identical.
+
+The general `OwnedDynamicField` also drives `DynamicStructBuilder` operations:
+workers can create an arena locally and use `set_owned_field`,
+`group_owned_field`, `init_struct_owned_field`, or `init_list_owned_field`
+without resolving names again. Builders remain exclusive or explicitly
+partitioned; making the descriptor shareable does not make mutable message
+storage aliasable.
+
 ## Subtree planning
 
 `SubtreePlan` accepts retained typed `ObjectRef`s and caller-supplied word work
