@@ -80,11 +80,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let data_field = dynamic.field("data")?;
     let typed_text_field = dynamic.text_field("text")?;
     let typed_data_field = dynamic.data_field("data")?;
-    let primitive_list_field = dynamic.field("uint16s")?;
-    let nested_struct_field = dynamic.field("node")?;
-    let struct_list_field = dynamic.field("structs")?;
-    let nested_list_field = dynamic.field("nestedLists")?;
-    let DynamicValue::Struct(Some(nested_probe)) = dynamic.get_field(nested_struct_field)? else {
+    let primitive_list_field = dynamic.list_field("uint16s")?;
+    let nested_struct_field = dynamic.struct_field("node")?;
+    let struct_list_field = dynamic.list_field("structs")?;
+    let nested_list_field = dynamic.list_field("nestedLists")?;
+    let DynamicValue::Struct(Some(nested_probe)) = dynamic.get("node")? else {
         return Err("dynamic nested struct field has the wrong type".into());
     };
     let nested_value_field = nested_probe.field("value")?;
@@ -129,62 +129,45 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 })?
             })?,
             "dynamic-blobs-owned" => dynamic_blobs_owned(&dynamic, text_field, data_field)?,
-            "dynamic-primitive-list" => {
-                let DynamicValue::List(Some(list)) =
-                    black_box(&dynamic).get_field(primitive_list_field)?
-                else {
-                    return Err("dynamic primitive-list field has the wrong type".into());
-                };
-                let DynamicValue::UInt16(value) = list.get(2)? else {
-                    return Err("dynamic primitive-list element has the wrong type".into());
-                };
-                u64::from(value)
-            }
-            "dynamic-nested-struct" => {
-                let DynamicValue::Struct(Some(child)) =
-                    black_box(&dynamic).get_field(nested_struct_field)?
-                else {
-                    return Err("dynamic nested-struct field has the wrong type".into());
-                };
-                let DynamicValue::UInt32(value) = child.get_field(nested_value_field)? else {
-                    return Err("dynamic nested-struct value has the wrong type".into());
-                };
-                u64::from(value)
-            }
-            "dynamic-struct-list" => {
-                let DynamicValue::List(Some(list)) =
-                    black_box(&dynamic).get_field(struct_list_field)?
-                else {
-                    return Err("dynamic struct-list field has the wrong type".into());
-                };
-                let DynamicValue::Struct(Some(child)) = list.get(1)? else {
-                    return Err("dynamic struct-list element has the wrong type".into());
-                };
-                let DynamicValue::UInt32(value) = child.get_field(nested_value_field)? else {
-                    return Err("dynamic struct-list value has the wrong type".into());
-                };
-                u64::from(value)
-            }
-            "dynamic-nested-list" => {
-                let DynamicValue::List(Some(outer)) =
-                    black_box(&dynamic).get_field(nested_list_field)?
-                else {
-                    return Err("dynamic nested-list field has the wrong type".into());
-                };
-                let DynamicValue::List(Some(inner)) = outer.get(0)? else {
-                    return Err("dynamic nested-list element has the wrong type".into());
-                };
-                let DynamicValue::UInt16(value) = inner.get(2)? else {
-                    return Err("dynamic nested-list value has the wrong type".into());
-                };
-                u64::from(value)
-            }
+            "dynamic-primitive-list" => black_box(&dynamic).with_view(|view| {
+                view.with_list(&primitive_list_field, |list| {
+                    Ok(u64::from(list.get_u16(2)?))
+                })
+            })?,
+            "dynamic-nested-struct" => black_box(&dynamic).with_view(|view| {
+                view.with_struct(&nested_struct_field, |child| {
+                    nested_u32(&child, nested_value_field)
+                })
+            })?,
+            "dynamic-struct-list" => black_box(&dynamic).with_view(|view| {
+                view.with_list(&struct_list_field, |list| {
+                    list.with_struct(1, |child| nested_u32(&child, nested_value_field))
+                })
+            })?,
+            "dynamic-nested-list" => black_box(&dynamic).with_view(|view| {
+                view.with_list(&nested_list_field, |outer| {
+                    outer.with_list(0, |inner| Ok(u64::from(inner.get_u16(2)?)))
+                })
+            })?,
             _ => unreachable!(),
         };
         checksum = checksum.rotate_left(9) ^ observed;
     }
     println!("{}\t{}", started.elapsed().as_nanos(), black_box(checksum));
     Ok(())
+}
+
+#[inline(always)]
+fn nested_u32(
+    child: &capnp_schema::DynamicStructView<'_>,
+    field: capnp_schema::DynamicField<'_>,
+) -> Result<u64, capnp_schema::DynamicError> {
+    let DynamicValue::UInt32(value) = child.get_scalar(field)? else {
+        return Err(capnp_schema::DynamicError::TypeMismatch {
+            expected: "UInt32 benchmark field",
+        });
+    };
+    Ok(u64::from(value))
 }
 
 #[inline(always)]

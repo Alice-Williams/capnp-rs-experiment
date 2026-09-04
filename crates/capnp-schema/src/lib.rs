@@ -518,6 +518,60 @@ mod tests {
         };
         assert!(matches!(second.get("value"), Ok(DynamicValue::UInt32(22))));
 
+        let uint16s_field = dynamic
+            .list_field("uint16s")
+            .expect("typed primitive-list descriptor resolves");
+        let node_field = dynamic
+            .struct_field("node")
+            .expect("typed nested-struct descriptor resolves");
+        let structs_field = dynamic
+            .list_field("structs")
+            .expect("typed struct-list descriptor resolves");
+        let nested_lists_field = dynamic
+            .list_field("nestedLists")
+            .expect("typed nested-list descriptor resolves");
+        let node_value_field = second.field("value").expect("nested scalar resolves");
+        let borrowed_nested = dynamic
+            .with_view(|view| {
+                let primitive = view.with_list(&uint16s_field, |list| {
+                    assert_eq!(list.len(), 3);
+                    list.get_u16(2)
+                })?;
+                let nested = view.with_struct(&node_field, |child| {
+                    let DynamicValue::UInt32(value) = child.get_scalar(node_value_field)? else {
+                        return Err(DynamicError::TypeMismatch {
+                            expected: "UInt32 nested value",
+                        });
+                    };
+                    Ok(value)
+                })?;
+                let struct_list = view.with_list(&structs_field, |list| {
+                    list.with_struct(1, |child| {
+                        let DynamicValue::UInt32(value) = child.get_scalar(node_value_field)?
+                        else {
+                            return Err(DynamicError::TypeMismatch {
+                                expected: "UInt32 struct-list value",
+                            });
+                        };
+                        Ok(value)
+                    })
+                })?;
+                let nested_list = view.with_list(&nested_lists_field, |outer| {
+                    outer.with_list(0, |inner| inner.get_u16(2))
+                })?;
+                Ok((primitive, nested, struct_list, nested_list))
+            })
+            .expect("nested borrowed views read");
+        assert_eq!(borrowed_nested, (5, 0, 22, 13));
+        assert!(matches!(
+            dynamic.list_field("uint32Value"),
+            Err(DynamicError::TypeMismatch { .. })
+        ));
+        assert!(matches!(
+            dynamic.with_view(|view| { view.with_list(&uint16s_field, |list| list.get_u16(3)) }),
+            Err(DynamicError::IndexOutOfBounds { index: 3, len: 3 })
+        ));
+
         let DynamicValue::Struct(Some(choice)) = dynamic.get("choice").expect("group reads") else {
             assert!(matches!(
                 dynamic.get("choice"),
