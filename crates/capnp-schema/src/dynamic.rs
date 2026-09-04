@@ -10,10 +10,11 @@ use std::fmt::{self, Write};
 use std::sync::Arc;
 
 use capnp_message::{
-    ArenaError, DataListBuilder, DataSection, ExclusiveArena, GraphError, ListObject,
+    ArenaError, DataListBuilder, DataReader, DataSection, ExclusiveArena, GraphError, ListObject,
     ListReadError, ObjectRef, OwnedMessage, OwnedPointerRef, OwnedReadError, PointerListBuilder,
     PreparedStructRef, PrimitiveError, ReaderLimits, SharedTraversalBudget, StructBuilder,
     StructElementReader, StructListBuilder, StructObject, StructReadError, StructReader,
+    TextReader,
 };
 
 use crate::{
@@ -113,6 +114,17 @@ pub struct DynamicStruct {
     backing: StructBacking,
 }
 
+/// A callback-scoped dynamic view over one retained struct.
+///
+/// Opening a view borrows the retained message once. Multiple pointer fields
+/// can then be inspected without repeatedly rebuilding that borrow context.
+/// Values borrowed through the view cannot escape the callback passed to
+/// [`DynamicStruct::with_view`].
+pub struct DynamicStructView<'view> {
+    source: &'view DynamicStruct,
+    reader: DynamicStructReader<'view>,
+}
+
 /// A field resolved for one dynamic struct schema.
 ///
 /// The lifetime keeps the originating schema alive, while `DynamicStruct`
@@ -123,6 +135,33 @@ pub struct DynamicField<'schema> {
     type_id: NodeId,
     structure: &'schema StructSchema,
     field: &'schema Field,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct DynamicUnionAccess<'schema> {
+    discriminant_offset: u32,
+    expected: u16,
+    field_name: &'schema str,
+}
+
+/// A reusable, type-checked access plan for one dynamic Text field.
+#[derive(Clone, Copy, Debug)]
+pub struct DynamicTextField<'schema> {
+    schema: &'schema Arc<CompiledSchema>,
+    type_id: NodeId,
+    offset: u16,
+    default: Option<&'schema str>,
+    union: Option<DynamicUnionAccess<'schema>>,
+}
+
+/// A reusable, type-checked access plan for one dynamic Data field.
+#[derive(Clone, Copy, Debug)]
+pub struct DynamicDataField<'schema> {
+    schema: &'schema Arc<CompiledSchema>,
+    type_id: NodeId,
+    offset: u16,
+    default: Option<&'schema [u8]>,
+    union: Option<DynamicUnionAccess<'schema>>,
 }
 
 impl DynamicField<'_> {
@@ -404,6 +443,18 @@ impl DynamicStruct {
         })
     }
 
+    /// Resolves and type-checks a reusable Text access plan.
+    pub fn text_field(&self, name: &str) -> Result<DynamicTextField<'_>, DynamicError> {
+        let field = self.field(name)?;
+        self.prepare_text_field(field)
+    }
+
+    /// Resolves and type-checks a reusable Data access plan.
+    pub fn data_field(&self, name: &str) -> Result<DynamicDataField<'_>, DynamicError> {
+        let field = self.field(name)?;
+        self.prepare_data_field(field)
+    }
+
     pub fn get_by_index(&self, index: usize) -> Result<DynamicValue, DynamicError> {
         let field = self.field_by_index(index)?;
         self.get_field(field)
@@ -425,11 +476,92 @@ impl DynamicStruct {
         })
     }
 
+    /// Type-checks an indexed field as a reusable Text access plan.
+    pub fn text_field_by_index(&self, index: usize) -> Result<DynamicTextField<'_>, DynamicError> {
+        let field = self.field_by_index(index)?;
+        self.prepare_text_field(field)
+    }
+
+    /// Type-checks an indexed field as a reusable Data access plan.
+    pub fn data_field_by_index(&self, index: usize) -> Result<DynamicDataField<'_>, DynamicError> {
+        let field = self.field_by_index(index)?;
+        self.prepare_data_field(field)
+    }
+
+    #[inline(always)]
     pub fn get_field(&self, field: DynamicField<'_>) -> Result<DynamicValue, DynamicError> {
-        if field.type_id != self.type_id || !Arc::ptr_eq(field.schema, &self.schema) {
-            return Err(type_mismatch("field from this dynamic struct schema"));
+        let (field, structure) = self.require_field(field)?;
+        self.read_field(field, structure)
+    }
+
+    /// Opens one short-lived borrow context for a batch of dynamic reads.
+    #[inline(always)]
+    pub fn with_view<R>(
+        &self,
+        use_view: impl for<'view> FnOnce(DynamicStructView<'view>) -> Result<R, DynamicError>,
+    ) -> Result<R, DynamicError> {
+        match &self.backing {
+            StructBacking::Pointer(value) => value.with_reader(|reader| {
+                use_view(DynamicStructView {
+                    source: self,
+                    reader: DynamicStructReader::Struct(reader),
+                })
+            }),
+            StructBacking::Element(value) => Ok(value.with_reader(|reader| {
+                use_view(DynamicStructView {
+                    source: self,
+                    reader: DynamicStructReader::Element(reader),
+                })
+            })??),
         }
-        self.read_field(field.field, field.structure)
+    }
+
+    /// Borrows a Text field only for the duration of `use_text`.
+    ///
+    /// Unlike [`DynamicValue::Text`], this path does not allocate or copy the
+    /// wire payload. The callback boundary prevents the borrowed view from
+    /// outliving this retained dynamic reader.
+    #[inline(always)]
+    pub fn with_text_field<R>(
+        &self,
+        field: DynamicField<'_>,
+        use_text: impl for<'value> FnOnce(&'value str) -> R,
+    ) -> Result<R, DynamicError> {
+        self.with_view(|view| view.with_text_field(field, use_text))
+    }
+
+    /// Borrows a Data field only for the duration of `use_data`.
+    ///
+    /// Unlike [`DynamicValue::Data`], this path does not allocate or copy the
+    /// wire payload. The callback boundary prevents the borrowed view from
+    /// outliving this retained dynamic reader.
+    #[inline(always)]
+    pub fn with_data_field<R>(
+        &self,
+        field: DynamicField<'_>,
+        use_data: impl for<'value> FnOnce(&'value [u8]) -> R,
+    ) -> Result<R, DynamicError> {
+        self.with_view(|view| view.with_data_field(field, use_data))
+    }
+
+    /// Borrows through a pre-validated Text access plan.
+    #[inline(always)]
+    pub fn with_text<R>(
+        &self,
+        field: &DynamicTextField<'_>,
+        use_text: impl for<'value> FnOnce(&'value str) -> R,
+    ) -> Result<R, DynamicError> {
+        self.with_view(|view| view.with_text(field, use_text))
+    }
+
+    /// Borrows through a pre-validated Data access plan.
+    #[inline(always)]
+    pub fn with_data<R>(
+        &self,
+        field: &DynamicDataField<'_>,
+        use_data: impl for<'value> FnOnce(&'value [u8]) -> R,
+    ) -> Result<R, DynamicError> {
+        self.with_view(|view| view.with_data(field, use_data))
     }
 
     /// Reads a generated scalar slot without performing reflection lookup.
@@ -632,23 +764,13 @@ impl DynamicStruct {
         require_struct(&self.schema, self.type_id)
     }
 
+    #[inline(always)]
     fn read_field(
         &self,
         field: &Field,
         structure: &StructSchema,
     ) -> Result<DynamicValue, DynamicError> {
-        if let Some(expected) = field.discriminant_value {
-            let actual = self.with_reader(|reader| {
-                Ok(reader.data()?.read_u16(structure.discriminant_offset, 0)?)
-            })?;
-            if actual != expected {
-                return Err(DynamicError::InactiveUnion {
-                    field: field.name.clone(),
-                    expected,
-                    actual,
-                });
-            }
-        }
+        self.require_active_field(field, structure)?;
         match &field.kind {
             FieldKind::Group { type_id } => Ok(DynamicValue::Struct(Some(Self {
                 schema: Arc::clone(&self.schema),
@@ -665,6 +787,105 @@ impl DynamicStruct {
         }
     }
 
+    #[inline(always)]
+    fn require_field<'field>(
+        &self,
+        field: DynamicField<'field>,
+    ) -> Result<(&'field Field, &'field StructSchema), DynamicError> {
+        if field.type_id != self.type_id || !Arc::ptr_eq(field.schema, &self.schema) {
+            return Err(type_mismatch("field from this dynamic struct schema"));
+        }
+        Ok((field.field, field.structure))
+    }
+
+    fn prepare_text_field<'field>(
+        &self,
+        field: DynamicField<'field>,
+    ) -> Result<DynamicTextField<'field>, DynamicError> {
+        let schema = field.schema;
+        let (field, structure) = self.require_field(field)?;
+        let FieldKind::Slot {
+            offset,
+            ty,
+            default_value,
+            ..
+        } = &field.kind
+        else {
+            return Err(type_mismatch("Text field"));
+        };
+        if !matches!(ty, Type::Text) && !matches!(self.resolve_type(ty), Type::Text) {
+            return Err(type_mismatch("Text field"));
+        }
+        let default = match default_value {
+            Value::AnyPointer(value) if value.kind == OpaquePointerKind::Null => None,
+            Value::Text(value) if value.is_empty() => None,
+            Value::Text(value) => Some(value.as_str()),
+            _ => return Err(type_mismatch("Text default")),
+        };
+        Ok(DynamicTextField {
+            schema,
+            type_id: self.type_id,
+            offset: u16_offset(*offset)?,
+            default,
+            union: dynamic_union_access(field, structure),
+        })
+    }
+
+    fn prepare_data_field<'field>(
+        &self,
+        field: DynamicField<'field>,
+    ) -> Result<DynamicDataField<'field>, DynamicError> {
+        let schema = field.schema;
+        let (field, structure) = self.require_field(field)?;
+        let FieldKind::Slot {
+            offset,
+            ty,
+            default_value,
+            ..
+        } = &field.kind
+        else {
+            return Err(type_mismatch("Data field"));
+        };
+        if !matches!(ty, Type::Data) && !matches!(self.resolve_type(ty), Type::Data) {
+            return Err(type_mismatch("Data field"));
+        }
+        let default = match default_value {
+            Value::AnyPointer(value) if value.kind == OpaquePointerKind::Null => None,
+            Value::Data(value) if value.is_empty() => None,
+            Value::Data(value) => Some(value.as_slice()),
+            _ => return Err(type_mismatch("Data default")),
+        };
+        Ok(DynamicDataField {
+            schema,
+            type_id: self.type_id,
+            offset: u16_offset(*offset)?,
+            default,
+            union: dynamic_union_access(field, structure),
+        })
+    }
+
+    #[inline(always)]
+    fn require_active_field(
+        &self,
+        field: &Field,
+        structure: &StructSchema,
+    ) -> Result<(), DynamicError> {
+        if let Some(expected) = field.discriminant_value {
+            let actual = self.with_reader(|reader| {
+                Ok(reader.data()?.read_u16(structure.discriminant_offset, 0)?)
+            })?;
+            if actual != expected {
+                return Err(DynamicError::InactiveUnion {
+                    field: field.name.clone(),
+                    expected,
+                    actual,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    #[inline(always)]
     fn read_slot(
         &self,
         offset: u32,
@@ -728,6 +949,8 @@ impl DynamicStruct {
                     data.read_f64(offset, f64_default(default)?)?,
                 ))
             }),
+            Type::Text => self.read_text(offset, default),
+            Type::Data => self.read_data(offset, default),
             _ => {
                 let resolved_type = self.resolve_type(ty);
                 self.read_resolved_slot(offset, &resolved_type, default)
@@ -788,6 +1011,7 @@ impl DynamicStruct {
         }
     }
 
+    #[inline(always)]
     fn scalar(
         &self,
         read: impl FnOnce(DataSection<'_>) -> Result<DynamicValue, DynamicError>,
@@ -795,37 +1019,70 @@ impl DynamicStruct {
         self.with_reader(|reader| read(reader.data()?))
     }
 
+    #[inline(always)]
     fn read_text(&self, offset: u32, default: &Value) -> Result<DynamicValue, DynamicError> {
+        self.with_text_slot(offset, default, str::to_owned)
+            .map(DynamicValue::Text)
+    }
+
+    #[inline(always)]
+    fn read_data(&self, offset: u32, default: &Value) -> Result<DynamicValue, DynamicError> {
+        self.with_data_slot(offset, default, <[u8]>::to_vec)
+            .map(DynamicValue::Data)
+    }
+
+    #[inline(always)]
+    fn with_text_slot<R>(
+        &self,
+        offset: u32,
+        default: &Value,
+        use_text: impl for<'value> FnOnce(&'value str) -> R,
+    ) -> Result<R, DynamicError> {
+        if matches!(default, Value::AnyPointer(value) if value.kind == OpaquePointerKind::Null)
+            || matches!(default, Value::Text(value) if value.is_empty())
+        {
+            return self.with_reader(|reader| {
+                let text = reader.read_text(u16_offset(offset)?)?;
+                let text = text.to_str().map_err(|_| DynamicError::InvalidUtf8)?;
+                Ok(use_text(text))
+            });
+        }
         match self.pointer(u16_offset(offset)?)? {
             OwnedPointerRef::Null => match default {
-                Value::Text(value) => Ok(DynamicValue::Text(value.clone())),
-                Value::AnyPointer(value) if value.kind == OpaquePointerKind::Null => {
-                    Ok(DynamicValue::Text(String::new()))
-                }
+                Value::Text(value) => Ok(use_text(value)),
                 _ => Err(type_mismatch("Text default")),
             },
-            OwnedPointerRef::List(pointer) => {
-                let value = pointer
-                    .with_text(|text| text.to_str().map(str::to_owned))?
-                    .map_err(|_| DynamicError::InvalidUtf8)?;
-                Ok(DynamicValue::Text(value))
-            }
+            OwnedPointerRef::List(pointer) => pointer.with_text(|text| {
+                let text = text.to_str().map_err(|_| DynamicError::InvalidUtf8)?;
+                Ok(use_text(text))
+            })?,
             _ => Err(type_mismatch("Text pointer")),
         }
     }
 
-    fn read_data(&self, offset: u32, default: &Value) -> Result<DynamicValue, DynamicError> {
+    #[inline(always)]
+    fn with_data_slot<R>(
+        &self,
+        offset: u32,
+        default: &Value,
+        use_data: impl for<'value> FnOnce(&'value [u8]) -> R,
+    ) -> Result<R, DynamicError> {
+        if matches!(default, Value::AnyPointer(value) if value.kind == OpaquePointerKind::Null)
+            || matches!(default, Value::Data(value) if value.is_empty())
+        {
+            return self.with_reader(|reader| {
+                let data = reader.read_data(u16_offset(offset)?)?;
+                Ok(use_data(data.as_bytes()))
+            });
+        }
         match self.pointer(u16_offset(offset)?)? {
             OwnedPointerRef::Null => match default {
-                Value::Data(value) => Ok(DynamicValue::Data(value.clone())),
-                Value::AnyPointer(value) if value.kind == OpaquePointerKind::Null => {
-                    Ok(DynamicValue::Data(Vec::new()))
-                }
+                Value::Data(value) => Ok(use_data(value)),
                 _ => Err(type_mismatch("Data default")),
             },
-            OwnedPointerRef::List(pointer) => Ok(DynamicValue::Data(
-                pointer.with_data(|data| data.as_bytes().to_vec())?,
-            )),
+            OwnedPointerRef::List(pointer) => {
+                Ok(pointer.with_data(|data| use_data(data.as_bytes()))?)
+            }
             _ => Err(type_mismatch("Data pointer")),
         }
     }
@@ -888,6 +1145,7 @@ impl DynamicStruct {
         )))
     }
 
+    #[inline(always)]
     fn pointer(&self, index: u16) -> Result<OwnedPointerRef, DynamicError> {
         Ok(match &self.backing {
             StructBacking::Pointer(value) => value.child_pointer(index)?,
@@ -899,6 +1157,7 @@ impl DynamicStruct {
         resolve_type_with_brand(ty, &self.brand.scopes)
     }
 
+    #[inline(always)]
     fn with_reader<R>(
         &self,
         read: impl for<'reader> FnOnce(DynamicStructReader<'reader>) -> Result<R, DynamicError>,
@@ -915,16 +1174,176 @@ impl DynamicStruct {
     }
 }
 
+impl DynamicStructView<'_> {
+    #[inline(always)]
+    fn with_text_slot<R>(
+        &self,
+        offset: u16,
+        use_text: impl for<'value> FnOnce(&'value str) -> R,
+    ) -> Result<R, DynamicError> {
+        let text = self.reader.read_text(offset)?;
+        let text = text.to_str().map_err(|_| DynamicError::InvalidUtf8)?;
+        Ok(use_text(text))
+    }
+
+    #[inline(always)]
+    fn with_data_slot<R>(
+        &self,
+        offset: u16,
+        use_data: impl for<'value> FnOnce(&'value [u8]) -> R,
+    ) -> Result<R, DynamicError> {
+        let data = self.reader.read_data(offset)?;
+        Ok(use_data(data.as_bytes()))
+    }
+
+    /// Borrows through a reusable, type-checked Text access plan.
+    #[inline(always)]
+    pub fn with_text<R>(
+        &self,
+        field: &DynamicTextField<'_>,
+        use_text: impl for<'value> FnOnce(&'value str) -> R,
+    ) -> Result<R, DynamicError> {
+        if field.type_id != self.source.type_id || !Arc::ptr_eq(field.schema, &self.source.schema) {
+            return Err(type_mismatch("Text field from this dynamic struct schema"));
+        }
+        self.require_union(field.union)?;
+        let Some(default) = field.default else {
+            return self.with_text_slot(field.offset, use_text);
+        };
+        match self.source.pointer(field.offset)? {
+            OwnedPointerRef::Null => Ok(use_text(default)),
+            OwnedPointerRef::List(pointer) => pointer.with_text(|text| {
+                let text = text.to_str().map_err(|_| DynamicError::InvalidUtf8)?;
+                Ok(use_text(text))
+            })?,
+            _ => Err(type_mismatch("Text pointer")),
+        }
+    }
+
+    /// Borrows through a reusable, type-checked Data access plan.
+    #[inline(always)]
+    pub fn with_data<R>(
+        &self,
+        field: &DynamicDataField<'_>,
+        use_data: impl for<'value> FnOnce(&'value [u8]) -> R,
+    ) -> Result<R, DynamicError> {
+        if field.type_id != self.source.type_id || !Arc::ptr_eq(field.schema, &self.source.schema) {
+            return Err(type_mismatch("Data field from this dynamic struct schema"));
+        }
+        self.require_union(field.union)?;
+        let Some(default) = field.default else {
+            return self.with_data_slot(field.offset, use_data);
+        };
+        match self.source.pointer(field.offset)? {
+            OwnedPointerRef::Null => Ok(use_data(default)),
+            OwnedPointerRef::List(pointer) => {
+                Ok(pointer.with_data(|data| use_data(data.as_bytes()))?)
+            }
+            _ => Err(type_mismatch("Data pointer")),
+        }
+    }
+
+    #[inline(always)]
+    fn require_union(&self, union: Option<DynamicUnionAccess<'_>>) -> Result<(), DynamicError> {
+        if let Some(union) = union {
+            let actual = self.reader.data()?.read_u16(union.discriminant_offset, 0)?;
+            if actual != union.expected {
+                return Err(DynamicError::InactiveUnion {
+                    field: union.field_name.to_owned(),
+                    expected: union.expected,
+                    actual,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Borrows a Text field without allocating or copying its wire payload.
+    #[inline(always)]
+    pub fn with_text_field<R>(
+        &self,
+        field: DynamicField<'_>,
+        use_text: impl for<'value> FnOnce(&'value str) -> R,
+    ) -> Result<R, DynamicError> {
+        let (field, structure) = self.source.require_field(field)?;
+        self.source.require_active_field(field, structure)?;
+        let FieldKind::Slot {
+            offset,
+            ty,
+            default_value,
+            ..
+        } = &field.kind
+        else {
+            return Err(type_mismatch("Text field"));
+        };
+        if !matches!(ty, Type::Text) && !matches!(self.source.resolve_type(ty), Type::Text) {
+            return Err(type_mismatch("Text field"));
+        }
+        if matches!(default_value, Value::AnyPointer(value) if value.kind == OpaquePointerKind::Null)
+            || matches!(default_value, Value::Text(value) if value.is_empty())
+        {
+            return self.with_text_slot(u16_offset(*offset)?, use_text);
+        }
+        self.source.with_text_slot(*offset, default_value, use_text)
+    }
+
+    /// Borrows a Data field without allocating or copying its wire payload.
+    #[inline(always)]
+    pub fn with_data_field<R>(
+        &self,
+        field: DynamicField<'_>,
+        use_data: impl for<'value> FnOnce(&'value [u8]) -> R,
+    ) -> Result<R, DynamicError> {
+        let (field, structure) = self.source.require_field(field)?;
+        self.source.require_active_field(field, structure)?;
+        let FieldKind::Slot {
+            offset,
+            ty,
+            default_value,
+            ..
+        } = &field.kind
+        else {
+            return Err(type_mismatch("Data field"));
+        };
+        if !matches!(ty, Type::Data) && !matches!(self.source.resolve_type(ty), Type::Data) {
+            return Err(type_mismatch("Data field"));
+        }
+        if matches!(default_value, Value::AnyPointer(value) if value.kind == OpaquePointerKind::Null)
+            || matches!(default_value, Value::Data(value) if value.is_empty())
+        {
+            return self.with_data_slot(u16_offset(*offset)?, use_data);
+        }
+        self.source.with_data_slot(*offset, default_value, use_data)
+    }
+}
+
 enum DynamicStructReader<'reader> {
     Struct(StructReader<'reader, 'reader, SharedTraversalBudget>),
     Element(StructElementReader<'reader, 'reader, SharedTraversalBudget>),
 }
 
-impl DynamicStructReader<'_> {
+impl<'reader> DynamicStructReader<'reader> {
+    #[inline(always)]
     fn data(&self) -> Result<DataSection<'_>, DynamicError> {
         Ok(match self {
             Self::Struct(value) => (*value).data_section()?,
             Self::Element(value) => (*value).data_section()?,
+        })
+    }
+
+    #[inline(always)]
+    fn read_text(&self, index: u16) -> Result<TextReader<'reader>, DynamicError> {
+        Ok(match self {
+            Self::Struct(value) => value.read_text(index, None)?,
+            Self::Element(value) => value.read_text(index, None)?,
+        })
+    }
+
+    #[inline(always)]
+    fn read_data(&self, index: u16) -> Result<DataReader<'reader>, DynamicError> {
+        Ok(match self {
+            Self::Struct(value) => value.read_data(index, None)?,
+            Self::Element(value) => value.read_data(index, None)?,
         })
     }
 }
@@ -937,6 +1356,17 @@ fn require_struct(schema: &CompiledSchema, type_id: NodeId) -> Result<&StructSch
         NodeKind::Struct(value) => Ok(value),
         _ => Err(DynamicError::ExpectedStructSchema(type_id)),
     }
+}
+
+fn dynamic_union_access<'schema>(
+    field: &'schema Field,
+    structure: &StructSchema,
+) -> Option<DynamicUnionAccess<'schema>> {
+    field.discriminant_value.map(|expected| DynamicUnionAccess {
+        discriminant_offset: structure.discriminant_offset,
+        expected,
+        field_name: &field.name,
+    })
 }
 
 #[derive(Clone, Debug)]

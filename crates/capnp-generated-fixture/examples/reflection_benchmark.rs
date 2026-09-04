@@ -74,6 +74,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     let text_field = dynamic.field("text")?;
     let data_field = dynamic.field("data")?;
+    let typed_text_field = dynamic.text_field("text")?;
+    let typed_data_field = dynamic.data_field("data")?;
 
     let started = Instant::now();
     let mut checksum = SEED;
@@ -107,9 +109,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 black_box(&dynamic).get_field(black_box(dynamic_fields[selector]))?,
                 selector,
             )?,
-            "dynamic-blobs-borrowed" | "dynamic-blobs-owned" => {
-                dynamic_blobs(&dynamic, text_field, data_field)?
-            }
+            "dynamic-blobs-borrowed" => black_box(&dynamic).with_view(|view| {
+                view.with_text(&typed_text_field, |text| {
+                    view.with_data(&typed_data_field, |data| {
+                        blob_fingerprint(text.as_bytes(), data)
+                    })
+                })?
+            })?,
+            "dynamic-blobs-owned" => dynamic_blobs_owned(&dynamic, text_field, data_field)?,
             _ => unreachable!(),
         };
         checksum = checksum.rotate_left(9) ^ observed;
@@ -118,7 +125,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn dynamic_blobs(
+#[inline(always)]
+fn dynamic_blobs_owned(
     dynamic: &DynamicStruct,
     text_field: capnp_schema::DynamicField<'_>,
     data_field: capnp_schema::DynamicField<'_>,

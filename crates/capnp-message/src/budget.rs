@@ -135,6 +135,7 @@ impl sealed::Sealed for SharedTraversalBudget {}
 
 #[cfg(target_has_atomic = "64")]
 impl TraversalBudget for SharedTraversalBudget {
+    #[inline(always)]
     fn try_charge(&self, words: u64) -> Result<(), BudgetExhausted> {
         self.remaining
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
@@ -147,6 +148,7 @@ impl TraversalBudget for SharedTraversalBudget {
             })
     }
 
+    #[inline(always)]
     fn remaining_words(&self) -> u64 {
         self.remaining.load(Ordering::Acquire)
     }

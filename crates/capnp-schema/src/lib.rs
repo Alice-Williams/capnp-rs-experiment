@@ -410,6 +410,46 @@ mod tests {
             dynamic.get_field(foreign_field),
             Err(DynamicError::TypeMismatch { .. })
         ));
+        let text_field = dynamic
+            .text_field("text")
+            .expect("typed Text descriptor resolves");
+        let data_field = dynamic
+            .data_field("data")
+            .expect("typed Data descriptor resolves");
+        let borrowed = dynamic
+            .with_view(|view| {
+                view.with_text(&text_field, |text| {
+                    view.with_data(&data_field, |data| (text.to_owned(), data.to_vec()))
+                })?
+            })
+            .expect("batched blob view reads");
+        assert_eq!(borrowed, ("dynamic text".to_owned(), vec![0, 1, 2, 0xff]));
+        assert_eq!(
+            dynamic
+                .with_text(&text_field, str::len)
+                .expect("single Text plan reads"),
+            "dynamic text".len()
+        );
+        assert!(matches!(
+            dynamic.text_field("uint32Value"),
+            Err(DynamicError::TypeMismatch { .. })
+        ));
+        let foreign_text = other_dynamic
+            .text_field("text")
+            .expect("foreign Text plan resolves");
+        assert!(matches!(
+            dynamic.with_text(&foreign_text, str::len),
+            Err(DynamicError::TypeMismatch { .. })
+        ));
+        let default_text = dynamic
+            .text_field("defaultText")
+            .expect("defaulted Text plan resolves");
+        assert_eq!(
+            dynamic
+                .with_text(&default_text, str::to_owned)
+                .expect("non-null schema default is borrowed"),
+            "default text"
+        );
         assert!(matches!(
             dynamic.get("defaulted"),
             Ok(DynamicValue::UInt32(123456))
