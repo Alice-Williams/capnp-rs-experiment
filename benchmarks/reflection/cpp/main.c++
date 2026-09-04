@@ -73,11 +73,50 @@ uint64_t blobFingerprint(
   return value;
 }
 
+uint32_t readU32(const capnp::byte* bytes) {
+  return uint32_t{bytes[0]} | (uint32_t{bytes[1]} << 8)
+      | (uint32_t{bytes[2]} << 16) | (uint32_t{bytes[3]} << 24);
+}
+
+uint64_t readU64(const capnp::byte* bytes) {
+  return uint64_t{readU32(bytes)} | (uint64_t{readU32(bytes + 4)} << 32);
+}
+
+kj::Array<capnp::word> makeUnknownUnionWords(uint32_t discriminantOffset) {
+  capnp::MallocMessageBuilder builder;
+  builder.initRoot<WireFixture>();
+  auto words = capnp::messageToFlatArray(builder);
+  auto* bytes = reinterpret_cast<capnp::byte*>(words.begin());
+  auto segmentCount = size_t{readU32(bytes)} + 1;
+  if (segmentCount != 1) {
+    throw std::runtime_error("unknown-union fixture is not one segment");
+  }
+  auto rootWordIndex = (segmentCount + 2) / 2;
+  auto rootPointer = readU64(bytes + rootWordIndex * sizeof(capnp::word));
+  if ((rootPointer & 3) != 0) {
+    throw std::runtime_error("unknown-union root is not a struct pointer");
+  }
+  auto rawOffset = static_cast<uint32_t>(rootPointer >> 2) & 0x3fffffffu;
+  auto signedOffset = (rawOffset & 0x20000000u) == 0
+      ? int64_t{rawOffset}
+      : int64_t{rawOffset} - (int64_t{1} << 30);
+  auto contentWord = static_cast<int64_t>(rootWordIndex + 1) + signedOffset;
+  auto byteOffset = contentWord * int64_t{sizeof(capnp::word)}
+      + int64_t{discriminantOffset} * 2;
+  if (contentWord < 0 || byteOffset < 0
+      || static_cast<size_t>(byteOffset + 2) > words.size() * sizeof(capnp::word)) {
+    throw std::runtime_error("unknown-union discriminant is out of bounds");
+  }
+  bytes[byteOffset] = 55;
+  bytes[byteOffset + 1] = 0;
+  return words;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
   if (argc != 4) {
-    std::cerr << "usage: cpp-reflection schema-name|schema-index|dynamic-name|dynamic-index|dynamic-field|dynamic-blobs-borrowed|dynamic-blobs-owned|dynamic-primitive-list|dynamic-nested-struct|dynamic-struct-list|dynamic-nested-list|dynamic-enum|dynamic-default|dynamic-union-active PASSES FIXTURE\n";
+    std::cerr << "usage: cpp-reflection schema-name|schema-index|dynamic-name|dynamic-index|dynamic-field|dynamic-blobs-borrowed|dynamic-blobs-owned|dynamic-primitive-list|dynamic-nested-struct|dynamic-struct-list|dynamic-nested-list|dynamic-enum|dynamic-default|dynamic-union-active|dynamic-union-unknown PASSES FIXTURE\n";
     return 2;
   }
   auto mode = std::string_view(argv[1]);
@@ -105,6 +144,12 @@ int main(int argc, char** argv) {
   auto defaultedField = schema.getFieldByName("defaulted");
   auto choiceField = schema.getFieldByName("choice");
   auto nodeValueField = capnp::Schema::from<Node>().getFieldByName("value");
+  auto choiceSchema = choiceField.getType().asStruct();
+  auto unknownWords = makeUnknownUnionWords(
+      choiceSchema.getProto().getStruct().getDiscriminantOffset());
+  capnp::FlatArrayMessageReader unknownMessage(unknownWords.asPtr(), options);
+  auto unknownRoot = unknownMessage.getRoot<WireFixture>();
+  auto unknownDynamic = capnp::toDynamic(unknownRoot);
 
   auto started = std::chrono::steady_clock::now();
   uint64_t checksum = SEED;
@@ -163,6 +208,12 @@ int main(int argc, char** argv) {
       auto discriminant = active.getProto().getDiscriminantValue();
       observed = std::rotl(uint64_t{discriminant}, 17)
           ^ choice.get(active).as<uint64_t>();
+    } else if (mode == "dynamic-union-unknown") {
+      auto choice = unknownDynamic.get(choiceField).as<capnp::DynamicStruct>();
+      if (choice.which() != kj::none) {
+        throw std::runtime_error("unknown union resolved to a known field");
+      }
+      observed = static_cast<uint16_t>(unknownRoot.getChoice().which());
     } else {
       std::cerr << "unknown benchmark mode\n";
       return 2;

@@ -68,6 +68,7 @@ workloads=(
     dynamic-blobs-borrowed dynamic-blobs-owned
     dynamic-primitive-list dynamic-nested-struct dynamic-struct-list dynamic-nested-list
     dynamic-enum dynamic-default dynamic-union-active
+    dynamic-union-unknown
 )
 
 run_workload() {

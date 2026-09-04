@@ -6,8 +6,8 @@ result_dir=${1:?result directory is required}
 expected_passes=${2:-100000}
 expected_cases=${3:-4}
 
-if ((expected_cases < 4 || expected_cases > 14)); then
-    printf 'expected case count must be from 4 through 14\n' >&2
+if ((expected_cases < 4 || expected_cases > 15)); then
+    printf 'expected case count must be from 4 through 15\n' >&2
     exit 2
 fi
 expected_raw_lines=$((1 + expected_cases * 2 * 11))
@@ -45,7 +45,8 @@ awk -F '\t' -v passes="$expected_passes" -v cases="$expected_cases" -v expected=
       !(cases >= 11 && $2 == "dynamic-nested-list") &&
       !(cases >= 12 && $2 == "dynamic-enum") &&
       !(cases >= 13 && $2 == "dynamic-default") &&
-      !(cases >= 14 && $2 == "dynamic-union-active") { exit 1 }
+      !(cases >= 14 && $2 == "dynamic-union-active") &&
+      !(cases >= 15 && $2 == "dynamic-union-unknown") { exit 1 }
   !($2 in checksum) { checksum[$2] = $6; next }
   $6 != checksum[$2] { exit 1 }
   END { if (NR != expected || length(checksum) != cases) exit 1 }

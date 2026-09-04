@@ -4,9 +4,10 @@ use std::time::Instant;
 
 use capnp_generated_fixture::wire::wire_fixture;
 use capnp_io::{FrameLimits, FrameRead, parse_frame};
-use capnp_message::{OwnedMessage, ReaderLimits};
+use capnp_message::{ExclusiveArena, OwnedMessage, ReaderLimits};
 use capnp_schema::{
-    CompiledSchema, DynamicScalarValue, DynamicStruct, DynamicValue, LoadLimits, NodeKind,
+    CompiledSchema, DynamicScalarValue, DynamicStruct, DynamicValue, FieldKind, LoadLimits,
+    NodeKind, StructSchema,
 };
 
 const SEED: u64 = 0x4d59_5df4_d0f3_3173;
@@ -27,7 +28,7 @@ const FRAME: &[u8] = include_bytes!(concat!(
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let mode = args.next().ok_or(
-        "usage: reflection_benchmark schema-name|schema-index|dynamic-name|dynamic-index|dynamic-field|dynamic-blobs-borrowed|dynamic-blobs-owned|dynamic-primitive-list|dynamic-nested-struct|dynamic-struct-list|dynamic-nested-list|dynamic-enum|dynamic-default|dynamic-union-active PASSES",
+        "usage: reflection_benchmark schema-name|schema-index|dynamic-name|dynamic-index|dynamic-field|dynamic-blobs-borrowed|dynamic-blobs-owned|dynamic-primitive-list|dynamic-nested-struct|dynamic-struct-list|dynamic-nested-list|dynamic-enum|dynamic-default|dynamic-union-active|dynamic-union-unknown PASSES",
     )?;
     let passes = args.next().ok_or("missing passes")?.parse::<usize>()?;
     if args.next().is_some()
@@ -48,6 +49,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 | "dynamic-enum"
                 | "dynamic-default"
                 | "dynamic-union-active"
+                | "dynamic-union-unknown"
         )
     {
         return Err("expected a known mode and positive PASSES".into());
@@ -100,6 +102,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("dynamic union group has the wrong type".into());
     };
     let choice_number_field = choice_probe.scalar_field("number")?;
+    let choice_schema = group_schema(&schema, structure, "choice")?;
+    let unknown_message = unknown_union_message(structure, choice_schema.discriminant_offset)?;
+    let unknown_dynamic =
+        DynamicStruct::root(Arc::clone(&schema), unknown_message, wire_fixture::TYPE_ID)?;
 
     let started = Instant::now();
     let mut checksum = SEED;
@@ -199,12 +205,65 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Ok(u64::from(discriminant).rotate_left(17) ^ value)
                 })
             })?,
+            "dynamic-union-unknown" => black_box(&unknown_dynamic).with_view(|view| {
+                view.with_struct(&choice_field, |choice| {
+                    if choice.active_union_field()?.is_some() {
+                        return Err(capnp_schema::DynamicError::TypeMismatch {
+                            expected: "unknown dynamic union field",
+                        });
+                    }
+                    choice.union_discriminant()?.map(u64::from).ok_or(
+                        capnp_schema::DynamicError::TypeMismatch {
+                            expected: "raw dynamic union discriminant",
+                        },
+                    )
+                })
+            })?,
             _ => unreachable!(),
         };
         checksum = checksum.rotate_left(9) ^ observed;
     }
     println!("{}\t{}", started.elapsed().as_nanos(), black_box(checksum));
     Ok(())
+}
+
+fn group_schema<'schema>(
+    schema: &'schema CompiledSchema,
+    structure: &StructSchema,
+    name: &str,
+) -> Result<&'schema StructSchema, Box<dyn std::error::Error>> {
+    let FieldKind::Group { type_id } = structure
+        .field(name)
+        .ok_or("benchmark group field is missing")?
+        .kind
+    else {
+        return Err("benchmark field is not a group".into());
+    };
+    let NodeKind::Struct(group) = &schema
+        .node(type_id)
+        .ok_or("benchmark group schema is missing")?
+        .kind
+    else {
+        return Err("benchmark group schema is not a struct".into());
+    };
+    Ok(group)
+}
+
+fn unknown_union_message(
+    structure: &StructSchema,
+    discriminant_offset: u32,
+) -> Result<Arc<OwnedMessage>, Box<dyn std::error::Error>> {
+    let mut arena = ExclusiveArena::new(8, 256)?;
+    arena
+        .init_root_struct(structure.data_word_count, structure.pointer_count)?
+        .set_u16(discriminant_offset, 55, 0)?;
+    Ok(OwnedMessage::new(
+        arena.into_segments(),
+        ReaderLimits {
+            traversal_words: u64::MAX,
+            nesting_levels: 64,
+        },
+    )?)
 }
 
 #[inline(always)]

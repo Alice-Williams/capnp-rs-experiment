@@ -1577,6 +1577,21 @@ impl<'view> DynamicStructView<'view> {
             .find(|field| field.discriminant_value == Some(actual)))
     }
 
+    /// Returns the raw union discriminant, preserving values unknown to this
+    /// schema. A non-union struct returns `None`.
+    #[inline(always)]
+    pub fn union_discriminant(&self) -> Result<Option<u16>, DynamicError> {
+        let structure = require_struct(self.schema, self.type_id)?;
+        if structure.discriminant_count == 0 {
+            return Ok(None);
+        }
+        Ok(Some(
+            self.reader
+                .data()?
+                .read_u16(structure.discriminant_offset, 0)?,
+        ))
+    }
+
     /// Reads through a prepared scalar plan from this already-opened struct.
     #[inline(always)]
     pub fn get_scalar(

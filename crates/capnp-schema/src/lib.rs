@@ -656,6 +656,47 @@ mod tests {
             .expect("callback-scoped group reads");
         assert_eq!(borrowed_choice, DynamicScalarValue::UInt64(1234));
 
+        let root_schema = match &schema.node(WIRE_FIXTURE).expect("wire schema exists").kind {
+            NodeKind::Struct(value) => value,
+            _ => return,
+        };
+        let choice_type_id = match root_schema
+            .field("choice")
+            .expect("choice field exists")
+            .kind
+        {
+            FieldKind::Group { type_id } => type_id,
+            FieldKind::Slot { .. } => return,
+        };
+        let choice_schema = match &schema
+            .node(choice_type_id)
+            .expect("choice schema exists")
+            .kind
+        {
+            NodeKind::Struct(value) => value,
+            _ => return,
+        };
+        let mut unknown_arena = ExclusiveArena::new(8, 256).expect("unknown union arena");
+        unknown_arena
+            .init_root_struct(root_schema.data_word_count, root_schema.pointer_count)
+            .expect("unknown union root initializes")
+            .set_u16(choice_schema.discriminant_offset, 55, 0)
+            .expect("unknown union discriminant writes");
+        let unknown_message =
+            OwnedMessage::new(unknown_arena.into_segments(), ReaderLimits::default())
+                .expect("unknown union message opens");
+        let unknown = DynamicStruct::root(Arc::clone(&schema), unknown_message, WIRE_FIXTURE)
+            .expect("unknown union root opens");
+        let unknown_discriminant = unknown
+            .with_view(|view| {
+                view.with_struct(&choice_field, |choice| {
+                    assert!(choice.active_union_field()?.is_none());
+                    choice.union_discriminant()
+                })
+            })
+            .expect("unknown union remains observable");
+        assert_eq!(unknown_discriminant, Some(55));
+
         let typed = dynamic
             .clone()
             .downcast::<TypedWire>()
