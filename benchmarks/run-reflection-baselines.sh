@@ -63,7 +63,7 @@ mkdir -p -- "$output"
 } > "$output/metadata.txt"
 
 printf 'implementation\tcase\tpasses\trun\telapsed_ns\tchecksum\n' > "$output/results.tsv"
-workloads=(schema-name schema-index dynamic-name dynamic-index)
+workloads=(schema-name schema-index dynamic-name dynamic-index dynamic-field)
 
 run_workload() {
     local implementation=$1 case_name=$2 run=$3 executable measurement elapsed_ns checksum

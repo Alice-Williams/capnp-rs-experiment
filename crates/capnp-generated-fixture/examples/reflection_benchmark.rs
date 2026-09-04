@@ -25,14 +25,14 @@ const FRAME: &[u8] = include_bytes!(concat!(
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let mode = args.next().ok_or(
-        "usage: reflection_benchmark schema-name|schema-index|dynamic-name|dynamic-index PASSES",
+        "usage: reflection_benchmark schema-name|schema-index|dynamic-name|dynamic-index|dynamic-field PASSES",
     )?;
     let passes = args.next().ok_or("missing passes")?.parse::<usize>()?;
     if args.next().is_some()
         || passes == 0
         || !matches!(
             mode.as_str(),
-            "schema-name" | "schema-index" | "dynamic-name" | "dynamic-index"
+            "schema-name" | "schema-index" | "dynamic-name" | "dynamic-index" | "dynamic-field"
         )
     {
         return Err("expected a known mode and positive PASSES".into());
@@ -61,6 +61,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::clone(&message),
         wire_fixture::TYPE_ID,
     )?;
+    let dynamic_fields = SCALAR_NAMES.map(|name| {
+        dynamic
+            .field(name)
+            .expect("benchmark dynamic field is present")
+    });
 
     let started = Instant::now();
     let mut checksum = SEED;
@@ -88,6 +93,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             )?,
             "dynamic-index" => dynamic_scalar(
                 black_box(&dynamic).get_by_index(black_box(field_indexes[selector]))?,
+                selector,
+            )?,
+            "dynamic-field" => dynamic_scalar(
+                black_box(&dynamic).get_field(black_box(dynamic_fields[selector]))?,
                 selector,
             )?,
             _ => unreachable!(),

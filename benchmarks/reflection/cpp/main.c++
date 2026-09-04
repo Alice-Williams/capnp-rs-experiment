@@ -61,7 +61,7 @@ uint64_t dynamicScalar(capnp::DynamicValue::Reader value, size_t selector) {
 
 int main(int argc, char** argv) {
   if (argc != 4) {
-    std::cerr << "usage: cpp-reflection schema-name|schema-index|dynamic-name|dynamic-index PASSES FIXTURE\n";
+    std::cerr << "usage: cpp-reflection schema-name|schema-index|dynamic-name|dynamic-index|dynamic-field PASSES FIXTURE\n";
     return 2;
   }
   auto mode = std::string_view(argv[1]);
@@ -99,6 +99,8 @@ int main(int argc, char** argv) {
     } else if (mode == "dynamic-index") {
       observed = dynamicScalar(
           dynamicPointer->get(fields[selectedFields[selector].getIndex()]), selector);
+    } else if (mode == "dynamic-field") {
+      observed = dynamicScalar(dynamicPointer->get(selectedFields[selector]), selector);
     } else {
       std::cerr << "unknown benchmark mode\n";
       return 2;

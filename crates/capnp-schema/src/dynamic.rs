@@ -101,7 +101,7 @@ impl From<GraphError> for DynamicError {
 
 #[derive(Clone, Debug)]
 enum StructBacking {
-    Pointer(ObjectRef<StructObject>),
+    Pointer(PreparedStructRef),
     Element(capnp_message::StructElementRef),
 }
 
@@ -111,6 +111,24 @@ pub struct DynamicStruct {
     type_id: NodeId,
     brand: Brand,
     backing: StructBacking,
+}
+
+/// A field resolved for one dynamic struct schema.
+///
+/// The lifetime keeps the originating schema alive, while `DynamicStruct`
+/// verifies its schema identity and type ID before using the cached metadata.
+#[derive(Clone, Copy, Debug)]
+pub struct DynamicField<'schema> {
+    schema: &'schema Arc<CompiledSchema>,
+    type_id: NodeId,
+    structure: &'schema StructSchema,
+    field: &'schema Field,
+}
+
+impl DynamicField<'_> {
+    pub const fn schema_field(&self) -> &Field {
+        self.field
+    }
 }
 
 pub trait FromDynamicStruct: Sized {
@@ -126,14 +144,12 @@ pub trait FromDynamicStruct: Sized {
 #[derive(Clone, Debug)]
 pub struct GeneratedStructReader {
     dynamic: DynamicStruct,
-    prepared: Option<PreparedStructRef>,
 }
 
 impl GeneratedStructReader {
     #[doc(hidden)]
     pub fn new(dynamic: DynamicStruct) -> Self {
-        let prepared = dynamic.prepared_reader().ok().flatten();
-        Self { dynamic, prepared }
+        Self { dynamic }
     }
 
     pub fn dynamic(&self) -> &DynamicStruct {
@@ -160,11 +176,10 @@ impl GeneratedStructReader {
     }
 
     fn data_section(&self) -> Result<Option<DataSection<'_>>, DynamicError> {
-        self.prepared
-            .as_ref()
-            .map(PreparedStructRef::data_section)
-            .transpose()
-            .map_err(Into::into)
+        match &self.dynamic.backing {
+            StructBacking::Pointer(value) => Ok(Some(value.data_section()?)),
+            StructBacking::Element(_) => Ok(None),
+        }
     }
 
     #[doc(hidden)]
@@ -268,13 +283,6 @@ impl GeneratedStructReader {
 }
 
 impl DynamicStruct {
-    fn prepared_reader(&self) -> Result<Option<PreparedStructRef>, DynamicError> {
-        match &self.backing {
-            StructBacking::Pointer(value) => Ok(Some(value.prepare_reader()?)),
-            StructBacking::Element(_) => Ok(None),
-        }
-    }
-
     pub fn root(
         schema: Arc<CompiledSchema>,
         message: Arc<OwnedMessage>,
@@ -290,11 +298,12 @@ impl DynamicStruct {
         brand: Brand,
     ) -> Result<Self, DynamicError> {
         require_struct(&schema, type_id)?;
+        let pointer = message.root_struct()?.into_root();
         Ok(Self {
             schema,
             type_id,
             brand,
-            backing: StructBacking::Pointer(message.root_struct()?.into_root()),
+            backing: StructBacking::Pointer(pointer.prepare_reader()?),
         })
     }
 
@@ -309,7 +318,7 @@ impl DynamicStruct {
             schema,
             type_id,
             brand,
-            backing: StructBacking::Pointer(pointer),
+            backing: StructBacking::Pointer(pointer.prepare_reader()?),
         })
     }
 
@@ -375,6 +384,11 @@ impl DynamicStruct {
     }
 
     pub fn get(&self, name: &str) -> Result<DynamicValue, DynamicError> {
+        let field = self.field(name)?;
+        self.get_field(field)
+    }
+
+    pub fn field(&self, name: &str) -> Result<DynamicField<'_>, DynamicError> {
         let structure = self.struct_schema()?;
         let field = structure
             .field(name)
@@ -382,10 +396,20 @@ impl DynamicStruct {
                 type_id: self.type_id,
                 name: name.to_owned(),
             })?;
-        self.get_field(field, structure)
+        Ok(DynamicField {
+            schema: &self.schema,
+            type_id: self.type_id,
+            structure,
+            field,
+        })
     }
 
     pub fn get_by_index(&self, index: usize) -> Result<DynamicValue, DynamicError> {
+        let field = self.field_by_index(index)?;
+        self.get_field(field)
+    }
+
+    pub fn field_by_index(&self, index: usize) -> Result<DynamicField<'_>, DynamicError> {
         let structure = self.struct_schema()?;
         let field = structure
             .field_by_index(index)
@@ -393,7 +417,19 @@ impl DynamicStruct {
                 type_id: self.type_id,
                 index,
             })?;
-        self.get_field(field, structure)
+        Ok(DynamicField {
+            schema: &self.schema,
+            type_id: self.type_id,
+            structure,
+            field,
+        })
+    }
+
+    pub fn get_field(&self, field: DynamicField<'_>) -> Result<DynamicValue, DynamicError> {
+        if field.type_id != self.type_id || !Arc::ptr_eq(field.schema, &self.schema) {
+            return Err(type_mismatch("field from this dynamic struct schema"));
+        }
+        self.read_field(field.field, field.structure)
     }
 
     /// Reads a generated scalar slot without performing reflection lookup.
@@ -596,7 +632,7 @@ impl DynamicStruct {
         require_struct(&self.schema, self.type_id)
     }
 
-    fn get_field(
+    fn read_field(
         &self,
         field: &Field,
         structure: &StructSchema,
@@ -635,8 +671,7 @@ impl DynamicStruct {
         ty: &Type,
         default: &Value,
     ) -> Result<DynamicValue, DynamicError> {
-        let resolved_type = self.resolve_type(ty);
-        match &resolved_type {
+        match ty {
             Type::Void => Ok(DynamicValue::Void),
             Type::Bool => self.scalar(|data| {
                 Ok(DynamicValue::Bool(
@@ -693,6 +728,32 @@ impl DynamicStruct {
                     data.read_f64(offset, f64_default(default)?)?,
                 ))
             }),
+            _ => {
+                let resolved_type = self.resolve_type(ty);
+                self.read_resolved_slot(offset, &resolved_type, default)
+            }
+        }
+    }
+
+    fn read_resolved_slot(
+        &self,
+        offset: u32,
+        ty: &Type,
+        default: &Value,
+    ) -> Result<DynamicValue, DynamicError> {
+        match ty {
+            Type::Void
+            | Type::Bool
+            | Type::Int8
+            | Type::Int16
+            | Type::Int32
+            | Type::Int64
+            | Type::UInt8
+            | Type::UInt16
+            | Type::UInt32
+            | Type::UInt64
+            | Type::Float32
+            | Type::Float64 => unreachable!("scalar types are handled before brand resolution"),
             Type::Enum { type_id, .. } => self.scalar(|data| {
                 Ok(DynamicValue::Enum(DynamicEnum {
                     schema: Arc::clone(&self.schema),
@@ -844,7 +905,7 @@ impl DynamicStruct {
     ) -> Result<R, DynamicError> {
         let result = match &self.backing {
             StructBacking::Pointer(value) => {
-                value.with_reader(|reader| read(DynamicStructReader::Struct(reader)))??
+                value.with_reader(|reader| read(DynamicStructReader::Struct(reader)))?
             }
             StructBacking::Element(value) => {
                 value.with_reader(|reader| read(DynamicStructReader::Element(reader)))??

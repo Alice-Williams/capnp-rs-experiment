@@ -209,10 +209,11 @@ same runner before the milestone advances.
 ## M56 schema and dynamic-reflection comparison
 
 `run-reflection-baselines.sh` starts M56 at the lowest tooling layer. It
-compares field-name lookup, field-index access, dynamic reads by name, and
-dynamic reads through the closest cached-field path over the same four scalar
-fields and pinned wire message. Schema loading, framing, and root construction
-are outside the timed region in both implementations.
+compares field-name lookup, field-index access, dynamic reads by name or index,
+and dynamic reads through a schema-checked cached field descriptor over the
+same four scalar fields and pinned wire message. Schema loading, framing, root
+construction, and descriptor resolution are outside the timed region in both
+implementations.
 
 Run it inside the Linux development container from a committed worktree:
 

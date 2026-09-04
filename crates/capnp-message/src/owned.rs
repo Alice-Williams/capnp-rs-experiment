@@ -548,6 +548,18 @@ impl PreparedStructRef {
             self.nesting,
         ))
     }
+
+    /// Opens one child pointer without revalidating or recharging this struct.
+    #[doc(hidden)]
+    pub fn child_pointer(&self, index: u16) -> Result<OwnedPointerRef, OwnedReadError> {
+        let (location, nesting) = self.with_reader(|reader| {
+            Ok::<_, StructReadError>((reader.pointer_location(index)?, reader.nesting()))
+        })?;
+        let Some(location) = location else {
+            return Ok(OwnedPointerRef::Null);
+        };
+        retained_pointer(&self.message, location, nesting)
+    }
 }
 
 impl ObjectRef<ListObject> {

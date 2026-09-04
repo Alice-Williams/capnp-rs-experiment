@@ -389,6 +389,27 @@ mod tests {
             dynamic.get("uint32Value"),
             Ok(DynamicValue::UInt32(0xdead_beef))
         ));
+        let cached_field = dynamic
+            .field("uint32Value")
+            .expect("dynamic field descriptor resolves");
+        assert!(matches!(
+            dynamic.get_field(cached_field),
+            Ok(DynamicValue::UInt32(0xdead_beef))
+        ));
+        let other_schema = Arc::new(load_fixture(WIRE));
+        let other_dynamic = DynamicStruct::root(
+            Arc::clone(&other_schema),
+            Arc::clone(&message),
+            WIRE_FIXTURE,
+        )
+        .expect("second dynamic root opens");
+        let foreign_field = other_dynamic
+            .field("uint32Value")
+            .expect("foreign descriptor resolves");
+        assert!(matches!(
+            dynamic.get_field(foreign_field),
+            Err(DynamicError::TypeMismatch { .. })
+        ));
         assert!(matches!(
             dynamic.get("defaulted"),
             Ok(DynamicValue::UInt32(123456))
