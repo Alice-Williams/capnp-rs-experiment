@@ -124,6 +124,7 @@ pub struct DynamicStructView<'view> {
     source: Option<&'view DynamicStruct>,
     schema: &'view Arc<CompiledSchema>,
     type_id: NodeId,
+    structure: &'view StructSchema,
     brand: &'view Brand,
     reader: DynamicStructReader<'view>,
 }
@@ -241,6 +242,7 @@ pub struct DynamicStructField<'schema> {
     type_id: NodeId,
     access: DynamicStructAccess,
     child_type_id: NodeId,
+    child_structure: &'schema StructSchema,
     child_brand: Brand,
     union: Option<DynamicUnionAccess<'schema>>,
 }
@@ -636,12 +638,14 @@ impl DynamicStruct {
         &self,
         use_view: impl for<'view> FnOnce(DynamicStructView<'view>) -> Result<R, DynamicError>,
     ) -> Result<R, DynamicError> {
+        let structure = self.struct_schema()?;
         match &self.backing {
             StructBacking::Pointer(value) => value.with_reader(|reader| {
                 use_view(DynamicStructView {
                     source: Some(self),
                     schema: &self.schema,
                     type_id: self.type_id,
+                    structure,
                     brand: &self.brand,
                     reader: DynamicStructReader::Struct(reader),
                 })
@@ -651,6 +655,7 @@ impl DynamicStruct {
                     source: Some(self),
                     schema: &self.schema,
                     type_id: self.type_id,
+                    structure,
                     brand: &self.brand,
                     reader: DynamicStructReader::Element(reader),
                 })
@@ -1096,11 +1101,13 @@ impl DynamicStruct {
                 )
             }
         };
+        let child_structure = require_struct(schema, child_type_id)?;
         Ok(DynamicStructField {
             schema,
             type_id: self.type_id,
             access,
             child_type_id,
+            child_structure,
             child_brand,
             union: dynamic_union_access(field, structure),
         })
@@ -1554,6 +1561,7 @@ impl<'view> DynamicStructView<'view> {
             source: None,
             schema: self.schema,
             type_id: field.child_type_id,
+            structure: field.child_structure,
             brand: &field.child_brand,
             reader,
         })
@@ -1563,15 +1571,15 @@ impl<'view> DynamicStructView<'view> {
     /// unrecognized discriminant.
     #[inline(always)]
     pub fn active_union_field(&self) -> Result<Option<&Field>, DynamicError> {
-        let structure = require_struct(self.schema, self.type_id)?;
-        if structure.discriminant_count == 0 {
+        if self.structure.discriminant_count == 0 {
             return Ok(None);
         }
         let actual = self
             .reader
             .data()?
-            .read_u16(structure.discriminant_offset, 0)?;
-        Ok(structure
+            .read_u16(self.structure.discriminant_offset, 0)?;
+        Ok(self
+            .structure
             .fields
             .iter()
             .find(|field| field.discriminant_value == Some(actual)))
@@ -1581,14 +1589,13 @@ impl<'view> DynamicStructView<'view> {
     /// schema. A non-union struct returns `None`.
     #[inline(always)]
     pub fn union_discriminant(&self) -> Result<Option<u16>, DynamicError> {
-        let structure = require_struct(self.schema, self.type_id)?;
-        if structure.discriminant_count == 0 {
+        if self.structure.discriminant_count == 0 {
             return Ok(None);
         }
         Ok(Some(
             self.reader
                 .data()?
-                .read_u16(structure.discriminant_offset, 0)?,
+                .read_u16(self.structure.discriminant_offset, 0)?,
         ))
     }
 
@@ -1785,11 +1792,13 @@ impl DynamicListView<'_> {
         let Type::Struct { type_id, brand } = self.element_type else {
             return Err(type_mismatch("List(Struct)"));
         };
+        let structure = require_struct(self.schema, *type_id)?;
         let reader = self.reader.as_structs()?.get(index)?;
         use_struct(DynamicStructView {
             source: None,
             schema: self.schema,
             type_id: *type_id,
+            structure,
             brand,
             reader: DynamicStructReader::Element(reader),
         })
