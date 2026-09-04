@@ -77,7 +77,7 @@ uint64_t blobFingerprint(
 
 int main(int argc, char** argv) {
   if (argc != 4) {
-    std::cerr << "usage: cpp-reflection schema-name|schema-index|dynamic-name|dynamic-index|dynamic-field|dynamic-blobs-borrowed|dynamic-blobs-owned PASSES FIXTURE\n";
+    std::cerr << "usage: cpp-reflection schema-name|schema-index|dynamic-name|dynamic-index|dynamic-field|dynamic-blobs-borrowed|dynamic-blobs-owned|dynamic-primitive-list|dynamic-nested-struct|dynamic-struct-list|dynamic-nested-list PASSES FIXTURE\n";
     return 2;
   }
   auto mode = std::string_view(argv[1]);
@@ -97,6 +97,11 @@ int main(int argc, char** argv) {
   }
   auto textField = schema.getFieldByName("text");
   auto dataField = schema.getFieldByName("data");
+  auto uint16sField = schema.getFieldByName("uint16s");
+  auto nodeField = schema.getFieldByName("node");
+  auto structsField = schema.getFieldByName("structs");
+  auto nestedListsField = schema.getFieldByName("nestedLists");
+  auto nodeValueField = capnp::Schema::from<Node>().getFieldByName("value");
 
   auto started = std::chrono::steady_clock::now();
   uint64_t checksum = SEED;
@@ -131,6 +136,20 @@ int main(int argc, char** argv) {
       text.asPtr().copyFrom(sourceText);
       data.asPtr().copyFrom(sourceData);
       observed = blobFingerprint(text, data);
+    } else if (mode == "dynamic-primitive-list") {
+      auto list = dynamicPointer->get(uint16sField).as<capnp::DynamicList>();
+      observed = list[2].as<uint16_t>();
+    } else if (mode == "dynamic-nested-struct") {
+      auto child = dynamicPointer->get(nodeField).as<capnp::DynamicStruct>();
+      observed = child.get(nodeValueField).as<uint32_t>();
+    } else if (mode == "dynamic-struct-list") {
+      auto list = dynamicPointer->get(structsField).as<capnp::DynamicList>();
+      auto child = list[1].as<capnp::DynamicStruct>();
+      observed = child.get(nodeValueField).as<uint32_t>();
+    } else if (mode == "dynamic-nested-list") {
+      auto outer = dynamicPointer->get(nestedListsField).as<capnp::DynamicList>();
+      auto inner = outer[0].as<capnp::DynamicList>();
+      observed = inner[2].as<uint16_t>();
     } else {
       std::cerr << "unknown benchmark mode\n";
       return 2;

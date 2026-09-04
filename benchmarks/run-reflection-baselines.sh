@@ -54,7 +54,7 @@ mkdir -p -- "$output"
     printf 'cpp_oracle_commit=%s\n' "$cpp_commit"
     printf 'schema=conformance/schemas/wire-fixture.capnp\n'
     printf 'fixture=wire-unpacked.bin\n'
-    printf 'fields=uint8Value,uint16Value,uint32Value,uint64Value\n'
+    printf 'fields=uint8Value,uint16Value,uint32Value,uint64Value,text,data,uint16s,node,structs,nestedLists\n'
     printf 'native_commit=%s\n' "$native_commit"
     printf 'cpp_binary_sha256=%s\n' "$(sha256sum "$cpp_benchmark" | cut -d ' ' -f1)"
     printf 'native_binary_sha256=%s\n' "$(sha256sum "$native_benchmark" | cut -d ' ' -f1)"
@@ -66,6 +66,7 @@ printf 'implementation\tcase\tpasses\trun\telapsed_ns\tchecksum\n' > "$output/re
 workloads=(
     schema-name schema-index dynamic-name dynamic-index dynamic-field
     dynamic-blobs-borrowed dynamic-blobs-owned
+    dynamic-primitive-list dynamic-nested-struct dynamic-struct-list dynamic-nested-list
 )
 
 run_workload() {
