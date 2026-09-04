@@ -25,14 +25,20 @@ const FRAME: &[u8] = include_bytes!(concat!(
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let mode = args.next().ok_or(
-        "usage: reflection_benchmark schema-name|schema-index|dynamic-name|dynamic-index|dynamic-field PASSES",
+        "usage: reflection_benchmark schema-name|schema-index|dynamic-name|dynamic-index|dynamic-field|dynamic-blobs-borrowed|dynamic-blobs-owned PASSES",
     )?;
     let passes = args.next().ok_or("missing passes")?.parse::<usize>()?;
     if args.next().is_some()
         || passes == 0
         || !matches!(
             mode.as_str(),
-            "schema-name" | "schema-index" | "dynamic-name" | "dynamic-index" | "dynamic-field"
+            "schema-name"
+                | "schema-index"
+                | "dynamic-name"
+                | "dynamic-index"
+                | "dynamic-field"
+                | "dynamic-blobs-borrowed"
+                | "dynamic-blobs-owned"
         )
     {
         return Err("expected a known mode and positive PASSES".into());
@@ -66,6 +72,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .field(name)
             .expect("benchmark dynamic field is present")
     });
+    let text_field = dynamic.field("text")?;
+    let data_field = dynamic.field("data")?;
 
     let started = Instant::now();
     let mut checksum = SEED;
@@ -99,12 +107,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 black_box(&dynamic).get_field(black_box(dynamic_fields[selector]))?,
                 selector,
             )?,
+            "dynamic-blobs-borrowed" | "dynamic-blobs-owned" => {
+                dynamic_blobs(&dynamic, text_field, data_field)?
+            }
             _ => unreachable!(),
         };
         checksum = checksum.rotate_left(9) ^ observed;
     }
     println!("{}\t{}", started.elapsed().as_nanos(), black_box(checksum));
     Ok(())
+}
+
+fn dynamic_blobs(
+    dynamic: &DynamicStruct,
+    text_field: capnp_schema::DynamicField<'_>,
+    data_field: capnp_schema::DynamicField<'_>,
+) -> Result<u64, Box<dyn std::error::Error>> {
+    let DynamicValue::Text(text) = black_box(dynamic).get_field(text_field)? else {
+        return Err("dynamic Text field has the wrong type".into());
+    };
+    let DynamicValue::Data(data) = black_box(dynamic).get_field(data_field)? else {
+        return Err("dynamic Data field has the wrong type".into());
+    };
+    Ok(blob_fingerprint(text.as_bytes(), &data))
+}
+
+fn blob_fingerprint(text: &[u8], data: &[u8]) -> u64 {
+    let mut value = (text.len() as u64).rotate_left(11) ^ (data.len() as u64).rotate_left(23);
+    if let (Some(first), Some(last)) = (text.first(), text.last()) {
+        value ^= u64::from(*first).rotate_left(31) ^ u64::from(*last).rotate_left(37);
+    }
+    if let (Some(first), Some(last)) = (data.first(), data.last()) {
+        value ^= u64::from(*first).rotate_left(43) ^ u64::from(*last).rotate_left(47);
+    }
+    value
 }
 
 fn dynamic_scalar(value: DynamicValue, selector: usize) -> Result<u64, &'static str> {

@@ -57,11 +57,27 @@ uint64_t dynamicScalar(capnp::DynamicValue::Reader value, size_t selector) {
   }
 }
 
+uint64_t blobFingerprint(
+    kj::ArrayPtr<const capnp::byte> text,
+    kj::ArrayPtr<const capnp::byte> data) {
+  uint64_t value = std::rotl(uint64_t{text.size()}, 11)
+      ^ std::rotl(uint64_t{data.size()}, 23);
+  if (text.size() != 0) {
+    value ^= std::rotl(uint64_t{text.front()}, 31)
+        ^ std::rotl(uint64_t{text.back()}, 37);
+  }
+  if (data.size() != 0) {
+    value ^= std::rotl(uint64_t{data.front()}, 43)
+        ^ std::rotl(uint64_t{data.back()}, 47);
+  }
+  return value;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
   if (argc != 4) {
-    std::cerr << "usage: cpp-reflection schema-name|schema-index|dynamic-name|dynamic-index|dynamic-field PASSES FIXTURE\n";
+    std::cerr << "usage: cpp-reflection schema-name|schema-index|dynamic-name|dynamic-index|dynamic-field|dynamic-blobs-borrowed|dynamic-blobs-owned PASSES FIXTURE\n";
     return 2;
   }
   auto mode = std::string_view(argv[1]);
@@ -79,6 +95,8 @@ int main(int argc, char** argv) {
     selectedFields[index] = schema.getFieldByName(
         kj::StringPtr(SCALAR_NAMES[index].data(), SCALAR_NAMES[index].size()));
   }
+  auto textField = schema.getFieldByName("text");
+  auto dataField = schema.getFieldByName("data");
 
   auto started = std::chrono::steady_clock::now();
   uint64_t checksum = SEED;
@@ -101,6 +119,18 @@ int main(int argc, char** argv) {
           dynamicPointer->get(fields[selectedFields[selector].getIndex()]), selector);
     } else if (mode == "dynamic-field") {
       observed = dynamicScalar(dynamicPointer->get(selectedFields[selector]), selector);
+    } else if (mode == "dynamic-blobs-borrowed") {
+      auto text = dynamicPointer->get(textField).as<capnp::Text>().asBytes();
+      auto data = dynamicPointer->get(dataField).as<capnp::Data>();
+      observed = blobFingerprint(text, data);
+    } else if (mode == "dynamic-blobs-owned") {
+      auto sourceText = dynamicPointer->get(textField).as<capnp::Text>().asBytes();
+      auto sourceData = dynamicPointer->get(dataField).as<capnp::Data>();
+      auto text = kj::heapArray<capnp::byte>(sourceText.size());
+      auto data = kj::heapArray<capnp::byte>(sourceData.size());
+      text.asPtr().copyFrom(sourceText);
+      data.asPtr().copyFrom(sourceData);
+      observed = blobFingerprint(text, data);
     } else {
       std::cerr << "unknown benchmark mode\n";
       return 2;

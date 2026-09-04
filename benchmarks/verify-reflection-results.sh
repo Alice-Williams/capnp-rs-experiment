@@ -6,8 +6,8 @@ result_dir=${1:?result directory is required}
 expected_passes=${2:-100000}
 expected_cases=${3:-4}
 
-if ((expected_cases != 4 && expected_cases != 5)); then
-    printf 'expected case count must be 4 or 5\n' >&2
+if ((expected_cases < 4 || expected_cases > 7)); then
+    printf 'expected case count must be from 4 through 7\n' >&2
     exit 2
 fi
 expected_raw_lines=$((1 + expected_cases * 2 * 11))
@@ -36,7 +36,9 @@ awk -F '\t' -v passes="$expected_passes" -v cases="$expected_cases" -v expected=
   $1 != "cpp" && $1 != "native" { exit 1 }
   $2 != "schema-name" && $2 != "schema-index" &&
       $2 != "dynamic-name" && $2 != "dynamic-index" &&
-      !(cases == 5 && $2 == "dynamic-field") { exit 1 }
+      !(cases >= 5 && $2 == "dynamic-field") &&
+      !(cases >= 6 && $2 == "dynamic-blobs-borrowed") &&
+      !(cases >= 7 && $2 == "dynamic-blobs-owned") { exit 1 }
   !($2 in checksum) { checksum[$2] = $6; next }
   $6 != checksum[$2] { exit 1 }
   END { if (NR != expected || length(checksum) != cases) exit 1 }
