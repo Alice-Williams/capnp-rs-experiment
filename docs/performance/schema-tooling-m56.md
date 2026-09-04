@@ -221,3 +221,37 @@ schema, brand, backing, and coordinate state, before reading the shared parent
 data section. The next isolation adds a copy-only prepared scalar result and a
 callback-scoped group view. Unknown discriminants and schema evolution remain
 separate correctness/performance shapes.
+
+## Prepared scalar and scoped active-union gate
+
+Final evidence:
+[`benchmarks/results/2026-09-04-m56-reflection-enum-union-final-5m`](../../benchmarks/results/2026-09-04-m56-reflection-enum-union-final-5m)
+at native commit `5be4a244da0ef4a0353fcc5faf61a384b4c6202f`.
+
+| Operation | C++ ns/op | Native ns/op | Native / C++ |
+| --- | ---: | ---: | ---: |
+| dynamic defaulted UInt32 | 36.2630 | 5.9474 | 0.164 |
+| dynamic enum ordinal | 56.2489 | 7.2722 | 0.129 |
+| dynamic active-union member | 132.7292 | 27.3053 | 0.206 |
+| borrowed Text + Data control | 98.1068 | 41.5686 | 0.424 |
+
+`DynamicScalarField` prepares the resolved scalar kind, default, offset, union
+metadata, containing type, and originating schema once. Reads return the
+copy-only `DynamicScalarValue`, so consuming an enum ordinal no longer clones a
+schema `Arc` or constructs an owned `DynamicEnum`. Pointer-backed structs read
+their already validated data section directly; element-backed structs use the
+same scoped checked reader. Default XOR semantics are unchanged.
+
+`DynamicStructField` now also represents groups. A group view copies the
+parent's short-lived reader because Cap'n Proto groups share their parent's
+exact storage; pointer struct fields continue to descend through the checked
+pointer path. `DynamicStructView::active_union_field()` preserves known versus
+unknown discriminant behavior, and prepared union-member reads still reject an
+inactive member before reading its payload. Cross-schema scalar plans are
+rejected, and all C++/Rust checksums agree.
+
+Relative to the recorded baseline, native default, enum, and active-union
+medians fall by 64.4%, 82.2%, and 69.1%. Each cumulative ratio is better than
+the 0.424 borrowed-value control in the same run, so the scalar-default, enum,
+group, and known active-union reader gates are closed. Unknown discriminants,
+schema evolution, and builder reflection remain open.
