@@ -1,0 +1,5 @@
+case	cpp_median_ns_per_operation	native_median_ns_per_operation	native_over_cpp
+dynamic-index	51.7943	57.8904	1.118
+dynamic-name	151.8729	71.0583	0.468
+schema-index	6.4954	1.7056	0.263
+schema-name	107.3891	11.3447	0.106

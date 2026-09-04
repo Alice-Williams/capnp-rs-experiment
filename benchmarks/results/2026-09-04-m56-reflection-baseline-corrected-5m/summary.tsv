@@ -1,0 +1,9 @@
+implementation	case	passes	runs	mean_ns_per_operation	median_ns_per_operation	min_ns_per_operation	max_ns_per_operation
+cpp	dynamic-index	5000000	9	52.5774	51.7943	48.9889	56.8397
+cpp	dynamic-name	5000000	9	153.8628	151.8729	147.9689	167.6982
+cpp	schema-index	5000000	9	6.8220	6.4954	6.3922	8.0980
+cpp	schema-name	5000000	9	107.9615	107.3891	101.3462	116.8256
+native	dynamic-index	5000000	9	58.4345	57.8904	56.0632	61.4563
+native	dynamic-name	5000000	9	71.2093	71.0583	64.9998	76.6683
+native	schema-index	5000000	9	1.7359	1.7056	1.5889	1.9810
+native	schema-name	5000000	9	12.2183	11.3447	11.0392	17.5486

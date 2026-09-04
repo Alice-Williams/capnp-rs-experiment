@@ -118,4 +118,4 @@ wire safety or protocol ordering.
 - [M53 — Message-construction performance](milestones/M53-message-construction-performance.md) — complete ([report](../performance/message-construction-m53.md))
 - [M54 — Packing performance](milestones/M54-packing-performance.md) — complete ([report](../performance/packing-m54.md))
 - [M55 — Generated data API performance](milestones/M55-generated-data-api-performance.md) — complete ([report](../performance/generated-data-m55.md))
-- [M56 — Schema, compiler, text, and JSON performance](milestones/M56-schema-compiler-text-json-performance.md) — in progress
+- [M56 — Schema, compiler, text, and JSON performance](milestones/M56-schema-compiler-text-json-performance.md) — in progress ([report](../performance/schema-tooling-m56.md))
