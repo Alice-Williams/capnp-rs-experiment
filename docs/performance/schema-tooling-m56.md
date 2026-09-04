@@ -33,3 +33,40 @@ direct internal struct reader. The next isolation adds a safe cached native
 field descriptor and separately measures descriptor dispatch, type resolution,
 and retained-reader reconstruction. No runtime implementation was changed
 before this baseline.
+
+## Prepared scalar-reflection gate
+
+Final scalar evidence:
+[`benchmarks/results/2026-09-04-m56-reflection-prepared-5m`](../../benchmarks/results/2026-09-04-m56-reflection-prepared-5m)
+at native commit `d8aa68307c6886155244fd2855326976d71e81ac`.
+
+| Operation | C++ ns/op | Native ns/op | Native / C++ |
+| --- | ---: | ---: | ---: |
+| schema field by index | 6.6251 | 1.5383 | 0.232 |
+| schema field by name | 107.0160 | 12.1217 | 0.113 |
+| dynamic scalar by cached field | 44.6208 | 27.4706 | 0.616 |
+| dynamic scalar by index | 51.5813 | 33.3380 | 0.646 |
+| dynamic scalar by name | 149.5544 | 45.5933 | 0.305 |
+
+Rust now exposes a lifetime-bound `DynamicField` that retains references to the
+resolved struct and field metadata. Dispatch checks both the originating
+schema allocation and type ID, so a descriptor from another schema version
+cannot apply an offset to this value. This mirrors C++'s containing-schema
+check without raw pointers or unsafe code.
+
+The other material cost was repeated retained-root reconstruction. A dynamic
+struct now replaces its checked `ObjectRef` with a `PreparedStructRef`: root
+pointer resolution and traversal charging happen once, while every field read
+reuses validated relocatable coordinates. Pointer-valued child reads continue
+to validate and charge the child normally. The prepared reference retains one
+`Arc` and wire coordinates; it neither copies message data nor sits alongside a
+duplicate retained root. Generated retained readers use the same single
+prepared representation, so this does not add a second cache to M55's reader.
+
+The isolated cached-field path is 38.4% faster than C++. The like-for-like
+indexed path improves from 1.118x to 0.646x, and name-based dynamic access
+improves from 0.468x to 0.305x. After subtracting schema access, indexed dynamic
+dispatch is about 31.80 ns in Rust versus 44.96 ns in C++ (0.707x); name-based
+dispatch is about 33.47 ns versus 42.54 ns (0.787x). Both the cumulative and
+incremental scalar-reflection gates are closed. Blob, list, nested struct,
+union, evolution, and builder reflection remain separate gates.
