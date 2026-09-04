@@ -193,3 +193,31 @@ ratio is better than the 0.413 borrowed-blob control in this same evidence run.
 The primitive-list, nested-struct, struct-list, and nested-list reflection gates
 are therefore closed. Active/unknown unions, defaults/evolution, enums, and
 builder reflection remain the next reflection shapes.
+
+## Enum, default, and active-union reflection baseline
+
+Evidence:
+[`benchmarks/results/2026-09-04-m56-reflection-enum-union-baseline-5m`](../../benchmarks/results/2026-09-04-m56-reflection-enum-union-baseline-5m)
+at native commit `f57b81a1b2b48a56cfbeec22396ae335c353ecde`.
+The enum case reads the fixture's cached `color` descriptor, the default case
+reads the XOR-encoded `defaulted` UInt32 slot, and the union case discovers the
+active `choice` member and reads its UInt64 payload. All samples produce
+identical C++ and Rust checksums.
+
+| Operation | C++ ns/op | Native ns/op | Native / C++ |
+| --- | ---: | ---: | ---: |
+| dynamic defaulted UInt32 | 38.9151 | 16.6888 | 0.429 |
+| dynamic enum ordinal | 52.3984 | 40.9478 | 0.781 |
+| dynamic active-union member | 128.1883 | 88.2827 | 0.689 |
+| borrowed Text + Data control | 99.7677 | 40.7923 | 0.409 |
+
+All three native paths are faster than C++, but none yet preserves the best
+applicable lower-layer ratio within the 3% tolerance. Defaulted scalar access
+is close; its prepared root still opens a general reader instead of borrowing
+the already validated data section directly. Enum access additionally creates
+an owned `DynamicEnum` and clones its schema `Arc` merely to consume the raw
+ordinal. Union access creates a retained group `DynamicStruct`, including
+schema, brand, backing, and coordinate state, before reading the shared parent
+data section. The next isolation adds a copy-only prepared scalar result and a
+callback-scoped group view. Unknown discriminants and schema evolution remain
+separate correctness/performance shapes.
