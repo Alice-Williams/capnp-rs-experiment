@@ -15,5 +15,8 @@ rust_library(
 rust_test(
     name = "capnp_schema_test",
     crate = ":capnp_schema",
-    compile_data = ["//conformance:compiler_requests"],
+    compile_data = [
+        "//conformance:compiler_requests",
+        "//conformance:evolution_wire_frames",
+    ],
 )
